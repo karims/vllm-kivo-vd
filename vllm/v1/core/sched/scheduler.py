@@ -35,6 +35,7 @@ from vllm.v1.core.encoder_cache_manager import (
 )
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
+from vllm.v1.core.kivo_vd_observer import create_kivo_vd_observer
 from vllm.v1.core.sched.interface import PauseState, SchedulerInterface
 from vllm.v1.core.sched.output import (
     CachedRequestData,
@@ -74,6 +75,7 @@ class Scheduler(SchedulerInterface):
         log_stats: bool = False,
     ) -> None:
         self.vllm_config = vllm_config
+        self.kivo_vd_observer = create_kivo_vd_observer(vllm_config.enable_kivo_vd)
         self.scheduler_config = vllm_config.scheduler_config
         self.cache_config = vllm_config.cache_config
         self.lora_config = vllm_config.lora_config
@@ -446,11 +448,26 @@ class Scheduler(SchedulerInterface):
             # Schedule newly needed KV blocks for the request.
             with record_function_or_nullcontext("schedule: allocate_slots"):
                 while True:
+                    if self.kivo_vd_observer is not None:
+                        self.kivo_vd_observer.on_before_allocate_slots(
+                            request_id=request.request_id,
+                            num_new_tokens=num_new_tokens,
+                            num_lookahead_tokens=self.num_lookahead_tokens,
+                        )
                     new_blocks = self.kv_cache_manager.allocate_slots(
                         request,
                         num_new_tokens,
                         num_lookahead_tokens=self.num_lookahead_tokens,
                     )
+                    if self.kivo_vd_observer is not None:
+                        self.kivo_vd_observer.on_after_allocate_slots(
+                            request_id=request.request_id,
+                            block_ids_by_group=(
+                                new_blocks.get_block_ids(allow_none=True)
+                                if new_blocks is not None
+                                else None
+                            ),
+                        )
 
                     if new_blocks is not None:
                         # The request can be scheduled.
@@ -724,6 +741,12 @@ class Scheduler(SchedulerInterface):
                         for i in encoder_inputs_to_schedule
                     )
 
+                if self.kivo_vd_observer is not None:
+                    self.kivo_vd_observer.on_before_allocate_slots(
+                        request_id=request.request_id,
+                        num_new_tokens=num_new_tokens,
+                        num_lookahead_tokens=effective_lookahead_tokens,
+                    )
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
@@ -735,6 +758,15 @@ class Scheduler(SchedulerInterface):
                     num_encoder_tokens=num_encoder_tokens,
                     full_sequence_must_fit=self.scheduler_reserve_full_isl,
                 )
+                if self.kivo_vd_observer is not None:
+                    self.kivo_vd_observer.on_after_allocate_slots(
+                        request_id=request.request_id,
+                        block_ids_by_group=(
+                            new_blocks.get_block_ids(allow_none=True)
+                            if new_blocks is not None
+                            else None
+                        ),
+                    )
 
                 if new_blocks is None:
                     # The request cannot be scheduled.
@@ -941,6 +973,13 @@ class Scheduler(SchedulerInterface):
         assert request.status == RequestStatus.RUNNING, (
             "Only running requests can be preempted"
         )
+        if self.kivo_vd_observer is not None:
+            self.kivo_vd_observer.on_free_request(
+                request_id=request.request_id,
+                block_ids_by_group=self.kv_cache_manager.get_block_ids(
+                    request.request_id
+                ),
+            )
         self.kv_cache_manager.free(request)
         self.encoder_cache_manager.free(request)
         request.status = RequestStatus.PREEMPTED
@@ -1865,6 +1904,13 @@ class Scheduler(SchedulerInterface):
 
     def _free_blocks(self, request: Request):
         assert request.is_finished()
+        if self.kivo_vd_observer is not None:
+            self.kivo_vd_observer.on_free_request(
+                request_id=request.request_id,
+                block_ids_by_group=self.kv_cache_manager.get_block_ids(
+                    request.request_id
+                ),
+            )
         self.kv_cache_manager.free(request)
         del self.requests[request.request_id]
 
@@ -2101,6 +2147,13 @@ class Scheduler(SchedulerInterface):
             else:
                 # No valid computed tokens, release allocated blocks.
                 # There may be a local cache hit on retry.
+                if self.kivo_vd_observer is not None:
+                    self.kivo_vd_observer.on_free_request(
+                        request_id=request.request_id,
+                        block_ids_by_group=self.kv_cache_manager.get_block_ids(
+                            request.request_id
+                        ),
+                    )
                 self.kv_cache_manager.free(request)
 
             self.failed_recving_kv_req_ids.remove(request.request_id)
