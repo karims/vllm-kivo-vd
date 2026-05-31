@@ -453,6 +453,7 @@ class Scheduler(SchedulerInterface):
                             request_id=request.request_id,
                             num_new_tokens=num_new_tokens,
                             num_lookahead_tokens=self.num_lookahead_tokens,
+                            source="running",
                         )
                     new_blocks = self.kv_cache_manager.allocate_slots(
                         request,
@@ -467,6 +468,8 @@ class Scheduler(SchedulerInterface):
                                 if new_blocks is not None
                                 else None
                             ),
+                            num_new_tokens=num_new_tokens,
+                            source="running",
                         )
 
                     if new_blocks is not None:
@@ -746,6 +749,7 @@ class Scheduler(SchedulerInterface):
                         request_id=request.request_id,
                         num_new_tokens=num_new_tokens,
                         num_lookahead_tokens=effective_lookahead_tokens,
+                        source="waiting",
                     )
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
@@ -766,6 +770,8 @@ class Scheduler(SchedulerInterface):
                             if new_blocks is not None
                             else None
                         ),
+                        num_new_tokens=num_new_tokens,
+                        source="waiting",
                     )
 
                 if new_blocks is None:
@@ -979,6 +985,7 @@ class Scheduler(SchedulerInterface):
                 block_ids_by_group=self.kv_cache_manager.get_block_ids(
                     request.request_id
                 ),
+                source="preempt",
             )
         self.kv_cache_manager.free(request)
         self.encoder_cache_manager.free(request)
@@ -1910,6 +1917,7 @@ class Scheduler(SchedulerInterface):
                 block_ids_by_group=self.kv_cache_manager.get_block_ids(
                     request.request_id
                 ),
+                source="free_blocks",
             )
         self.kv_cache_manager.free(request)
         del self.requests[request.request_id]
@@ -2153,6 +2161,7 @@ class Scheduler(SchedulerInterface):
                         block_ids_by_group=self.kv_cache_manager.get_block_ids(
                             request.request_id
                         ),
+                        source="waiting_remote_kv_failure",
                     )
                 self.kv_cache_manager.free(request)
 

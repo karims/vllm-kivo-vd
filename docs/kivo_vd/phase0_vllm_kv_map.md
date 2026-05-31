@@ -86,6 +86,41 @@ This document maps the current vLLM v1 KV-cache flow and identifies safe Phase 0
   - `_free_blocks(...)` before `kv_cache_manager.free(request)`
   - `_update_waiting_for_remote_kv(...)` failure path before `kv_cache_manager.free(request)`
 
+## Phase 0.2 event capture (implemented)
+
+- `KivoVDObserver` now keeps a bounded in-memory event buffer:
+  - Default max size: `10_000`
+  - Backed by a bounded queue (`deque(maxlen=...)`)
+  - No logging/printing side effects.
+- Lifecycle events captured:
+  - `before_allocate_slots`
+  - `after_allocate_slots`
+  - `free_request`
+- Event payload is intentionally lightweight and metadata-only:
+  - `event_type`
+  - monotonic timestamp and event id
+  - `request_id` (when available)
+  - `num_new_tokens`/`num_tokens` (when available)
+  - `num_new_blocks` (derived from block-id lists when available)
+  - `num_computed_blocks` (when available)
+  - `source` path (`running`, `waiting`, `preempt`, `free_blocks`,
+    `waiting_remote_kv_failure`)
+- New utility methods:
+  - `get_counters() -> dict`
+  - `get_recent_events(limit: int = 100) -> list`
+  - `reset() -> None`
+
+### Privacy/safety boundary
+
+- Phase 0.2 does **not** inspect or copy KV tensor contents.
+- Phase 0.2 does **not** capture block tables, slot mappings, or other large tensors.
+- Captured data is scalar/small lifecycle metadata only.
+
+### Purpose
+
+- This metadata capture validates that lifecycle hook placement is correct and
+  stable before any future sketching/compression/offload work.
+
 ## What remains unwired (intentional)
 
 - No hooks in `vllm/v1/worker/gpu_model_runner.py`.
