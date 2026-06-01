@@ -102,3 +102,20 @@ Guidance:
 
 Use the same metrics on real captured query/key arrays (outside runtime first),
 then decide how to attach real sketch computation in later phases.
+
+## Optional real-model check (Phase 1.5)
+
+Phase 1.5 adds `scripts/kivo_vd/run_hf_qk_sketch_eval.py` for optional offline
+validation on real HuggingFace GPT-2 style Q/K tensors.
+
+Example:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_sketch_eval.py \
+  --model-name sshleifer/tiny-gpt2 \
+  --sketch-type random_projection \
+  --sketch-dim 64 \
+  --topk-blocks 4
+```
+
+This remains offline-only and does not connect to vLLM runtime.

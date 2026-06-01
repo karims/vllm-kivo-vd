@@ -52,6 +52,27 @@ Notes:
   dependencies. Failures from `tests/conftest.py` (for example missing
   `tblib`) are environment/dependency issues, not Kivo-only code failures.
 
+## Optional: HuggingFace Q/K Offline Eval (Phase 1.5)
+
+The HF script is optional and not required for `tests_kivo`.
+
+Install optional dependencies:
+
+```bash
+uv pip install torch transformers
+```
+
+Run the optional eval:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_sketch_eval.py \
+  --model-name sshleifer/tiny-gpt2 \
+  --sketch-type random_projection \
+  --sketch-dim 64 \
+  --topk-blocks 4 \
+  --device cpu
+```
+
 ## Troubleshooting
 
 - If `pytest` is missing: `uv pip install pytest`
