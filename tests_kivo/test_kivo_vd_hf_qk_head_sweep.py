@@ -32,6 +32,8 @@ def test_hf_head_sweep_help_smoke() -> None:
     assert "--heads" in out
     assert "--query-positions" in out
     assert "--output" in out
+    assert "--sketch-types" in out
+    assert "--sketch-dims" in out
 
 
 def test_parse_index_list() -> None:
@@ -45,3 +47,17 @@ def test_parse_query_positions() -> None:
     hf_eval = m._load_hf_eval_module()
     assert m._parse_query_positions("sweep", 20, hf_eval)[-1] == 19
     assert m._parse_query_positions("3,-1", 20, hf_eval) == [3, 19]
+
+
+def test_parse_sketch_types() -> None:
+    m = _load_module()
+    assert m._parse_sketch_types("random_projection", None) == ["random_projection"]
+    assert m._parse_sketch_types(
+        "random_projection", "count_sketch,random_projection"
+    ) == ["count_sketch", "random_projection"]
+
+
+def test_parse_sketch_dims() -> None:
+    m = _load_module()
+    assert m._parse_sketch_dims(64, None) == [64]
+    assert m._parse_sketch_dims(64, "16,32,64,128") == [16, 32, 64, 128]

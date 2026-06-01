@@ -54,6 +54,44 @@ def _parse_query_positions(spec: str, seq_len: int, hf_eval: Any) -> list[int]:
     return out
 
 
+def _parse_sketch_types(sketch_type: str, sketch_types: str | None) -> list[str]:
+    if sketch_types is None:
+        return [sketch_type]
+    allowed = {"random_projection", "count_sketch"}
+    out: list[str] = []
+    for part in sketch_types.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part not in allowed:
+            raise ValueError(
+                f"Invalid sketch type {part!r}; expected one of {sorted(allowed)}"
+            )
+        if part not in out:
+            out.append(part)
+    if not out:
+        raise ValueError("sketch-types list is empty")
+    return out
+
+
+def _parse_sketch_dims(sketch_dim: int, sketch_dims: str | None) -> list[int]:
+    if sketch_dims is None:
+        return [int(sketch_dim)]
+    out: list[int] = []
+    for part in sketch_dims.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        dim = int(part)
+        if dim <= 0:
+            raise ValueError(f"Invalid sketch dim {dim}; expected positive integer")
+        if dim not in out:
+            out.append(dim)
+    if not out:
+        raise ValueError("sketch-dims list is empty")
+    return out
+
+
 def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Optional HF Q/K layer/head sweep.")
     parser.add_argument("--model-name", default="distilgpt2")
@@ -64,6 +102,8 @@ def _parse_args(hf_eval: Any) -> argparse.Namespace:
         default="random_projection",
     )
     parser.add_argument("--sketch-dim", type=int, default=64)
+    parser.add_argument("--sketch-types", default=None)
+    parser.add_argument("--sketch-dims", default=None)
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk-blocks", type=int, default=4)
     parser.add_argument("--max-tokens", type=int, default=900)
@@ -102,13 +142,29 @@ def _aggregate(rows: list[dict[str, Any]]) -> None:
     print("SUMMARY overall")
     print(json.dumps({"count": len(rows), **overall}, separators=(",", ":")))
 
-    grouped: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
+    grouped_sd: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped[(row["sketch_type"], int(row["sketch_dim"]), int(row["layer"]))].append(row)
+        grouped_sd[(row["sketch_type"], int(row["sketch_dim"]))].append(row)
+
+    print("SUMMARY by sketch_type/sketch_dim")
+    for key in sorted(grouped_sd.keys()):
+        group_rows = grouped_sd[key]
+        stats = summarize(group_rows)
+        payload = {
+            "sketch_type": key[0],
+            "sketch_dim": key[1],
+            "count": len(group_rows),
+            **stats,
+        }
+        print(json.dumps(payload, separators=(",", ":")))
+
+    grouped_sdl: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped_sdl[(row["sketch_type"], int(row["sketch_dim"]), int(row["layer"]))].append(row)
 
     print("SUMMARY by sketch_type/sketch_dim/layer")
-    for key in sorted(grouped.keys()):
-        group_rows = grouped[key]
+    for key in sorted(grouped_sdl.keys()):
+        group_rows = grouped_sdl[key]
         stats = summarize(group_rows)
         payload = {
             "sketch_type": key[0],
@@ -161,50 +217,54 @@ def main() -> int:
     layers = _parse_index_list(args.layers, num_layers, "layer")
     heads = _parse_index_list(args.heads, num_heads, "head")
     query_positions = _parse_query_positions(args.query_positions, prompt_num_tokens, hf_eval)
+    sketch_types = _parse_sketch_types(args.sketch_type, args.sketch_types)
+    sketch_dims = _parse_sketch_dims(args.sketch_dim, args.sketch_dims)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, Any]] = []
     with output_path.open("w", encoding="utf-8") as f:
-        for layer in layers:
-            for head in heads:
-                for query_position in query_positions:
-                    metrics = hf_eval._evaluate_at_query_position(
-                        math=math,
-                        model=model,
-                        input_ids=input_ids,
-                        layer=layer,
-                        head=head,
-                        query_position=query_position,
-                        sketch_type=args.sketch_type,
-                        sketch_dim=args.sketch_dim,
-                        seed=args.seed,
-                        block_size=args.block_size,
-                        topk_blocks=args.topk_blocks,
-                    )
-                    row = {
-                        "model_name": args.model_name,
-                        "original_prompt_num_tokens": original_prompt_num_tokens,
-                        "prompt_num_tokens": prompt_num_tokens,
-                        "truncated": bool(truncated),
-                        "max_context_tokens": (
-                            int(effective_max_tokens)
-                            if effective_max_tokens is not None
-                            else None
-                        ),
-                        "layer": layer,
-                        "head": head,
-                        "query_positions_spec": args.query_positions,
-                        "sketch_type": args.sketch_type,
-                        "sketch_dim": args.sketch_dim,
-                        "block_size": args.block_size,
-                        "topk_blocks": args.topk_blocks,
-                        "seed": args.seed,
-                    }
-                    row.update(metrics)
-                    f.write(json.dumps(row, separators=(",", ":")) + "\n")
-                    rows.append(row)
+        for sketch_type in sketch_types:
+            for sketch_dim in sketch_dims:
+                for layer in layers:
+                    for head in heads:
+                        for query_position in query_positions:
+                            metrics = hf_eval._evaluate_at_query_position(
+                                math=math,
+                                model=model,
+                                input_ids=input_ids,
+                                layer=layer,
+                                head=head,
+                                query_position=query_position,
+                                sketch_type=sketch_type,
+                                sketch_dim=sketch_dim,
+                                seed=args.seed,
+                                block_size=args.block_size,
+                                topk_blocks=args.topk_blocks,
+                            )
+                            row = {
+                                "model_name": args.model_name,
+                                "original_prompt_num_tokens": original_prompt_num_tokens,
+                                "prompt_num_tokens": prompt_num_tokens,
+                                "truncated": bool(truncated),
+                                "max_context_tokens": (
+                                    int(effective_max_tokens)
+                                    if effective_max_tokens is not None
+                                    else None
+                                ),
+                                "layer": layer,
+                                "head": head,
+                                "query_positions_spec": args.query_positions,
+                                "sketch_type": sketch_type,
+                                "sketch_dim": sketch_dim,
+                                "block_size": args.block_size,
+                                "topk_blocks": args.topk_blocks,
+                                "seed": args.seed,
+                            }
+                            row.update(metrics)
+                            f.write(json.dumps(row, separators=(",", ":")) + "\n")
+                            rows.append(row)
 
     _aggregate(rows)
     print(f"Wrote {len(rows)} rows to {output_path}")
