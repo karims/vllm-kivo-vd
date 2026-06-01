@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
+import argparse
+import importlib.util
+import json
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+
+def _load_hf_eval_module() -> Any:
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "scripts" / "kivo_vd" / "run_hf_qk_sketch_eval.py"
+    spec = importlib.util.spec_from_file_location("run_hf_qk_sketch_eval", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _parse_index_list(spec: str, max_count: int, label: str) -> list[int]:
+    if spec == "all":
+        return list(range(max_count))
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        idx = int(part)
+        if idx < 0 or idx >= max_count:
+            raise ValueError(f"{label} index {idx} out of range [0, {max_count - 1}]")
+        if idx not in out:
+            out.append(idx)
+    if not out:
+        raise ValueError(f"{label} list is empty")
+    return out
+
+
+def _parse_query_positions(spec: str, seq_len: int, hf_eval: Any) -> list[int]:
+    if spec == "sweep":
+        return hf_eval._sweep_query_positions(seq_len)
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        pos = hf_eval._resolve_query_position(part, seq_len)
+        if pos not in out:
+            out.append(pos)
+    if not out:
+        raise ValueError("query positions list is empty")
+    return out
+
+
+def _parse_args(hf_eval: Any) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Optional HF Q/K layer/head sweep.")
+    parser.add_argument("--model-name", default="distilgpt2")
+    parser.add_argument("--prompt", default=hf_eval._default_prompt())
+    parser.add_argument(
+        "--sketch-type",
+        choices=["random_projection", "count_sketch"],
+        default="random_projection",
+    )
+    parser.add_argument("--sketch-dim", type=int, default=64)
+    parser.add_argument("--block-size", type=int, default=16)
+    parser.add_argument("--topk-blocks", type=int, default=4)
+    parser.add_argument("--max-tokens", type=int, default=900)
+    parser.add_argument("--truncate-side", choices=["left", "right"], default="right")
+    parser.add_argument("--layers", default="all")
+    parser.add_argument("--heads", default="all")
+    parser.add_argument("--query-positions", default="sweep")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--output", default="outputs/kivo_vd/hf_qk_head_sweep.jsonl"
+    )
+    return parser.parse_args()
+
+
+def _aggregate(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        print("No rows to summarize.")
+        return
+
+    metric_keys = [
+        "block_topk_recall",
+        "block_recall_at_2x_budget",
+        "block_recall_at_4x_budget",
+        "block_mrr",
+        "block_score_correlation",
+    ]
+
+    def summarize(group_rows: list[dict[str, Any]]) -> dict[str, float]:
+        return {
+            f"avg_{k}": sum(float(r[k]) for r in group_rows) / len(group_rows)
+            for k in metric_keys
+        }
+
+    overall = summarize(rows)
+    print("SUMMARY overall")
+    print(json.dumps({"count": len(rows), **overall}, separators=(",", ":")))
+
+    grouped: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["sketch_type"], int(row["sketch_dim"]), int(row["layer"]))].append(row)
+
+    print("SUMMARY by sketch_type/sketch_dim/layer")
+    for key in sorted(grouped.keys()):
+        group_rows = grouped[key]
+        stats = summarize(group_rows)
+        payload = {
+            "sketch_type": key[0],
+            "sketch_dim": key[1],
+            "layer": key[2],
+            "count": len(group_rows),
+            **stats,
+        }
+        print(json.dumps(payload, separators=(",", ":")))
+
+
+def main() -> int:
+    hf_eval = _load_hf_eval_module()
+    args = _parse_args(hf_eval)
+    math = hf_eval._load_sketch_math_module()
+
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except Exception as exc:
+        raise RuntimeError(
+            "This optional script requires torch and transformers. "
+            "Install them in your environment first."
+        ) from exc
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    model = AutoModelForCausalLM.from_pretrained(args.model_name)
+    model = model.to(args.device)
+    model.eval()
+
+    encoded = tokenizer(args.prompt, return_tensors="pt")
+    input_ids = encoded["input_ids"].to(args.device)
+    original_prompt_num_tokens = int(input_ids.shape[1])
+
+    model_context = hf_eval._resolve_model_max_context_tokens(model, tokenizer)
+    if model_context is not None and args.max_tokens is not None:
+        effective_max_tokens = min(model_context, args.max_tokens)
+    else:
+        effective_max_tokens = model_context if model_context is not None else args.max_tokens
+
+    input_ids, truncated = hf_eval._truncate_input_ids(
+        input_ids=input_ids,
+        max_tokens=effective_max_tokens,
+        truncate_side=args.truncate_side,
+    )
+    prompt_num_tokens = int(input_ids.shape[1])
+
+    num_layers = len(model.transformer.h)
+    num_heads = int(getattr(model.config, "n_head"))
+    layers = _parse_index_list(args.layers, num_layers, "layer")
+    heads = _parse_index_list(args.heads, num_heads, "head")
+    query_positions = _parse_query_positions(args.query_positions, prompt_num_tokens, hf_eval)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict[str, Any]] = []
+    with output_path.open("w", encoding="utf-8") as f:
+        for layer in layers:
+            for head in heads:
+                for query_position in query_positions:
+                    metrics = hf_eval._evaluate_at_query_position(
+                        math=math,
+                        model=model,
+                        input_ids=input_ids,
+                        layer=layer,
+                        head=head,
+                        query_position=query_position,
+                        sketch_type=args.sketch_type,
+                        sketch_dim=args.sketch_dim,
+                        seed=args.seed,
+                        block_size=args.block_size,
+                        topk_blocks=args.topk_blocks,
+                    )
+                    row = {
+                        "model_name": args.model_name,
+                        "original_prompt_num_tokens": original_prompt_num_tokens,
+                        "prompt_num_tokens": prompt_num_tokens,
+                        "truncated": bool(truncated),
+                        "max_context_tokens": (
+                            int(effective_max_tokens)
+                            if effective_max_tokens is not None
+                            else None
+                        ),
+                        "layer": layer,
+                        "head": head,
+                        "query_positions_spec": args.query_positions,
+                        "sketch_type": args.sketch_type,
+                        "sketch_dim": args.sketch_dim,
+                        "block_size": args.block_size,
+                        "topk_blocks": args.topk_blocks,
+                        "seed": args.seed,
+                    }
+                    row.update(metrics)
+                    f.write(json.dumps(row, separators=(",", ":")) + "\n")
+                    rows.append(row)
+
+    _aggregate(rows)
+    print(f"Wrote {len(rows)} rows to {output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

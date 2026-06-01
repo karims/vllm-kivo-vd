@@ -73,6 +73,18 @@ Run the optional eval:
   --device cpu
 ```
 
+Optional layer/head sweep:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_head_sweep.py \
+  --model-name distilgpt2 \
+  --sketch-type count_sketch \
+  --sketch-dim 64 \
+  --layers 0,1 \
+  --heads 0,1 \
+  --max-tokens 512
+```
+
 ## Troubleshooting
 
 - If `pytest` is missing: `uv pip install pytest`
