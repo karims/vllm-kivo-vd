@@ -6,13 +6,21 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
+from vllm.v1.core.kivo_vd_sketch import KivoVDSketchIndex
+
 
 class KivoVDObserver:
     """Phase 0 Kivo-VD observer hook points (no-op implementation)."""
 
-    def __init__(self, enabled: bool = False, max_events: int = 10_000) -> None:
+    def __init__(
+        self,
+        enabled: bool = False,
+        max_events: int = 10_000,
+        sketch_index: KivoVDSketchIndex | None = None,
+    ) -> None:
         self.enabled = enabled
         self.max_events = max_events
+        self.sketch_index = sketch_index
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
