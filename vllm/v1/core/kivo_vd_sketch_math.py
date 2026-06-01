@@ -15,6 +15,102 @@ class CountSketchSpec:
     bucket_sign: np.ndarray
 
 
+def generate_synthetic_keys_and_query(
+    num_tokens: int,
+    input_dim: int,
+    seed: int,
+    mode: str = "gaussian",
+    num_clusters: int = 16,
+    cluster_noise: float = 0.1,
+    sequence_noise: float = 0.05,
+    needle_strength: float = 3.0,
+    num_needle_blocks: int = 2,
+    block_size: int = 16,
+) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    keys = rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
+    query = rng.standard_normal((input_dim,), dtype=np.float64)
+
+    if mode == "gaussian":
+        return keys, query
+
+    if mode == "clustered":
+        centroids = rng.standard_normal((num_clusters, input_dim), dtype=np.float64)
+        # contiguous token spans receive cluster ids in sequence-like chunks
+        tokens_per_cluster = max(1, num_tokens // num_clusters)
+        cluster_ids = np.repeat(np.arange(num_clusters), tokens_per_cluster)[:num_tokens]
+        if cluster_ids.shape[0] < num_tokens:
+            tail = rng.integers(0, num_clusters, size=num_tokens - cluster_ids.shape[0])
+            cluster_ids = np.concatenate([cluster_ids, tail], axis=0)
+        keys = centroids[cluster_ids] + cluster_noise * rng.standard_normal(
+            (num_tokens, input_dim), dtype=np.float64
+        )
+        focus = rng.choice(num_clusters, size=min(2, num_clusters), replace=False)
+        query = centroids[focus].mean(axis=0) + cluster_noise * rng.standard_normal(
+            input_dim, dtype=np.float64
+        )
+        return keys, query
+
+    if mode == "smooth_sequence":
+        # random walk for smooth local continuity
+        steps = rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
+        keys = np.cumsum(steps, axis=0)
+        keys /= np.sqrt(np.arange(1, num_tokens + 1)[:, None])
+        keys += sequence_noise * rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
+        center = int(rng.integers(0, num_tokens))
+        span = max(2, min(block_size, num_tokens))
+        s = max(0, center - span // 2)
+        e = min(num_tokens, s + span)
+        query = keys[s:e].mean(axis=0) + sequence_noise * rng.standard_normal(
+            input_dim, dtype=np.float64
+        )
+        return keys, query
+
+    if mode == "needle_blocks":
+        num_blocks = max(1, (num_tokens + block_size - 1) // block_size)
+        query = rng.standard_normal((input_dim,), dtype=np.float64)
+        query /= np.linalg.norm(query) + 1e-12
+        keys = 0.5 * rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
+        needle_count = min(max(1, num_needle_blocks), num_blocks)
+        needle_blocks = rng.choice(num_blocks, size=needle_count, replace=False)
+        for b in needle_blocks:
+            s = b * block_size
+            e = min(num_tokens, s + block_size)
+            keys[s:e] += needle_strength * query
+        return keys, query
+
+    if mode == "mixed":
+        # clustered base
+        centroids = rng.standard_normal((num_clusters, input_dim), dtype=np.float64)
+        cluster_ids = rng.integers(0, num_clusters, size=num_tokens)
+        keys = centroids[cluster_ids] + cluster_noise * rng.standard_normal(
+            (num_tokens, input_dim), dtype=np.float64
+        )
+        # smooth trend
+        trend = np.cumsum(
+            sequence_noise * rng.standard_normal((num_tokens, input_dim), dtype=np.float64),
+            axis=0,
+        )
+        keys += trend / np.sqrt(np.arange(1, num_tokens + 1)[:, None])
+        # query near selected centroid
+        c = int(rng.integers(0, num_clusters))
+        query = centroids[c] + cluster_noise * rng.standard_normal(input_dim, dtype=np.float64)
+        query /= np.linalg.norm(query) + 1e-12
+        # inject needle blocks
+        num_blocks = max(1, (num_tokens + block_size - 1) // block_size)
+        needle_count = min(max(1, num_needle_blocks), num_blocks)
+        needle_blocks = rng.choice(num_blocks, size=needle_count, replace=False)
+        for b in needle_blocks:
+            s = b * block_size
+            e = min(num_tokens, s + block_size)
+            keys[s:e] += needle_strength * query
+        # extra isotropic noise
+        keys += 0.05 * rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
+        return keys, query
+
+    raise ValueError(f"Unknown synthetic mode: {mode}")
+
+
 def make_random_projection(
     input_dim: int,
     sketch_dim: int,

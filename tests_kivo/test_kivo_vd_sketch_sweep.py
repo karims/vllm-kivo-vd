@@ -57,6 +57,7 @@ def test_sketch_sweep_jsonl_fields(tmp_path: Path) -> None:
 
     first_row = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
     required = {
+        "mode",
         "sketch_type",
         "sketch_dim",
         "num_tokens",

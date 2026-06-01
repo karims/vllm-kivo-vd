@@ -76,6 +76,8 @@ def test_cli_smoke() -> None:
             "7",
             "--sketch-type",
             "random_projection",
+            "--mode",
+            "gaussian",
         ],
         check=True,
         capture_output=True,
@@ -84,3 +86,52 @@ def test_cli_smoke() -> None:
     out = proc.stdout.strip()
     assert "token_topk_recall" in out
     assert "block_topk_recall" in out
+
+
+def test_generator_shapes_all_modes() -> None:
+    m = _load_module()
+    modes = ["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"]
+    for mode in modes:
+        keys, query = m.generate_synthetic_keys_and_query(
+            num_tokens=64,
+            input_dim=32,
+            seed=11,
+            mode=mode,
+            block_size=8,
+        )
+        assert keys.shape == (64, 32)
+        assert query.shape == (32,)
+
+
+def test_generator_deterministic_same_seed() -> None:
+    m = _load_module()
+    k1, q1 = m.generate_synthetic_keys_and_query(
+        num_tokens=32, input_dim=16, seed=5, mode="mixed", block_size=8
+    )
+    k2, q2 = m.generate_synthetic_keys_and_query(
+        num_tokens=32, input_dim=16, seed=5, mode="mixed", block_size=8
+    )
+    assert np.allclose(k1, k2)
+    assert np.allclose(q1, q2)
+
+
+def test_needle_blocks_has_high_scoring_block() -> None:
+    m = _load_module()
+    num_tokens = 128
+    block_size = 16
+    keys, query = m.generate_synthetic_keys_and_query(
+        num_tokens=num_tokens,
+        input_dim=64,
+        seed=19,
+        mode="needle_blocks",
+        needle_strength=4.0,
+        num_needle_blocks=2,
+        block_size=block_size,
+    )
+    scores = m.compute_exact_scores(query, keys)
+    block_scores = m.block_scores_from_token_scores(
+        scores, block_size=block_size, mode="max"
+    )
+    top_block = int(m.topk_indices(block_scores, 1)[0])
+    median_block = float(np.median(block_scores))
+    assert block_scores[top_block] > median_block

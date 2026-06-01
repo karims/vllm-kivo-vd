@@ -6,8 +6,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-import numpy as np
-
 
 def _load_sketch_math_module():
     repo_root = Path(__file__).resolve().parents[2]
@@ -35,13 +33,22 @@ def main() -> int:
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk", type=int, default=32)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument(
+        "--mode",
+        choices=["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"],
+        default="gaussian",
+    )
     args = parser.parse_args()
 
     math = _load_sketch_math_module()
 
-    rng = np.random.default_rng(args.seed)
-    keys = rng.standard_normal((args.num_tokens, args.input_dim), dtype=np.float64)
-    query = rng.standard_normal((args.input_dim,), dtype=np.float64)
+    keys, query = math.generate_synthetic_keys_and_query(
+        num_tokens=args.num_tokens,
+        input_dim=args.input_dim,
+        seed=args.seed,
+        mode=args.mode,
+        block_size=args.block_size,
+    )
 
     exact_scores = math.compute_exact_scores(query, keys)
     approx_scores = math.compute_sketched_scores(
@@ -73,6 +80,7 @@ def main() -> int:
                 "num_tokens": args.num_tokens,
                 "block_size": args.block_size,
                 "topk": args.topk,
+                "mode": args.mode,
                 "token_topk_recall": token_recall,
                 "block_topk_recall": block_recall,
             },

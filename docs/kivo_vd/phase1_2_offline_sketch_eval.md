@@ -66,6 +66,7 @@ Full sweep:
 ```
 
 The script prints aggregate summaries grouped by:
+- `mode`
 - `sketch_type`
 - `sketch_dim`
 - `topk_blocks`
@@ -74,6 +75,20 @@ Key interpretation:
 - `block_topk_recall` near 1.0 means sketch ranking preserves exact top blocks
   well.
 - `block_topk_recall` near 0.0 means heavy ranking distortion.
+
+## Synthetic modes (Phase 1.4)
+
+- `gaussian`: pure random baseline (often hard/worst-case).
+- `clustered`: topic-like clustered keys.
+- `smooth_sequence`: gradual temporal evolution.
+- `needle_blocks`: mostly noise with a few strongly aligned blocks.
+- `mixed`: clustered base + smooth/noise + needle blocks.
+
+Guidance:
+- Treat `gaussian` as stress baseline.
+- Judge viability mainly by `block_topk_recall` under structured modes
+  (`clustered`, `smooth_sequence`, `needle_blocks`, `mixed`), especially
+  `mixed`.
 
 ## Next expected step
 

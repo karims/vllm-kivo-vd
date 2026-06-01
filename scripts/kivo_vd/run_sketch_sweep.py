@@ -9,8 +9,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 
 def _load_sketch_math_module():
     repo_root = Path(__file__).resolve().parents[2]
@@ -32,10 +30,15 @@ def _run_one(
     block_size: int,
     topk_blocks: int,
     seed: int,
+    mode: str,
 ) -> dict[str, Any]:
-    rng = np.random.default_rng(seed)
-    keys = rng.standard_normal((num_tokens, input_dim), dtype=np.float64)
-    query = rng.standard_normal((input_dim,), dtype=np.float64)
+    keys, query = math.generate_synthetic_keys_and_query(
+        num_tokens=num_tokens,
+        input_dim=input_dim,
+        seed=seed,
+        mode=mode,
+        block_size=block_size,
+    )
 
     t0 = time.perf_counter()
     exact_scores = math.compute_exact_scores(query, keys)
@@ -71,6 +74,7 @@ def _run_one(
         "block_size": block_size,
         "topk_blocks": topk_blocks,
         "seed": seed,
+        "mode": mode,
         "token_topk_recall": float(token_recall),
         "block_topk_recall": float(block_recall),
         "exact_top_block_ids": exact_top_blocks.tolist(),
@@ -123,12 +127,14 @@ def main() -> int:
         num_tokens_list = [1024]
         topk_blocks_list = [4, 8]
         seeds = [0]
+        modes = ["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"]
     else:
         sketch_types = ["random_projection", "count_sketch"]
         sketch_dims = [16, 32, 64, 128]
         num_tokens_list = [1024, 4096, 8192]
         topk_blocks_list = [4, 8, 16]
         seeds = [0, 1, 2]
+        modes = ["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"]
 
     if args.seed is not None:
         seeds = [args.seed]
@@ -136,23 +142,25 @@ def main() -> int:
         num_tokens_list = [args.num_tokens]
 
     rows = []
-    for sketch_type in sketch_types:
-        for sketch_dim in sketch_dims:
-            for num_tokens in num_tokens_list:
-                for topk_blocks in topk_blocks_list:
-                    for seed in seeds:
-                        rows.append(
-                            _run_one(
-                                math=math,
-                                sketch_type=sketch_type,
-                                sketch_dim=sketch_dim,
-                                num_tokens=num_tokens,
-                                input_dim=args.input_dim,
-                                block_size=args.block_size,
-                                topk_blocks=topk_blocks,
-                                seed=seed,
+    for mode in modes:
+        for sketch_type in sketch_types:
+            for sketch_dim in sketch_dims:
+                for num_tokens in num_tokens_list:
+                    for topk_blocks in topk_blocks_list:
+                        for seed in seeds:
+                            rows.append(
+                                _run_one(
+                                    math=math,
+                                    sketch_type=sketch_type,
+                                    sketch_dim=sketch_dim,
+                                    num_tokens=num_tokens,
+                                    input_dim=args.input_dim,
+                                    block_size=args.block_size,
+                                    topk_blocks=topk_blocks,
+                                    seed=seed,
+                                    mode=mode,
+                                )
                             )
-                        )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,15 +168,16 @@ def main() -> int:
         for row in rows:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
-    grouped: defaultdict[tuple[str, int, int], list[float]] = defaultdict(list)
+    grouped: defaultdict[tuple[str, str, int, int], list[float]] = defaultdict(list)
     for row in rows:
-        key = (row["sketch_type"], row["sketch_dim"], row["topk_blocks"])
+        key = (row["mode"], row["sketch_type"], row["sketch_dim"], row["topk_blocks"])
         grouped[key].append(row["block_topk_recall"])
 
     summary = []
-    for (sketch_type, sketch_dim, topk_blocks), vals in sorted(grouped.items()):
+    for (mode, sketch_type, sketch_dim, topk_blocks), vals in sorted(grouped.items()):
         summary.append(
             {
+                "mode": mode,
                 "sketch_type": sketch_type,
                 "sketch_dim": sketch_dim,
                 "topk_blocks": topk_blocks,
