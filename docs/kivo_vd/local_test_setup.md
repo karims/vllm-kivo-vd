@@ -5,6 +5,7 @@ tests in an isolated suite that does not load `tests/conftest.py`:
 
 - `tests_kivo/test_kivo_vd_observer.py`
 - `tests_kivo/test_kivo_vd_sketch.py`
+- `tests_kivo/test_kivo_vd_sketch_math.py`
 
 ## Why this is needed
 
@@ -47,6 +48,9 @@ Notes:
 - No scheduler/runtime behavior changes are required for these tests.
 - `tests_kivo/` is outside `tests/`, so pytest does not pick up
   `tests/conftest.py` and its heavyweight dependencies (for example `tblib`).
+- Running tests under the main `tests/` tree may require full vLLM dev/test
+  dependencies. Failures from `tests/conftest.py` (for example missing
+  `tblib`) are environment/dependency issues, not Kivo-only code failures.
 
 ## Troubleshooting
 
