@@ -62,11 +62,32 @@ def main() -> int:
     exact_topk = math.topk_indices(exact_scores, args.topk)
     approx_topk = math.topk_indices(approx_scores, args.topk)
     token_recall = math.topk_recall(exact_topk, approx_topk)
+    token_score_corr = math.pearson_correlation(exact_scores, approx_scores)
+
+    block_k = max(1, args.topk // max(args.block_size, 1))
+    exact_block_scores = math.block_scores_from_token_scores(
+        exact_scores,
+        args.block_size,
+        mode="max",
+    )
+    approx_block_scores = math.block_scores_from_token_scores(
+        approx_scores,
+        args.block_size,
+        mode="max",
+    )
+    block_score_corr = math.pearson_correlation(exact_block_scores, approx_block_scores)
+    exact_top_blocks = math.topk_indices(exact_block_scores, block_k)
+    approx_top_blocks = math.topk_indices(approx_block_scores, block_k)
+    approx_block_ranking = math.topk_indices(approx_block_scores, approx_block_scores.shape[0])
+    block_recall_2x = math.recall_at_budget(exact_top_blocks, approx_block_ranking, block_k * 2)
+    block_recall_4x = math.recall_at_budget(exact_top_blocks, approx_block_ranking, block_k * 4)
+    block_mrr = math.mean_reciprocal_rank(exact_top_blocks, approx_block_ranking)
+
     block_recall = math.topk_block_recall(
         exact_token_scores=exact_scores,
         approx_token_scores=approx_scores,
         block_size=args.block_size,
-        k=max(1, args.topk // max(args.block_size, 1)),
+        k=block_k,
         mode="max",
     )
 
@@ -83,6 +104,13 @@ def main() -> int:
                 "mode": args.mode,
                 "token_topk_recall": token_recall,
                 "block_topk_recall": block_recall,
+                "block_recall_at_2x_budget": block_recall_2x,
+                "block_recall_at_4x_budget": block_recall_4x,
+                "block_mrr": block_mrr,
+                "token_score_correlation": token_score_corr,
+                "block_score_correlation": block_score_corr,
+                "exact_top_block_ids": exact_top_blocks.tolist(),
+                "approx_top_block_ids": approx_top_blocks.tolist(),
             },
             separators=(",", ":"),
         )

@@ -55,6 +55,7 @@ def _run_one(
     exact_topk_tokens = math.topk_indices(exact_scores, token_k)
     approx_topk_tokens = math.topk_indices(approx_scores, token_k)
     token_recall = math.topk_recall(exact_topk_tokens, approx_topk_tokens)
+    token_score_corr = math.pearson_correlation(exact_scores, approx_scores)
 
     exact_block_scores = math.block_scores_from_token_scores(
         exact_scores, block_size, mode="max"
@@ -62,9 +63,22 @@ def _run_one(
     approx_block_scores = math.block_scores_from_token_scores(
         approx_scores, block_size, mode="max"
     )
+    block_score_corr = math.pearson_correlation(exact_block_scores, approx_block_scores)
     exact_top_blocks = math.topk_indices(exact_block_scores, topk_blocks)
     approx_top_blocks = math.topk_indices(approx_block_scores, topk_blocks)
+    approx_block_ranking = math.topk_indices(approx_block_scores, approx_block_scores.shape[0])
     block_recall = math.topk_recall(exact_top_blocks, approx_top_blocks)
+    block_recall_2x = math.recall_at_budget(
+        exact_top_blocks,
+        approx_block_ranking,
+        topk_blocks * 2,
+    )
+    block_recall_4x = math.recall_at_budget(
+        exact_top_blocks,
+        approx_block_ranking,
+        topk_blocks * 4,
+    )
+    block_mrr = math.mean_reciprocal_rank(exact_top_blocks, approx_block_ranking)
 
     return {
         "sketch_type": sketch_type,
@@ -77,6 +91,11 @@ def _run_one(
         "mode": mode,
         "token_topk_recall": float(token_recall),
         "block_topk_recall": float(block_recall),
+        "block_recall_at_2x_budget": float(block_recall_2x),
+        "block_recall_at_4x_budget": float(block_recall_4x),
+        "block_mrr": float(block_mrr),
+        "token_score_correlation": float(token_score_corr),
+        "block_score_correlation": float(block_score_corr),
         "exact_top_block_ids": exact_top_blocks.tolist(),
         "approx_top_block_ids": approx_top_blocks.tolist(),
         "runtime_ms": float(runtime_ms),
@@ -168,20 +187,37 @@ def main() -> int:
         for row in rows:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
-    grouped: defaultdict[tuple[str, str, int, int], list[float]] = defaultdict(list)
+    grouped: defaultdict[tuple[str, str, int, int], list[dict[str, float]]] = defaultdict(list)
     for row in rows:
         key = (row["mode"], row["sketch_type"], row["sketch_dim"], row["topk_blocks"])
-        grouped[key].append(row["block_topk_recall"])
+        grouped[key].append(
+            {
+                "block_topk_recall": row["block_topk_recall"],
+                "block_recall_at_2x_budget": row["block_recall_at_2x_budget"],
+                "block_recall_at_4x_budget": row["block_recall_at_4x_budget"],
+                "block_mrr": row["block_mrr"],
+            }
+        )
 
     summary = []
     for (mode, sketch_type, sketch_dim, topk_blocks), vals in sorted(grouped.items()):
+        n = float(len(vals))
         summary.append(
             {
                 "mode": mode,
                 "sketch_type": sketch_type,
                 "sketch_dim": sketch_dim,
                 "topk_blocks": topk_blocks,
-                "avg_block_topk_recall": float(sum(vals) / len(vals)),
+                "avg_block_topk_recall": float(
+                    sum(v["block_topk_recall"] for v in vals) / n
+                ),
+                "avg_block_recall_at_2x_budget": float(
+                    sum(v["block_recall_at_2x_budget"] for v in vals) / n
+                ),
+                "avg_block_recall_at_4x_budget": float(
+                    sum(v["block_recall_at_4x_budget"] for v in vals) / n
+                ),
+                "avg_block_mrr": float(sum(v["block_mrr"] for v in vals) / n),
             }
         )
 

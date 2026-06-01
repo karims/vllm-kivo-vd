@@ -75,6 +75,11 @@ Key interpretation:
 - `block_topk_recall` near 1.0 means sketch ranking preserves exact top blocks
   well.
 - `block_topk_recall` near 0.0 means heavy ranking distortion.
+- `block_recall_at_2x_budget` / `block_recall_at_4x_budget` measure candidate
+  retrieval quality when sketch can return a larger set for later exact rerank.
+- `block_mrr` tracks how early exact top blocks appear in the approximate ranking.
+- `token_score_correlation` / `block_score_correlation` provide score-shape
+  agreement diagnostics.
 
 ## Synthetic modes (Phase 1.4)
 
@@ -89,6 +94,9 @@ Guidance:
 - Judge viability mainly by `block_topk_recall` under structured modes
   (`clustered`, `smooth_sequence`, `needle_blocks`, `mixed`), especially
   `mixed`.
+- Strict top-k recall is intentionally harsh; candidate-budget metrics
+  (`recall@2x`, `recall@4x`) can still indicate viable retrieval for a future
+  exact-attention reranking stage.
 
 ## Next expected step
 

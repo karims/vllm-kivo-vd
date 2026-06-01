@@ -253,3 +253,67 @@ def topk_block_recall(
     exact_topk = topk_indices(exact_block_scores, k)
     approx_topk = topk_indices(approx_block_scores, k)
     return topk_recall(exact_topk, approx_topk)
+
+
+def rank_positions_of_targets(
+    ranked_ids: np.ndarray,
+    target_ids: np.ndarray,
+) -> dict[int, int | None]:
+    ranked = np.asarray(ranked_ids).tolist()
+    pos = {int(block_id): i for i, block_id in enumerate(ranked)}
+    out: dict[int, int | None] = {}
+    for target in np.asarray(target_ids).tolist():
+        target_i = int(target)
+        out[target_i] = pos.get(target_i)
+    return out
+
+
+def recall_at_budget(
+    exact_top_ids: np.ndarray,
+    approx_ranked_ids: np.ndarray,
+    budget: int,
+) -> float:
+    if budget <= 0:
+        return 0.0
+    exact = set(np.asarray(exact_top_ids).tolist())
+    if not exact:
+        return 1.0
+    approx_prefix = set(np.asarray(approx_ranked_ids)[:budget].tolist())
+    return len(exact & approx_prefix) / float(len(exact))
+
+
+def recall_at_budgets(
+    exact_top_ids: np.ndarray,
+    approx_ranked_ids: np.ndarray,
+    budgets: list[int],
+) -> dict[int, float]:
+    return {int(b): recall_at_budget(exact_top_ids, approx_ranked_ids, int(b)) for b in budgets}
+
+
+def mean_reciprocal_rank(exact_top_ids: np.ndarray, approx_ranked_ids: np.ndarray) -> float:
+    exact = np.asarray(exact_top_ids)
+    if exact.size == 0:
+        return 1.0
+    positions = rank_positions_of_targets(approx_ranked_ids, exact_top_ids)
+    rr_sum = 0.0
+    for target in exact.tolist():
+        pos = positions.get(int(target))
+        if pos is None:
+            continue
+        rr_sum += 1.0 / float(pos + 1)
+    return rr_sum / float(exact.size)
+
+
+def pearson_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    arr_a = np.asarray(a, dtype=np.float64).reshape(-1)
+    arr_b = np.asarray(b, dtype=np.float64).reshape(-1)
+    if arr_a.size != arr_b.size or arr_a.size == 0:
+        return 0.0
+    a_std = float(np.std(arr_a))
+    b_std = float(np.std(arr_b))
+    if a_std == 0.0 or b_std == 0.0:
+        return 0.0
+    corr = np.corrcoef(arr_a, arr_b)[0, 1]
+    if np.isnan(corr):
+        return 0.0
+    return float(corr)

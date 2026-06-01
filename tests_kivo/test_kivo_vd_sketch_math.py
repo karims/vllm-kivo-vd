@@ -135,3 +135,30 @@ def test_needle_blocks_has_high_scoring_block() -> None:
     top_block = int(m.topk_indices(block_scores, 1)[0])
     median_block = float(np.median(block_scores))
     assert block_scores[top_block] > median_block
+
+
+def test_recall_at_budget_simple_case() -> None:
+    m = _load_module()
+    exact_top = np.array([10, 11, 12, 13])
+    approx_ranked = np.array([99, 10, 50, 11, 42, 12, 13, 7])
+    assert m.recall_at_budget(exact_top, approx_ranked, 2) == 0.25
+    assert m.recall_at_budget(exact_top, approx_ranked, 4) == 0.5
+    by_budgets = m.recall_at_budgets(exact_top, approx_ranked, [2, 4, 8])
+    assert by_budgets[2] == 0.25
+    assert by_budgets[4] == 0.5
+    assert by_budgets[8] == 1.0
+
+
+def test_mrr_simple_case() -> None:
+    m = _load_module()
+    exact_top = np.array([5, 6])
+    approx_ranked = np.array([7, 6, 8, 5])
+    # rr: 6 at rank 2 -> 1/2, 5 at rank 4 -> 1/4; mean = 3/8
+    assert np.isclose(m.mean_reciprocal_rank(exact_top, approx_ranked), 0.375)
+
+
+def test_pearson_identical_arrays_high() -> None:
+    m = _load_module()
+    a = np.array([1.0, 2.0, 3.0, 4.0])
+    b = np.array([1.0, 2.0, 3.0, 4.0])
+    assert np.isclose(m.pearson_correlation(a, b), 1.0)
