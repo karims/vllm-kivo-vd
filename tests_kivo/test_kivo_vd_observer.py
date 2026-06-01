@@ -4,6 +4,7 @@ from vllm.v1.core.kivo_vd_observer import (
     KivoVDObserver,
     create_kivo_vd_observer,
 )
+from vllm.v1.core.kivo_vd_sketch import KivoVDSketchIndex
 
 
 def test_kivo_vd_observer_instantiation() -> None:
@@ -13,6 +14,12 @@ def test_kivo_vd_observer_instantiation() -> None:
 
 def test_kivo_vd_observer_factory_disabled_by_default() -> None:
     assert create_kivo_vd_observer(False) is None
+
+
+def test_kivo_vd_observer_factory_enabled_has_sketch_index() -> None:
+    observer = create_kivo_vd_observer(True)
+    assert observer is not None
+    assert observer.sketch_index is not None
 
 
 def test_kivo_vd_observer_counters_increment() -> None:
@@ -72,3 +79,50 @@ def test_kivo_vd_observer_reset_clears_state() -> None:
         "num_events": 0,
     }
     assert observer.get_recent_events() == []
+
+
+def test_observer_updates_sketch_index_from_after_allocate() -> None:
+    observer = KivoVDObserver(enabled=True, sketch_index=KivoVDSketchIndex())
+    observer.on_after_allocate_slots(
+        request_id="req-s1",
+        block_ids_by_group=([10, 11], [21]),
+        num_new_tokens=6,
+        source="running",
+    )
+
+    sketches = observer.sketch_index.get_request_block_sketches("req-s1")
+    assert len(sketches) == 3
+    assert {(s.kv_group_id, s.block_id) for s in sketches} == {
+        (0, 10),
+        (0, 11),
+        (1, 21),
+    }
+    assert all(s.metadata.get("source") == "running" for s in sketches)
+
+
+def test_observer_free_request_removes_sketch_entries() -> None:
+    observer = KivoVDObserver(enabled=True, sketch_index=KivoVDSketchIndex())
+    observer.on_after_allocate_slots(
+        request_id="req-s2",
+        block_ids_by_group=([1, 2],),
+        num_new_tokens=2,
+        source="waiting",
+    )
+    assert observer.sketch_index.get_request_block_sketches("req-s2")
+
+    observer.on_free_request("req-s2", ([1, 2],), source="free_blocks")
+    assert observer.sketch_index.get_request_block_sketches("req-s2") == []
+
+
+def test_observer_without_sketch_index_still_works() -> None:
+    observer = KivoVDObserver(enabled=True, sketch_index=None)
+    observer.on_after_allocate_slots(
+        request_id="req-ns",
+        block_ids_by_group=([7],),
+        num_new_tokens=1,
+        source="running",
+    )
+    observer.on_free_request("req-ns", ([7],), source="preempt")
+    counters = observer.get_counters()
+    assert counters["num_after_allocate_calls"] == 1
+    assert counters["num_free_request_calls"] == 1

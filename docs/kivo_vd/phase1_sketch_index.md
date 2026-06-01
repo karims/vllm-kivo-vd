@@ -1,6 +1,7 @@
-# Kivo-VD Phase 1.0: Sketch Index Interfaces
+# Kivo-VD Phase 1.0 / 1.1: Sketch Index Interfaces and Metadata Population
 
 Phase 1.0 adds Python-side interfaces and in-memory metadata structures only.
+Phase 1.1 populates that metadata index from scheduler lifecycle hooks.
 
 ## Scope in this phase
 
@@ -19,6 +20,10 @@ Phase 1.0 adds Python-side interfaces and in-memory metadata structures only.
   - `route_blocks_placeholder(...)`
   - `reset()`
 - Added unit tests for index behavior under `tests/v1/core/test_kivo_vd_sketch.py`.
+- Added observer-side metadata population from allocation/free hooks:
+  - `on_after_allocate_slots(...)` upserts `KivoVDBlockSketch` records
+  - `on_free_request(...)` removes request records from the sketch index
+  - population is metadata-only (block ids/group ids/logical order/source/tokens)
 
 ## Explicit non-goals for Phase 1.0
 
@@ -27,6 +32,7 @@ Phase 1.0 adds Python-side interfaces and in-memory metadata structures only.
 - No scheduler decision changes are made.
 - No CUDA/Triton/kernel/attention/GPUModelRunner changes are made.
 - No model architecture changes are made.
+- No routing/scheduling behavior changes are introduced in Phase 1.1.
 
 ## Placeholder behavior details
 
@@ -36,6 +42,26 @@ Phase 1.0 adds Python-side interfaces and in-memory metadata structures only.
   - recent block preference (`recent_window_blocks`)
   - top dummy scores
 - This is metadata-only plumbing for interface validation.
+
+## Phase 1.1 lifecycle population notes
+
+- Hook source: scheduler allocation/free observer calls (running/waiting/preempt/free).
+- Available metadata at hook point:
+  - request id
+  - per-group block id lists from `new_blocks.get_block_ids(allow_none=True)`
+  - source path (`running`, `waiting`, `preempt`, `free_blocks`, ...)
+  - `num_new_tokens` where provided by scheduler
+- Logical block index:
+  - derived from block position within each per-group list at the hook point.
+- Missing (not captured in this phase):
+  - real sketch vectors
+  - KV tensor data
+  - layer-level exact mapping
+  - explicit “only newly allocated physical ids” marker from allocator internals.
+
+If exact new-vs-existing block identity needs stronger guarantees later, the
+safest future hook point is a dedicated allocator return payload carrying
+explicitly new block ids per request/group.
 
 ## Why this index is separate from the observer
 

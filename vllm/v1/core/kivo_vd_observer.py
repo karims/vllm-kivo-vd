@@ -6,7 +6,11 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
-from vllm.v1.core.kivo_vd_sketch import KivoVDSketchIndex
+from vllm.v1.core.kivo_vd_sketch import (
+    KivoVDBlockSketch,
+    KivoVDSketchConfig,
+    KivoVDSketchIndex,
+)
 
 
 class KivoVDObserver:
@@ -79,6 +83,23 @@ class KivoVDObserver:
             num_new_blocks=num_new_blocks,
             source=source,
         )
+        if self.sketch_index is not None and block_ids_by_group is not None:
+            for kv_group_id, group_block_ids in enumerate(block_ids_by_group):
+                for logical_block_idx, block_id in enumerate(group_block_ids):
+                    self.sketch_index.add_or_update_block_sketch(
+                        KivoVDBlockSketch(
+                            request_id=request_id,
+                            block_id=block_id,
+                            logical_block_idx=logical_block_idx,
+                            kv_group_id=kv_group_id,
+                            layer_id=None,
+                            sketch_dim=self.sketch_index.config.sketch_dim,
+                            metadata={
+                                "source": source,
+                                "num_new_tokens": num_new_tokens,
+                            },
+                        )
+                    )
         return
 
     def on_free_request(
@@ -100,6 +121,8 @@ class KivoVDObserver:
             num_computed_blocks=num_computed_blocks,
             source=source,
         )
+        if self.sketch_index is not None:
+            self.sketch_index.remove_request(request_id)
         return
 
     def on_build_attention_metadata(
@@ -134,4 +157,11 @@ class KivoVDObserver:
 def create_kivo_vd_observer(enable_kivo_vd: bool) -> KivoVDObserver | None:
     if not enable_kivo_vd:
         return None
-    return KivoVDObserver(enabled=True)
+    return KivoVDObserver(
+        enabled=True,
+        sketch_index=KivoVDSketchIndex(
+            config=KivoVDSketchConfig(
+                enabled=True,
+            )
+        ),
+    )
