@@ -8,7 +8,8 @@ query/key tensors extracted from a small HuggingFace causal LM.
 - `scripts/kivo_vd/run_hf_qk_sketch_eval.py`
   - Loads a GPT-2 style model (`sshleifer/tiny-gpt2`, `distilgpt2`, `gpt2`).
   - Extracts Q/K from a selected layer/head using GPT-2 fused `c_attn`.
-  - Uses the final-token query against prior-token keys.
+  - Supports configurable query position (not only final token).
+  - Uses only causal keys before the selected query position.
   - Runs exact and sketched score comparisons using existing NumPy sketch math.
   - Prints compact JSON metrics to stdout.
 
@@ -34,6 +35,15 @@ Start with a tiny model:
   --device cpu
 ```
 
+For long prompts on GPT-2 style models (context often 1024), cap tokens:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_sketch_eval.py \
+  --model-name distilgpt2 \
+  --max-tokens 1024 \
+  --truncate-side right
+```
+
 Try larger GPT-2 variants:
 
 ```bash
@@ -45,12 +55,31 @@ Try larger GPT-2 variants:
   --sketch-dim 128
 ```
 
+Evaluate an earlier query position (not last token):
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_sketch_eval.py \
+  --model-name distilgpt2 \
+  --query-position 100
+```
+
+Sweep positions in one run (25%, 50%, 75%, last):
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_sketch_eval.py \
+  --model-name sshleifer/tiny-gpt2 \
+  --sweep-query-positions
+```
+
 ## Output metrics
 
 The script prints one JSON object with:
 
 - model/setup: `model_name`, `prompt_num_tokens`, `layer`, `head`,
   `sketch_type`, `sketch_dim`, `block_size`, `topk_blocks`
+- prompt/context safety: `original_prompt_num_tokens`, `prompt_num_tokens`,
+  `truncated`, `max_context_tokens`
+- query selection: `query_position`, `num_keys_used`
 - retrieval metrics: `token_topk_recall`, `block_topk_recall`,
   `block_recall_at_2x_budget`, `block_recall_at_4x_budget`, `block_mrr`
 - score diagnostics: `token_score_correlation`, `block_score_correlation`
@@ -66,3 +95,29 @@ transformer Q/K tensors behave closer to:
 
 This helps validate the Kivo-VD candidate-retrieval + exact-rerank direction
 before any runtime integration.
+
+## Query-position behavior
+
+Final-token queries often emphasize recency, especially in causal models. That
+can overstate how much the metric reflects long-range retrieval quality.
+
+This script supports:
+- `--query-position last` (default, backward compatible)
+- `--query-position <int>` (absolute token index)
+- `--query-position <negative int>` (Python-style from end, for example `-1`)
+- `--sweep-query-positions` (25%, 50%, 75%, and last token; one JSON line each)
+
+`num_keys_used` indicates the causal key prefix size for the selected query
+position (future tokens are excluded).
+
+## Context limit behavior
+
+GPT-2 family models can fail on overlong prompts if tokenized length exceeds
+the model context window (for example 1024 for many GPT-2 variants).
+
+The script now handles this defensively:
+- Determines context limit from `model.config.n_positions` when available.
+- Otherwise uses `tokenizer.model_max_length` only when it looks reasonable.
+- Otherwise does not auto-truncate unless `--max-tokens` is set.
+- If truncation is needed, default is `--truncate-side right` (keep prompt
+  prefix). Use `--truncate-side left` to keep prompt suffix instead.
