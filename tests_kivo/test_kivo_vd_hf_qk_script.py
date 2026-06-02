@@ -37,6 +37,7 @@ def test_hf_qk_script_help_smoke() -> None:
     assert "--truncate-side" in out
     assert "--query-position" in out
     assert "--sweep-query-positions" in out
+    assert "--extraction-mode" in out
 
 
 def test_truncate_input_ids_right_and_left() -> None:
@@ -76,3 +77,25 @@ def test_sweep_query_positions() -> None:
     positions = m._sweep_query_positions(20)
     assert positions[-1] == 19
     assert all(1 <= p <= 19 for p in positions)
+
+
+def test_map_query_head_to_kv_head_for_gqa() -> None:
+    m = _load_hf_script_module()
+    assert m._map_query_head_to_kv_head(0, 8, 2) == 0
+    assert m._map_query_head_to_kv_head(3, 8, 2) == 0
+    assert m._map_query_head_to_kv_head(4, 8, 2) == 1
+    assert m._map_query_head_to_kv_head(7, 8, 2) == 1
+
+
+def test_detect_extraction_mode_with_fake_attention() -> None:
+    m = _load_hf_script_module()
+
+    class GPT2Attention:
+        c_attn = object()
+
+    class SeparateAttention:
+        q_proj = object()
+        k_proj = object()
+
+    assert m._detect_extraction_mode(GPT2Attention(), "auto") == "gpt2_fused_c_attn"
+    assert m._detect_extraction_mode(SeparateAttention(), "auto") == "separate_qk_proj"

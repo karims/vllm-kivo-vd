@@ -111,6 +111,11 @@ def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser.add_argument("--layers", default="all")
     parser.add_argument("--heads", default="all")
     parser.add_argument("--query-positions", default="sweep")
+    parser.add_argument(
+        "--extraction-mode",
+        choices=["auto", "gpt2_fused_c_attn", "separate_qk_proj"],
+        default="auto",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
@@ -165,7 +170,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> None:
 
     grouped_sdl: dict[tuple[str, int, int], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped_sdl[(row["sketch_type"], int(row["sketch_dim"]), int(row["layer"]))].append(row)
+        key = (row["sketch_type"], int(row["sketch_dim"]), int(row["layer"]))
+        grouped_sdl[key].append(row)
 
     print("SUMMARY by sketch_type/sketch_dim/layer")
     for key in sorted(grouped_sdl.keys()):
@@ -208,7 +214,9 @@ def main() -> int:
     if model_context is not None and args.max_tokens is not None:
         effective_max_tokens = min(model_context, args.max_tokens)
     else:
-        effective_max_tokens = model_context if model_context is not None else args.max_tokens
+        effective_max_tokens = (
+            model_context if model_context is not None else args.max_tokens
+        )
 
     input_ids, truncated = hf_eval._truncate_input_ids(
         input_ids=input_ids,
@@ -217,11 +225,16 @@ def main() -> int:
     )
     prompt_num_tokens = int(input_ids.shape[1])
 
-    num_layers = len(model.transformer.h)
-    num_heads = int(getattr(model.config, "n_head"))
+    layers_modules = hf_eval._get_transformer_layers(model)
+    num_layers = len(layers_modules)
+    first_layer_idx = 0 if args.layers == "all" else int(args.layers.split(",")[0])
+    first_attn = hf_eval._get_layer_attention(layers_modules[first_layer_idx])
+    num_heads = hf_eval._get_num_query_heads(model, first_attn)
     layers = _parse_index_list(args.layers, num_layers, "layer")
     heads = _parse_index_list(args.heads, num_heads, "head")
-    query_positions = _parse_query_positions(args.query_positions, prompt_num_tokens, hf_eval)
+    query_positions = _parse_query_positions(
+        args.query_positions, prompt_num_tokens, hf_eval
+    )
     sketch_types = _parse_sketch_types(args.sketch_type, args.sketch_types)
     sketch_dims = _parse_sketch_dims(args.sketch_dim, args.sketch_dims)
 
@@ -248,10 +261,13 @@ def main() -> int:
                                 block_size=args.block_size,
                                 topk_blocks=args.topk_blocks,
                                 include_ranked_blocks=args.include_ranked_blocks,
+                                extraction_mode=args.extraction_mode,
                             )
                             row = {
                                 "model_name": args.model_name,
-                                "original_prompt_num_tokens": original_prompt_num_tokens,
+                                "original_prompt_num_tokens": (
+                                    original_prompt_num_tokens
+                                ),
                                 "prompt_num_tokens": prompt_num_tokens,
                                 "truncated": bool(truncated),
                                 "max_context_tokens": (
@@ -262,6 +278,7 @@ def main() -> int:
                                 "layer": layer,
                                 "head": head,
                                 "query_positions_spec": args.query_positions,
+                                "extraction_mode_requested": args.extraction_mode,
                                 "sketch_type": sketch_type,
                                 "sketch_dim": sketch_dim,
                                 "block_size": args.block_size,

@@ -80,6 +80,8 @@ def build_stage_commands(
         args.layers,
         "--heads",
         args.heads,
+        "--extraction-mode",
+        args.extraction_mode,
         "--block-size",
         str(args.block_size),
         "--topk-blocks",
@@ -202,6 +204,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--sketch-dims", default="32,64,128")
     parser.add_argument("--layers", default="0,1,2,3")
     parser.add_argument("--heads", default="0,1,2,3")
+    parser.add_argument(
+        "--extraction-mode",
+        choices=["auto", "gpt2_fused_c_attn", "separate_qk_proj"],
+        default="auto",
+    )
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk-blocks", type=int, default=4)
     parser.add_argument("--max-tokens", type=int, default=900)
@@ -233,6 +240,7 @@ def build_initial_summary(
             "sketch_dims": args.sketch_dims,
             "layers": args.layers,
             "heads": args.heads,
+            "extraction_mode": args.extraction_mode,
             "block_size": args.block_size,
             "topk_blocks": args.topk_blocks,
             "max_tokens": args.max_tokens,

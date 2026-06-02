@@ -30,6 +30,7 @@ def _args(**overrides):
         "sketch_dims": "32,64",
         "layers": "0",
         "heads": "0",
+        "extraction_mode": "auto",
         "block_size": 16,
         "topk_blocks": 4,
         "max_tokens": 128,
@@ -112,3 +113,14 @@ def test_build_stage_commands_includes_ranked_sweep(tmp_path: Path) -> None:
     assert str(tmp_path / "run" / "hf_qk_head_sweep_ranked.jsonl") in hf_stage[
         "command"
     ]
+
+
+def test_pipeline_stage_commands_include_extraction_mode(tmp_path: Path) -> None:
+    m = _load_module()
+    stages = m.build_stage_commands(
+        _args(extraction_mode="separate_qk_proj"), tmp_path / "run"
+    )
+    command = stages[0]["command"]
+
+    assert "--extraction-mode" in command
+    assert "separate_qk_proj" in command

@@ -1,0 +1,102 @@
+{
+  "dry_run": true,
+  "ended_at": "2026-06-02T06:11:02.833513Z",
+  "model_name": "gpt2",
+  "output_files": {
+    "active_kv_policy_simulation": "outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl",
+    "benchmark_report": "outputs/kivo_vd/runs/phase3_5_dry_run/kivo_vd_benchmark_report.md",
+    "hf_qk_head_sweep": "outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl",
+    "pipeline_summary": "outputs/kivo_vd/runs/phase3_5_dry_run/pipeline_summary.json"
+  },
+  "parameters": {
+    "block_size": 16,
+    "candidate_budget_blocks": "8,16,32",
+    "extraction_mode": "separate_qk_proj",
+    "heads": "0,1,2,3",
+    "layers": "0,1,2,3",
+    "max_tokens": 900,
+    "prompt_mode": "blue_orchid",
+    "recent_window_blocks": "4,8,16",
+    "run_torch_benchmark": false,
+    "sketch_dims": "32,64,128",
+    "sketch_types": "count_sketch,random_projection",
+    "topk_blocks": 4
+  },
+  "run_name": "phase3_5_dry_run",
+  "stages": [
+    {
+      "command": [
+        "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python",
+        "scripts/kivo_vd/run_hf_qk_head_sweep.py",
+        "--model-name",
+        "gpt2",
+        "--sketch-types",
+        "count_sketch,random_projection",
+        "--sketch-dims",
+        "32,64,128",
+        "--layers",
+        "0,1,2,3",
+        "--heads",
+        "0,1,2,3",
+        "--extraction-mode",
+        "separate_qk_proj",
+        "--block-size",
+        "16",
+        "--topk-blocks",
+        "4",
+        "--max-tokens",
+        "900",
+        "--include-ranked-blocks",
+        "--output",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl",
+        "--prompt",
+        "Important note: the retrieval phrase is BLUE ORCHID.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nQuestion: What is the retrieval phrase hidden near the beginning?"
+      ],
+      "command_string": "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python scripts/kivo_vd/run_hf_qk_head_sweep.py --model-name gpt2 --sketch-types count_sketch,random_projection --sketch-dims 32,64,128 --layers 0,1,2,3 --heads 0,1,2,3 --extraction-mode separate_qk_proj --block-size 16 --topk-blocks 4 --max-tokens 900 --include-ranked-blocks --output outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl --prompt 'Important note: the retrieval phrase is BLUE ORCHID.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nThe notebook records ordinary facts about gardens, railway timetables, library shelves, office supplies, and quiet weather observations.\n\nQuestion: What is the retrieval phrase hidden near the beginning?'",
+      "name": "hf_qk_head_sweep",
+      "output": "outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl",
+      "return_code": null,
+      "status": "planned"
+    },
+    {
+      "command": [
+        "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python",
+        "scripts/kivo_vd/simulate_active_kv_policy.py",
+        "--input",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl",
+        "--output",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl",
+        "--recent-window-blocks",
+        "4,8,16",
+        "--candidate-budget-blocks",
+        "8,16,32",
+        "--topk-blocks",
+        "4"
+      ],
+      "command_string": "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python scripts/kivo_vd/simulate_active_kv_policy.py --input outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl --output outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl --recent-window-blocks 4,8,16 --candidate-budget-blocks 8,16,32 --topk-blocks 4",
+      "name": "active_kv_policy_simulation",
+      "output": "outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl",
+      "return_code": null,
+      "status": "planned"
+    },
+    {
+      "command": [
+        "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python",
+        "scripts/kivo_vd/generate_kivo_benchmark_report.py",
+        "--hf-sweep",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl",
+        "--policy-sim",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl",
+        "--output",
+        "outputs/kivo_vd/runs/phase3_5_dry_run/kivo_vd_benchmark_report.md"
+      ],
+      "command_string": "/Users/ksnaik/StudioProjects/vllm-kivo-vd/.venv/bin/python scripts/kivo_vd/generate_kivo_benchmark_report.py --hf-sweep outputs/kivo_vd/runs/phase3_5_dry_run/hf_qk_head_sweep_ranked.jsonl --policy-sim outputs/kivo_vd/runs/phase3_5_dry_run/active_kv_policy_simulation.jsonl --output outputs/kivo_vd/runs/phase3_5_dry_run/kivo_vd_benchmark_report.md",
+      "name": "benchmark_report",
+      "output": "outputs/kivo_vd/runs/phase3_5_dry_run/kivo_vd_benchmark_report.md",
+      "return_code": null,
+      "status": "planned"
+    }
+  ],
+  "started_at": "2026-06-02T06:11:02.833365Z",
+  "success": true
+}

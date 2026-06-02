@@ -5,9 +5,16 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
+
+
+class QKExtractionResult(NamedTuple):
+    query: np.ndarray
+    keys: np.ndarray
+    query_position: int
+    metadata: dict[str, Any]
 
 
 def _load_sketch_math_module() -> Any:
@@ -21,13 +28,122 @@ def _load_sketch_math_module() -> Any:
     return module
 
 
+def _get_transformer_layers(model: Any) -> Any:
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        return model.transformer.h
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        return model.model.layers
+    if hasattr(model, "model") and hasattr(model.model, "decoder"):
+        decoder = model.model.decoder
+        if hasattr(decoder, "layers"):
+            return decoder.layers
+    raise ValueError(
+        "Unable to find transformer layers. Expected model.transformer.h, "
+        "model.model.layers, or model.model.decoder.layers."
+    )
+
+
+def _get_layer_attention(layer_module: Any) -> Any:
+    for name in ("attn", "self_attn", "attention"):
+        if hasattr(layer_module, name):
+            return getattr(layer_module, name)
+    raise ValueError(
+        "Unable to find attention module on layer. Expected one of: "
+        "attn, self_attn, attention."
+    )
+
+
+def _inspected_attention_attrs(attn: Any) -> list[str]:
+    return sorted(
+        name
+        for name in dir(attn)
+        if not name.startswith("_")
+        and any(token in name for token in ("attn", "proj", "head"))
+    )
+
+
+def _detect_extraction_mode(attn: Any, extraction_mode: str) -> str:
+    if extraction_mode != "auto":
+        return extraction_mode
+    if hasattr(attn, "c_attn"):
+        return "gpt2_fused_c_attn"
+    if hasattr(attn, "q_proj") and hasattr(attn, "k_proj"):
+        return "separate_qk_proj"
+    raise ValueError(
+        "Unsupported attention module for Q/K extraction. Inspected attrs: "
+        f"{_inspected_attention_attrs(attn)}"
+    )
+
+
+def _map_query_head_to_kv_head(
+    query_head: int,
+    num_query_heads: int,
+    num_key_value_heads: int,
+) -> int:
+    if num_query_heads <= 0 or num_key_value_heads <= 0:
+        raise ValueError("Head counts must be positive.")
+    if query_head < 0 or query_head >= num_query_heads:
+        raise ValueError(
+            f"Head {query_head} out of range [0, {num_query_heads - 1}]"
+        )
+    if num_query_heads == num_key_value_heads:
+        return query_head
+    if num_query_heads % num_key_value_heads != 0:
+        raise ValueError(
+            "Cannot map query head to KV head because num_query_heads is not "
+            "divisible by num_key_value_heads."
+        )
+    group_size = num_query_heads // num_key_value_heads
+    return query_head // group_size
+
+
+def _validate_query_position(
+    query_position: int,
+    seq_len: int,
+) -> None:
+    if seq_len < 2:
+        raise ValueError("Need at least 2 tokens to evaluate query vs prior keys.")
+    if query_position < 0 or query_position >= seq_len:
+        raise ValueError(
+            f"query_position={query_position} out of range [0, {seq_len - 1}]"
+        )
+    if query_position == 0:
+        raise ValueError("query_position must be >= 1 to have at least one key.")
+
+
+def _get_num_query_heads(model: Any, attn: Any) -> int:
+    for obj, name in (
+        (attn, "num_heads"),
+        (attn, "num_attention_heads"),
+        (getattr(model, "config", None), "num_attention_heads"),
+        (getattr(model, "config", None), "n_head"),
+    ):
+        value = getattr(obj, name, None)
+        if isinstance(value, int) and value > 0:
+            return value
+    raise ValueError("Unable to determine number of query heads.")
+
+
+def _get_num_key_value_heads(model: Any, attn: Any, num_query_heads: int) -> int:
+    for obj, name in (
+        (attn, "num_key_value_heads"),
+        (getattr(model, "config", None), "num_key_value_heads"),
+        (getattr(model, "config", None), "num_key_value_heads_per_layer"),
+    ):
+        value = getattr(obj, name, None)
+        if isinstance(value, int) and value > 0:
+            return value
+    return num_query_heads
+
+
 def _extract_gpt2_head_qk(
     model: Any,
     input_ids: Any,
     layer: int,
     head: int,
     query_position: int,
-) -> tuple[np.ndarray, np.ndarray, int]:
+    extraction_mode: str,
+) -> QKExtractionResult:
     with __import__("torch").no_grad():
         outputs = model(input_ids=input_ids, output_hidden_states=True, use_cache=False)
 
@@ -35,18 +151,25 @@ def _extract_gpt2_head_qk(
     if hidden_states is None:
         raise RuntimeError("Model did not return hidden states.")
 
-    if layer < 0 or layer >= len(model.transformer.h):
-        raise ValueError(f"Layer {layer} out of range [0, {len(model.transformer.h) - 1}]")
+    layers = _get_transformer_layers(model)
+    if layer < 0 or layer >= len(layers):
+        raise ValueError(f"Layer {layer} out of range [0, {len(layers) - 1}]")
 
     h_in = hidden_states[layer]  # input to selected transformer block
-    attn = model.transformer.h[layer].attn
+    attn = _get_layer_attention(layers[layer])
+    resolved_mode = _detect_extraction_mode(attn, extraction_mode)
+    if resolved_mode != "gpt2_fused_c_attn":
+        raise ValueError(
+            "Requested GPT-2 fused extraction but resolved mode was "
+            f"{resolved_mode!r}."
+        )
     qkv = attn.c_attn(h_in)  # [1, seq, 3*hidden]
 
     q, k, _v = qkv.chunk(3, dim=-1)
     q = q[0]
     k = k[0]
 
-    num_heads = getattr(attn, "num_heads", model.config.n_head)
+    num_heads = _get_num_query_heads(model, attn)
     head_dim = q.shape[-1] // num_heads
     if head < 0 or head >= num_heads:
         raise ValueError(f"Head {head} out of range [0, {num_heads - 1}]")
@@ -58,19 +181,115 @@ def _extract_gpt2_head_qk(
     k_head = k[:, head, :]
 
     seq_len = q_head.shape[0]
-    if seq_len < 2:
-        raise ValueError("Need at least 2 tokens to evaluate query vs prior keys.")
-    if query_position < 0 or query_position >= seq_len:
-        raise ValueError(
-            f"query_position={query_position} out of range [0, {seq_len - 1}]"
-        )
-    if query_position == 0:
-        raise ValueError("query_position must be >= 1 to have at least one key.")
+    _validate_query_position(query_position, seq_len)
 
     # Causal: use keys up to (but excluding) query position.
     query = q_head[query_position].detach().cpu().numpy().astype(np.float64)
     keys = k_head[:query_position].detach().cpu().numpy().astype(np.float64)
-    return query, keys, query_position
+    return QKExtractionResult(
+        query=query,
+        keys=keys,
+        query_position=query_position,
+        metadata={
+            "extraction_mode": resolved_mode,
+            "qk_space": "gpt2_projection",
+            "num_query_heads": num_heads,
+            "num_key_value_heads": num_heads,
+            "selected_query_head": head,
+            "selected_kv_head": head,
+        },
+    )
+
+
+def _extract_separate_qk_proj(
+    model: Any,
+    input_ids: Any,
+    layer: int,
+    head: int,
+    query_position: int,
+    extraction_mode: str,
+) -> QKExtractionResult:
+    with __import__("torch").no_grad():
+        outputs = model(input_ids=input_ids, output_hidden_states=True, use_cache=False)
+
+    hidden_states = outputs.hidden_states
+    if hidden_states is None:
+        raise RuntimeError("Model did not return hidden states.")
+
+    layers = _get_transformer_layers(model)
+    if layer < 0 or layer >= len(layers):
+        raise ValueError(f"Layer {layer} out of range [0, {len(layers) - 1}]")
+
+    h_in = hidden_states[layer]
+    attn = _get_layer_attention(layers[layer])
+    resolved_mode = _detect_extraction_mode(attn, extraction_mode)
+    if resolved_mode != "separate_qk_proj":
+        raise ValueError(
+            "Requested separate q/k extraction but resolved mode was "
+            f"{resolved_mode!r}."
+        )
+
+    q = attn.q_proj(h_in)[0]
+    k = attn.k_proj(h_in)[0]
+    num_query_heads = _get_num_query_heads(model, attn)
+    num_kv_heads = _get_num_key_value_heads(model, attn, num_query_heads)
+    selected_kv_head = _map_query_head_to_kv_head(
+        head, num_query_heads, num_kv_heads
+    )
+
+    q_head_dim = q.shape[-1] // num_query_heads
+    k_head_dim = k.shape[-1] // num_kv_heads
+    if q_head_dim != k_head_dim:
+        raise ValueError(
+            f"Q/K head dim mismatch: q={q_head_dim}, k={k_head_dim}."
+        )
+
+    q = q.view(q.shape[0], num_query_heads, q_head_dim)
+    k = k.view(k.shape[0], num_kv_heads, k_head_dim)
+    q_head = q[:, head, :]
+    k_head = k[:, selected_kv_head, :]
+    seq_len = q_head.shape[0]
+    _validate_query_position(query_position, seq_len)
+
+    query = q_head[query_position].detach().cpu().numpy().astype(np.float64)
+    keys = k_head[:query_position].detach().cpu().numpy().astype(np.float64)
+    return QKExtractionResult(
+        query=query,
+        keys=keys,
+        query_position=query_position,
+        metadata={
+            "extraction_mode": resolved_mode,
+            "qk_space": "pre_rope_projection",
+            "num_query_heads": num_query_heads,
+            "num_key_value_heads": num_kv_heads,
+            "selected_query_head": head,
+            "selected_kv_head": selected_kv_head,
+        },
+    )
+
+
+def _extract_head_qk(
+    model: Any,
+    input_ids: Any,
+    layer: int,
+    head: int,
+    query_position: int,
+    extraction_mode: str,
+) -> QKExtractionResult:
+    layers = _get_transformer_layers(model)
+    if layer < 0 or layer >= len(layers):
+        raise ValueError(f"Layer {layer} out of range [0, {len(layers) - 1}]")
+    attn = _get_layer_attention(layers[layer])
+    resolved_mode = _detect_extraction_mode(attn, extraction_mode)
+    if resolved_mode == "gpt2_fused_c_attn":
+        return _extract_gpt2_head_qk(
+            model, input_ids, layer, head, query_position, resolved_mode
+        )
+    if resolved_mode == "separate_qk_proj":
+        return _extract_separate_qk_proj(
+            model, input_ids, layer, head, query_position, resolved_mode
+        )
+    raise ValueError(f"Unsupported extraction mode: {resolved_mode}")
 
 
 def _default_prompt() -> str:
@@ -106,6 +325,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--query-position", default="last")
     parser.add_argument("--sweep-query-positions", action="store_true")
+    parser.add_argument(
+        "--extraction-mode",
+        choices=["auto", "gpt2_fused_c_attn", "separate_qk_proj"],
+        default="auto",
+    )
     parser.add_argument(
         "--include-ranked-blocks",
         action="store_true",
@@ -190,14 +414,19 @@ def _evaluate_at_query_position(
     block_size: int,
     topk_blocks: int,
     include_ranked_blocks: bool = False,
+    extraction_mode: str = "auto",
 ) -> dict[str, Any]:
-    query, keys, resolved_position = _extract_gpt2_head_qk(
+    extraction = _extract_head_qk(
         model=model,
         input_ids=input_ids,
         layer=layer,
         head=head,
         query_position=query_position,
+        extraction_mode=extraction_mode,
     )
+    query = extraction.query
+    keys = extraction.keys
+    resolved_position = extraction.query_position
 
     exact_scores = math.compute_exact_scores(query, keys)
     approx_scores = math.compute_sketched_scores(
@@ -247,6 +476,7 @@ def _evaluate_at_query_position(
         "block_score_correlation": float(block_score_corr),
         "exact_top_block_ids": exact_top_blocks.tolist(),
         "approx_top_block_ids": approx_top_blocks.tolist(),
+        **extraction.metadata,
     }
     if include_ranked_blocks:
         out["approx_ranked_block_ids"] = approx_block_ranking.tolist()
@@ -280,7 +510,9 @@ def main() -> int:
     if model_context is not None and args.max_tokens is not None:
         effective_max_tokens = min(model_context, args.max_tokens)
     else:
-        effective_max_tokens = model_context if model_context is not None else args.max_tokens
+        effective_max_tokens = (
+            model_context if model_context is not None else args.max_tokens
+        )
 
     input_ids, truncated = _truncate_input_ids(
         input_ids=input_ids,
@@ -292,7 +524,9 @@ def main() -> int:
     if args.sweep_query_positions:
         query_positions = _sweep_query_positions(prompt_num_tokens)
     else:
-        query_positions = [_resolve_query_position(args.query_position, prompt_num_tokens)]
+        query_positions = [
+            _resolve_query_position(args.query_position, prompt_num_tokens)
+        ]
 
     for query_position in query_positions:
         metrics = _evaluate_at_query_position(
@@ -308,6 +542,7 @@ def main() -> int:
             block_size=args.block_size,
             topk_blocks=args.topk_blocks,
             include_ranked_blocks=args.include_ranked_blocks,
+            extraction_mode=args.extraction_mode,
         )
         payload = {
             "model_name": args.model_name,
