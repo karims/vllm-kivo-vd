@@ -47,6 +47,11 @@ Recommended SRHT comparison command:
   --run-name gpt2_srht_comparison
 ```
 
+For GPT-2-style heads with `head_dim=64`, SRHT can run at sketch dimensions 32
+and 64. The head sweep skips invalid SRHT dimensions such as 128 because SRHT
+subsamples unique Hadamard coordinates from the padded head dimension.
+CountSketch and Random Projection still run all requested dimensions.
+
 Dry-run the pipeline first:
 
 ```bash

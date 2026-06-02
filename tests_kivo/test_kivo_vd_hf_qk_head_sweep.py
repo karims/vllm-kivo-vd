@@ -68,3 +68,9 @@ def test_parse_sketch_dims() -> None:
     m = _load_module()
     assert m._parse_sketch_dims(64, None) == [64]
     assert m._parse_sketch_dims(64, "16,32,64,128") == [16, 32, 64, 128]
+
+
+def test_srht_sketch_dim_validity_for_head_dim() -> None:
+    m = _load_module()
+    assert m._srht_sketch_dim_is_valid(head_dim=64, sketch_dim=64) is True
+    assert m._srht_sketch_dim_is_valid(head_dim=64, sketch_dim=128) is False

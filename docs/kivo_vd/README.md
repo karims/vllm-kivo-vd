@@ -34,6 +34,7 @@ Recommended reading order:
 - [Phase 2.9: Benchmark Report](phase2_9_benchmark_report.md)
 - [Phase 4A: Advanced Sketch Variants](phase4a_advanced_sketch_variants.md)
 - [Phase 4A.1: SRHT Comparison](phase4a_1_srht_comparison.md)
+- [Phase 4A.2: SRHT Empirical Summary](phase4a_2_srht_empirical_summary.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

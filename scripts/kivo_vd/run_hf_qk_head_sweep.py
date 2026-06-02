@@ -92,6 +92,38 @@ def _parse_sketch_dims(sketch_dim: int, sketch_dims: str | None) -> list[int]:
     return out
 
 
+def _next_power_of_two(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def _resolve_query_head_dim(model: Any, attn: Any, num_query_heads: int) -> int:
+    for obj, name in (
+        (getattr(model, "config", None), "hidden_size"),
+        (getattr(model, "config", None), "n_embd"),
+    ):
+        value = getattr(obj, name, None)
+        if isinstance(value, int) and value > 0 and value % num_query_heads == 0:
+            return value // num_query_heads
+
+    q_proj = getattr(attn, "q_proj", None)
+    out_features = getattr(q_proj, "out_features", None)
+    if isinstance(out_features, int) and out_features > 0:
+        return out_features // num_query_heads
+
+    c_attn = getattr(attn, "c_attn", None)
+    nf = getattr(c_attn, "nf", None)
+    if isinstance(nf, int) and nf > 0:
+        return nf // num_query_heads
+
+    raise ValueError("Unable to determine per-head Q/K dimension.")
+
+
+def _srht_sketch_dim_is_valid(head_dim: int, sketch_dim: int) -> bool:
+    return sketch_dim <= _next_power_of_two(head_dim)
+
+
 def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Optional HF Q/K layer/head sweep.")
     parser.add_argument("--model-name", default="distilgpt2")
@@ -230,6 +262,7 @@ def main() -> int:
     first_layer_idx = 0 if args.layers == "all" else int(args.layers.split(",")[0])
     first_attn = hf_eval._get_layer_attention(layers_modules[first_layer_idx])
     num_heads = hf_eval._get_num_query_heads(model, first_attn)
+    head_dim = _resolve_query_head_dim(model, first_attn, num_heads)
     layers = _parse_index_list(args.layers, num_layers, "layer")
     heads = _parse_index_list(args.heads, num_heads, "head")
     query_positions = _parse_query_positions(
@@ -245,6 +278,10 @@ def main() -> int:
     with output_path.open("w", encoding="utf-8") as f:
         for sketch_type in sketch_types:
             for sketch_dim in sketch_dims:
+                if sketch_type == "srht" and not _srht_sketch_dim_is_valid(
+                    head_dim, sketch_dim
+                ):
+                    continue
                 for layer in layers:
                     for head in heads:
                         for query_position in query_positions:
