@@ -36,6 +36,7 @@ Recommended reading order:
 - [Phase 4A.1: SRHT Comparison](phase4a_1_srht_comparison.md)
 - [Phase 4A.2: SRHT Empirical Summary](phase4a_2_srht_empirical_summary.md)
 - [Phase 4A.3: Fair Sketch Comparison](phase4a_3_fair_sketch_comparison.md)
+- [Phase 4A.4: Fair SRHT Results](phase4a_4_fair_srht_results.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

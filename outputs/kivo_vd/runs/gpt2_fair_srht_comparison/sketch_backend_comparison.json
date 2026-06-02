@@ -1,0 +1,113 @@
+{
+  "input": "outputs/kivo_vd/runs/gpt2_fair_srht_comparison/hf_qk_head_sweep_ranked.jsonl",
+  "summary": [
+    {
+      "avg_block_recall_at_2x_budget": 0.7265625,
+      "avg_block_recall_at_4x_budget": 0.8828125,
+      "avg_block_score_correlation": 0.8096907931128219,
+      "avg_block_topk_recall": 0.578125,
+      "count": 64,
+      "effective_sketch_dim": 16,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.25,
+      "sketch_dim": 16,
+      "sketch_type": "count_sketch"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.86328125,
+      "avg_block_recall_at_4x_budget": 0.953125,
+      "avg_block_score_correlation": 0.9040475511237209,
+      "avg_block_topk_recall": 0.69140625,
+      "count": 64,
+      "effective_sketch_dim": 32,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.5,
+      "sketch_dim": 32,
+      "sketch_type": "count_sketch"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.91015625,
+      "avg_block_recall_at_4x_budget": 0.9765625,
+      "avg_block_score_correlation": 0.9231874373179557,
+      "avg_block_topk_recall": 0.765625,
+      "count": 64,
+      "effective_sketch_dim": 64,
+      "is_full_dimensional_sketch": true,
+      "sketch_compression_ratio": 1.0,
+      "sketch_dim": 64,
+      "sketch_type": "count_sketch"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.765625,
+      "avg_block_recall_at_4x_budget": 0.9140625,
+      "avg_block_score_correlation": 0.792525773368643,
+      "avg_block_topk_recall": 0.59765625,
+      "count": 64,
+      "effective_sketch_dim": 16,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.25,
+      "sketch_dim": 16,
+      "sketch_type": "random_projection"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.86328125,
+      "avg_block_recall_at_4x_budget": 0.953125,
+      "avg_block_score_correlation": 0.9051681939204982,
+      "avg_block_topk_recall": 0.73046875,
+      "count": 64,
+      "effective_sketch_dim": 32,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.5,
+      "sketch_dim": 32,
+      "sketch_type": "random_projection"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.90234375,
+      "avg_block_recall_at_4x_budget": 0.97265625,
+      "avg_block_score_correlation": 0.9357336563109084,
+      "avg_block_topk_recall": 0.73046875,
+      "count": 64,
+      "effective_sketch_dim": 64,
+      "is_full_dimensional_sketch": true,
+      "sketch_compression_ratio": 1.0,
+      "sketch_dim": 64,
+      "sketch_type": "random_projection"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.7578125,
+      "avg_block_recall_at_4x_budget": 0.8828125,
+      "avg_block_score_correlation": 0.7697358192108352,
+      "avg_block_topk_recall": 0.59765625,
+      "count": 64,
+      "effective_sketch_dim": 16,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.25,
+      "sketch_dim": 16,
+      "sketch_type": "srht"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 0.93359375,
+      "avg_block_recall_at_4x_budget": 0.984375,
+      "avg_block_score_correlation": 0.9325098350191335,
+      "avg_block_topk_recall": 0.8203125,
+      "count": 64,
+      "effective_sketch_dim": 32,
+      "is_full_dimensional_sketch": false,
+      "sketch_compression_ratio": 0.5,
+      "sketch_dim": 32,
+      "sketch_type": "srht"
+    },
+    {
+      "avg_block_recall_at_2x_budget": 1.0,
+      "avg_block_recall_at_4x_budget": 1.0,
+      "avg_block_score_correlation": 1.0,
+      "avg_block_topk_recall": 1.0,
+      "count": 64,
+      "effective_sketch_dim": 64,
+      "is_full_dimensional_sketch": true,
+      "sketch_compression_ratio": 1.0,
+      "sketch_dim": 64,
+      "sketch_type": "srht"
+    }
+  ]
+}
