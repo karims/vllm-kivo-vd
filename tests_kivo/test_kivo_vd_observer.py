@@ -76,6 +76,7 @@ def test_kivo_vd_observer_reset_clears_state() -> None:
         "num_before_allocate_calls": 0,
         "num_after_allocate_calls": 0,
         "num_free_request_calls": 0,
+        "num_dry_run_select_calls": 0,
         "num_events": 0,
     }
     assert observer.get_recent_events() == []
@@ -126,3 +127,10 @@ def test_observer_without_sketch_index_still_works() -> None:
     counters = observer.get_counters()
     assert counters["num_after_allocate_calls"] == 1
     assert counters["num_free_request_calls"] == 1
+
+
+def test_observer_dry_run_without_sketch_index_returns_none() -> None:
+    observer = KivoVDObserver(enabled=True, sketch_index=None)
+    decision = observer.dry_run_select_candidates("req-empty", source="test")
+    assert decision is None
+    assert observer.get_counters()["num_dry_run_select_calls"] == 1

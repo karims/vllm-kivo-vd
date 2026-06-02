@@ -115,9 +115,34 @@ def test_observer_dry_run_select_candidates() -> None:
         sketch_index=index,
         candidate_selector=selector,
     )
-    decision = observer.dry_run_select_candidates("r3")
+    decision = observer.dry_run_select_candidates("r3", source="unit")
     assert decision is not None
     assert len(decision.selected_block_ids) == 1
+    assert observer.get_counters()["num_dry_run_select_calls"] == 1
 
     events = observer.get_recent_events()
-    assert events[-1]["event_type"] == "dry_run_select_candidates"
+    assert events[-1]["event_type"] == "dry_run_routing_decision"
+    assert events[-1]["request_id"] == "r3"
+    assert events[-1]["selected_block_count"] == 1
+    assert events[-1]["recent_block_count"] == 1
+    assert events[-1]["skipped_block_count"] == 1
+    assert events[-1]["candidate_budget_blocks"] == 1
+    assert events[-1]["source"] == "unit"
+
+
+def test_observer_dry_run_empty_request_records_event() -> None:
+    observer = KivoVDObserver(
+        enabled=True,
+        sketch_index=KivoVDSketchIndex(),
+        candidate_selector=KivoVDCandidateSelector(),
+    )
+    decision = observer.dry_run_select_candidates("missing", source="empty")
+    assert decision is not None
+    assert decision.selected_block_ids == []
+
+    events = observer.get_recent_events()
+    assert events[-1]["event_type"] == "dry_run_routing_decision"
+    assert events[-1]["selected_block_count"] == 0
+    assert events[-1]["recent_block_count"] == 0
+    assert events[-1]["skipped_block_count"] == 0
+    assert events[-1]["source"] == "empty"

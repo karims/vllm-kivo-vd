@@ -35,6 +35,7 @@ class KivoVDObserver:
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
+        self.num_dry_run_select_calls = 0
         self._event_counter = 0
         self._events: deque[dict[str, Any]] = deque(maxlen=max_events)
 
@@ -144,7 +145,9 @@ class KivoVDObserver:
         self,
         request_id: str,
         query_metadata_or_sketch: Any | None = None,
+        source: str | None = None,
     ) -> KivoVDRoutingDecision | None:
+        self.num_dry_run_select_calls += 1
         if self.sketch_index is None or self.candidate_selector is None:
             return None
         decision = self.candidate_selector.select_candidates(
@@ -152,12 +155,20 @@ class KivoVDObserver:
             query_metadata_or_sketch=query_metadata_or_sketch,
             sketch_index=self.sketch_index,
         )
+        selector_config = self.candidate_selector.config
         self._record_event(
-            "dry_run_select_candidates",
+            "dry_run_routing_decision",
             request_id=request_id,
-            num_selected_blocks=len(decision.selected_block_ids),
-            num_recent_blocks=len(decision.recent_block_ids),
-            selector_reason=decision.reason,
+            selected_block_count=len(decision.selected_block_ids),
+            recent_block_count=len(decision.recent_block_ids),
+            skipped_block_count=len(decision.skipped_block_ids),
+            candidate_budget_blocks=selector_config.candidate_budget_blocks,
+            recent_window_blocks=selector_config.recent_window_blocks,
+            selected_block_preview=decision.selected_block_ids[:8],
+            recent_block_preview=decision.recent_block_ids[:8],
+            skipped_block_preview=decision.skipped_block_ids[:8],
+            source=source,
+            reason=decision.reason,
         )
         return decision
 
@@ -166,6 +177,7 @@ class KivoVDObserver:
             "num_before_allocate_calls": self.num_before_allocate_calls,
             "num_after_allocate_calls": self.num_after_allocate_calls,
             "num_free_request_calls": self.num_free_request_calls,
+            "num_dry_run_select_calls": self.num_dry_run_select_calls,
             "num_events": len(self._events),
         }
 
@@ -178,6 +190,7 @@ class KivoVDObserver:
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
+        self.num_dry_run_select_calls = 0
         self._event_counter = 0
         self._events.clear()
 

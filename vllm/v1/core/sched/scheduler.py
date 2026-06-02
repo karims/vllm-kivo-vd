@@ -473,6 +473,12 @@ class Scheduler(SchedulerInterface):
                         )
 
                     if new_blocks is not None:
+                        if self.kivo_vd_observer is not None:
+                            self.kivo_vd_observer.dry_run_select_candidates(
+                                request_id=request.request_id,
+                                query_metadata_or_sketch={"source": "running"},
+                                source="running",
+                            )
                         # The request can be scheduled.
                         break
 
@@ -782,6 +788,13 @@ class Scheduler(SchedulerInterface):
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
                     break
+
+                if self.kivo_vd_observer is not None:
+                    self.kivo_vd_observer.dry_run_select_candidates(
+                        request_id=request.request_id,
+                        query_metadata_or_sketch={"source": "waiting"},
+                        source="waiting",
+                    )
 
                 # KVTransfer: the connector uses this info to determine
                 # if a load is needed. Note that
