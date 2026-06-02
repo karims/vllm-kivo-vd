@@ -155,7 +155,7 @@ outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
 Inspect event types with:
 
 ```bash
-python - <<'PY'
+.venv/bin/python - <<'PY'
 import json
 from pathlib import Path
 
