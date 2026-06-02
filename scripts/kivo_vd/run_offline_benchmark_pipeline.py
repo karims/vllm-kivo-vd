@@ -200,7 +200,15 @@ def _parse_args() -> argparse.Namespace:
         choices=["blue_orchid", "default"],
         default="blue_orchid",
     )
-    parser.add_argument("--sketch-types", default="count_sketch,random_projection")
+    parser.add_argument(
+        "--sketch-types",
+        default="count_sketch,random_projection",
+        help=(
+            "Comma-separated sketch types. Defaults to the conservative "
+            "baseline pair. Include experimental SRHT with "
+            "`count_sketch,random_projection,srht`."
+        ),
+    )
     parser.add_argument("--sketch-dims", default="32,64,128")
     parser.add_argument("--layers", default="0,1,2,3")
     parser.add_argument("--heads", default="0,1,2,3")

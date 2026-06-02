@@ -26,6 +26,8 @@ The policy simulator needs full approximate block rankings:
 Experimental SRHT rows can be added by including `srht` in `--sketch-types`.
 Treat SRHT report entries as exploratory until they pass the same offline,
 runtime dry-run, quality, and memory validations as the baseline backends.
+For the full SRHT comparison flow, see
+[Phase 4A.1: SRHT Comparison](phase4a_1_srht_comparison.md).
 
 ## Run Active KV Policy Simulation
 

@@ -125,3 +125,39 @@ def test_pipeline_stage_commands_include_extraction_mode(tmp_path: Path) -> None
 
     assert "--extraction-mode" in command
     assert "separate_qk_proj" in command
+
+
+def test_pipeline_dry_run_can_plan_srht_comparison(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "kivo_vd" / "run_offline_benchmark_pipeline.py"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--run-name",
+            "srht-dry-run",
+            "--sketch-types",
+            "count_sketch,random_projection,srht",
+            "--layers",
+            "0",
+            "--heads",
+            "0",
+            "--sketch-dims",
+            "32",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    hf_command = payload["stages"][0]["command"]
+    assert payload["parameters"]["sketch_types"] == (
+        "count_sketch,random_projection,srht"
+    )
+    assert "--sketch-types" in hf_command
+    assert "count_sketch,random_projection,srht" in hf_command

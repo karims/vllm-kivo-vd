@@ -38,6 +38,19 @@ The dry run creates a timestamped run directory and writes
   --max-tokens 900
 ```
 
+To include experimental SRHT in the comparison, keep the default baseline
+backends and append `srht`:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_offline_benchmark_pipeline.py \
+  --model-name gpt2 \
+  --prompt-mode blue_orchid \
+  --sketch-types count_sketch,random_projection,srht \
+  --run-name gpt2_srht_comparison
+```
+
+SRHT remains experimental and is not the default.
+
 Add the optional torch benchmark:
 
 ```bash

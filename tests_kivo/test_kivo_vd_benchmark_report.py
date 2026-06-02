@@ -49,6 +49,19 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "block_recall_at_4x_budget": 0.98,
                 "block_score_correlation": 0.88,
             },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "sketch_type": "srht",
+                "sketch_dim": 64,
+                "block_topk_recall": 0.75,
+                "block_recall_at_2x_budget": 0.93,
+                "block_recall_at_4x_budget": 0.99,
+                "block_score_correlation": 0.89,
+            },
         ],
     )
     _write_jsonl(
@@ -78,6 +91,18 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "estimated_kv_reduction": 0.66,
                 "exact_top_recall_in_active": 0.96,
             },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "sketch_type": "srht",
+                "sketch_dim": 64,
+                "recent_window_blocks": 8,
+                "candidate_budget_blocks": 16,
+                "active_block_ratio": 0.62,
+                "estimated_kv_reduction": 0.38,
+                "exact_top_recall_in_active": 0.98,
+            },
         ],
     )
 
@@ -98,7 +123,7 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     )
 
     summary = json.loads(proc.stdout)
-    assert summary["hf_rows"] == 2
+    assert summary["hf_rows"] == 3
     assert output_path.exists()
     report = output_path.read_text(encoding="utf-8")
     assert "Kivo-VD Offline Benchmark Report" in report
@@ -109,11 +134,13 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     assert "pre_rope_projection" in report
     assert "Runtime post-RoPE attention behavior may differ" in report
     assert "Active KV Policy Simulation Summary" in report
+    assert "SRHT should be compared against CountSketch" in report
     assert "Conservative Recommended Policy" in report
     assert "Aggressive Policy Notes" in report
     assert "What Is Proven vs Not Proven" in report
     assert "| count_sketch | 64 | 8 | 16 |" in report
     assert "| count_sketch | 64 | 4 | 8 |" in report
+    assert "| srht | 64 | 8 | 16 |" in report
 
 
 def test_benchmark_report_generator_missing_input_is_clear(

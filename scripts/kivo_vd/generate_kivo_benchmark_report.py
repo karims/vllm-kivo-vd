@@ -165,6 +165,10 @@ def _has_pre_rope_rows(hf_rows: list[dict[str, Any]]) -> bool:
     return any(row.get("qk_space") == "pre_rope_projection" for row in hf_rows)
 
 
+def _has_srht_rows(rows: list[dict[str, Any]]) -> bool:
+    return any(row.get("sketch_type") == "srht" for row in rows)
+
+
 def _selected_policy_rows(policy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     selected_types = {"count_sketch", "random_projection", "srht"}
     selected_dims = {64, 128}
@@ -325,6 +329,17 @@ def generate_report(
         "",
         _retrieval_summary_table(hf_rows),
         "",
+        *(
+            [
+                "Note: `srht` rows are experimental. SRHT should be compared "
+                "against CountSketch and Random Projection before being used "
+                "as a default, and these offline rows do not imply runtime "
+                "memory reduction.",
+                "",
+            ]
+            if _has_srht_rows(hf_rows) or _has_srht_rows(policy_rows)
+            else []
+        ),
         "## Active KV Policy Simulation Summary",
         "",
         _policy_summary_table(policy_rows),

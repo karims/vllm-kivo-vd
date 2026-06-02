@@ -191,6 +191,9 @@ available:
   --include-ranked-blocks
 ```
 
+For a full CountSketch vs Random Projection vs SRHT comparison pipeline, see
+[Phase 4A.1: SRHT Comparison](phase4a_1_srht_comparison.md).
+
 ## Interpretation
 
 SRHT should be judged against the same conservative metrics as the baseline
