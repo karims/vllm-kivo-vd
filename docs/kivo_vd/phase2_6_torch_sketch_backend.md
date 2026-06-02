@@ -13,8 +13,10 @@ measuring CountSketch and Random Projection feasibility on torch tensors.
 - `scripts/kivo_vd/benchmark_torch_sketch_backend.py`
   - synthetic key/query tensors
   - key sketch timing
+  - block aggregation timing
   - query sketch timing
   - block scoring timing
+  - ranking/top-k timing
   - full-K vs sketched-K memory estimate
 
 ## Offline only
@@ -62,11 +64,14 @@ outputs/kivo_vd/torch_sketch_benchmark.jsonl
 Each JSONL row includes:
 
 - `key_sketch_build_time_ms`
-- `query_sketch_time_ms`
-- `block_scoring_time_ms`
+- `key_sketch_build_ms`
+- `block_aggregation_ms`
+- `query_sketch_ms`
+- `block_scoring_ms`
+- `ranking_ms`
 - `total_time_ms`
 - `full_k_memory_bytes`
-- `sketch_k_memory_bytes`
+- `sketch_memory_bytes`
 - `sketch_memory_ratio`
 
 ## How this informs runtime integration

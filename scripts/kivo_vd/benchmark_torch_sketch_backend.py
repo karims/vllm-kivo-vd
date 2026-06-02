@@ -63,6 +63,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-tokens", type=int, default=4096)
     parser.add_argument("--head-dim", type=int, default=128)
     parser.add_argument("--block-size", type=int, default=16)
+    parser.add_argument(
+        "--block-score-mode", choices=["max", "mean"], default="max"
+    )
+    parser.add_argument("--topk-blocks", type=int, default=16)
     parser.add_argument("--num-queries", type=int, default=32)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--dtype", default="float32")
@@ -89,6 +93,7 @@ def _run_one(
         seed=0,
         device=device,
         dtype=dtype,
+        block_score_mode=args.block_score_mode,
     )
     generator = torch.Generator(device="cpu")
     generator.manual_seed(123)
@@ -106,44 +111,61 @@ def _run_one(
     ).to(device)
 
     key_times: list[float] = []
+    block_aggregation_times: list[float] = []
     query_times: list[float] = []
     score_times: list[float] = []
+    ranking_times: list[float] = []
     total_times: list[float] = []
+    key_sketches = None
     block_sketches = None
 
-    def key_step():
-        key_sketches = backend.sketch_keys(keys)
+    def key_sketch_step():
+        return backend.sketch_keys(keys)
+
+    def block_aggregation_step(ks):
         return backend.block_sketches_from_key_sketches(
-            key_sketches, args.block_size
+            ks, args.block_size
         )
 
     def query_step():
         return torch.stack([backend.sketch_query(query) for query in queries])
 
     def score_step(qs, bs):
-        scores = torch.stack([backend.score_blocks(q, bs) for q in qs])
-        ranks = torch.stack([backend.rank_blocks(row) for row in scores])
-        return scores, ranks
+        return torch.stack([backend.score_blocks(q, bs) for q in qs])
+
+    def ranking_step(scores):
+        k = min(args.topk_blocks, scores.shape[1])
+        return torch.topk(scores, k=k, dim=1).indices
 
     for _ in range(args.warmup):
-        block_sketches = key_step()
+        key_sketches = key_sketch_step()
+        block_sketches = block_aggregation_step(key_sketches)
         query_sketches = query_step()
-        score_step(query_sketches, block_sketches)
+        scores = score_step(query_sketches, block_sketches)
+        ranking_step(scores)
     _sync(device)
 
     for _ in range(args.iters):
         total_start = time.perf_counter()
-        key_ms, block_sketches = _time_ms(key_step, device)
+        key_ms, key_sketches = _time_ms(key_sketch_step, device)
+        block_agg_ms, block_sketches = _time_ms(
+            lambda: block_aggregation_step(key_sketches), device
+        )
         query_ms, query_sketches = _time_ms(query_step, device)
-        score_ms, _ = _time_ms(
+        score_ms, scores = _time_ms(
             lambda: score_step(query_sketches, block_sketches), device
+        )
+        ranking_ms, _ = _time_ms(
+            lambda: ranking_step(scores), device
         )
         _sync(device)
         total_ms = (time.perf_counter() - total_start) * 1000.0
 
         key_times.append(key_ms)
+        block_aggregation_times.append(block_agg_ms)
         query_times.append(query_ms)
         score_times.append(score_ms)
+        ranking_times.append(ranking_ms)
         total_times.append(total_ms)
 
     assert block_sketches is not None
@@ -159,16 +181,22 @@ def _run_one(
         "block_size": args.block_size,
         "num_blocks": int(block_sketches.shape[0]),
         "num_queries": args.num_queries,
+        "topk_blocks": args.topk_blocks,
+        "block_score_mode": args.block_score_mode,
         "device": str(device),
         "dtype": str(dtype).replace("torch.", ""),
         "warmup": args.warmup,
         "iters": args.iters,
-        "key_sketch_build_time_ms": sum(key_times) / len(key_times),
-        "query_sketch_time_ms": sum(query_times) / len(query_times),
-        "block_scoring_time_ms": sum(score_times) / len(score_times),
+        "key_sketch_build_ms": sum(key_times) / len(key_times),
+        "block_aggregation_ms": (
+            sum(block_aggregation_times) / len(block_aggregation_times)
+        ),
+        "query_sketch_ms": sum(query_times) / len(query_times),
+        "block_scoring_ms": sum(score_times) / len(score_times),
+        "ranking_ms": sum(ranking_times) / len(ranking_times),
         "total_time_ms": sum(total_times) / len(total_times),
         "full_k_memory_bytes": full_k_bytes,
-        "sketch_k_memory_bytes": sketch_k_bytes,
+        "sketch_memory_bytes": sketch_k_bytes,
         "sketch_memory_ratio": sketch_k_bytes / full_k_bytes,
     }
 
@@ -181,6 +209,8 @@ def main() -> int:
         raise ValueError("--warmup must be non-negative")
     if args.block_size <= 0:
         raise ValueError("--block-size must be positive")
+    if args.topk_blocks <= 0:
+        raise ValueError("--topk-blocks must be positive")
 
     device = torch.device(args.device)
     dtype = _dtype_from_string(args.dtype)
@@ -205,11 +235,22 @@ def main() -> int:
     for row in rows:
         grouped[row["sketch_type"]].append(row)
 
+    metric_keys = [
+        "key_sketch_build_ms",
+        "block_aggregation_ms",
+        "query_sketch_ms",
+        "block_scoring_ms",
+        "ranking_ms",
+        "total_time_ms",
+    ]
     summary = {
         "output": str(output_path),
         "num_rows": len(rows),
-        "avg_total_time_ms_by_type": {
-            key: sum(r["total_time_ms"] for r in vals) / len(vals)
+        "avg_by_type": {
+            key: {
+                metric: sum(r[metric] for r in vals) / len(vals)
+                for metric in metric_keys
+            }
             for key, vals in grouped.items()
         },
     }

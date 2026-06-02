@@ -79,6 +79,10 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
             "8",
             "--num-queries",
             "2",
+            "--topk-blocks",
+            "3",
+            "--block-score-mode",
+            "mean",
             "--warmup",
             "1",
             "--iters",
@@ -96,5 +100,13 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
     row = json.loads(output.read_text(encoding="utf-8").strip())
     assert row["sketch_type"] == "count_sketch"
     assert row["sketch_dim"] == 8
-    assert "key_sketch_build_time_ms" in row
+    assert row["topk_blocks"] == 3
+    assert row["block_score_mode"] == "mean"
+    assert "key_sketch_build_ms" in row
+    assert "block_aggregation_ms" in row
+    assert "query_sketch_ms" in row
+    assert "block_scoring_ms" in row
+    assert "ranking_ms" in row
+    assert "total_time_ms" in row
     assert "sketch_memory_ratio" in row
+    assert "sketch_memory_bytes" in row
