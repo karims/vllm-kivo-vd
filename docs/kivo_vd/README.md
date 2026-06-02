@@ -32,6 +32,7 @@ Recommended reading order:
 - [Phase 2.7: Torch Benchmark Breakdown](phase2_7_torch_benchmark_breakdown.md)
 - [Phase 2.8: Active KV Policy Simulation](phase2_8_active_kv_policy_simulation.md)
 - [Phase 2.9: Benchmark Report](phase2_9_benchmark_report.md)
+- [Phase 4A: Advanced Sketch Variants](phase4a_advanced_sketch_variants.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

@@ -9,6 +9,7 @@ class KivoVDSketchType(str, Enum):
     NONE = "none"
     RANDOM_PROJECTION = "random_projection"
     COUNT_SKETCH = "count_sketch"
+    SRHT = "srht"
     BIDIAGONAL = "bidiagonal"
     VARIATION_DIMINISHING = "variation_diminishing"
 

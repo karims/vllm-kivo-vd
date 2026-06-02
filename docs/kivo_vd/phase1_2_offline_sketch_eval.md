@@ -6,7 +6,8 @@ sketches preserve top-attended token/block rankings in offline experiments.
 ## What this phase adds
 
 - `vllm/v1/core/kivo_vd_sketch_math.py`
-  - random projection and count-sketch construction/application
+  - random projection, count-sketch, and experimental SRHT
+    construction/application
   - exact vs sketched score computation
   - top-k recall helpers
   - block-level score/recall helpers
@@ -46,6 +47,9 @@ runtime speed.
   --topk 32 \
   --seed 1234
 ```
+
+Experimental SRHT can be selected with `--sketch-type srht`. It is included for
+offline comparison only and is not a runtime or memory-reduction claim.
 
 ## Sweep runner
 

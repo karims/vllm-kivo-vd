@@ -12,6 +12,7 @@ torch = pytest.importorskip("torch")
 from vllm.v1.core.kivo_vd_torch_sketch_backend import (  # noqa: E402
     TorchCountSketchBackend,
     TorchRandomProjectionBackend,
+    TorchSRHTBackend,
     make_torch_sketch_backend,
 )
 
@@ -23,8 +24,10 @@ def test_torch_backend_factory_works() -> None:
     rp = make_torch_sketch_backend(
         "random_projection", 8, 4, 1, "cpu", torch.float32
     )
+    srht = make_torch_sketch_backend("srht", 10, 4, 1, "cpu", torch.float32)
     assert isinstance(count, TorchCountSketchBackend)
     assert isinstance(rp, TorchRandomProjectionBackend)
+    assert isinstance(srht, TorchSRHTBackend)
 
 
 def test_torch_count_sketch_deterministic_same_seed() -> None:
@@ -38,6 +41,16 @@ def test_torch_random_projection_deterministic_same_seed() -> None:
     a = TorchRandomProjectionBackend(8, 4, 9, "cpu", torch.float32)
     b = TorchRandomProjectionBackend(8, 4, 9, "cpu", torch.float32)
     assert torch.allclose(a.projection, b.projection)
+
+
+def test_torch_srht_deterministic_same_seed() -> None:
+    a = TorchSRHTBackend(10, 4, 9, "cpu", torch.float32)
+    b = TorchSRHTBackend(10, 4, 9, "cpu", torch.float32)
+    x = torch.arange(10, dtype=torch.float32)
+    assert a.padded_dim == 16
+    assert torch.equal(a.signs, b.signs)
+    assert torch.equal(a.sampled_indices, b.sampled_indices)
+    assert torch.allclose(a.sketch_query(x), b.sketch_query(x))
 
 
 def test_torch_backend_output_shapes() -> None:
@@ -68,7 +81,7 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
             sys.executable,
             str(script),
             "--sketch-types",
-            "count_sketch",
+            "srht",
             "--sketch-dims",
             "8",
             "--num-tokens",
@@ -98,7 +111,7 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
     summary = json.loads(proc.stdout)
     assert summary["num_rows"] == 1
     row = json.loads(output.read_text(encoding="utf-8").strip())
-    assert row["sketch_type"] == "count_sketch"
+    assert row["sketch_type"] == "srht"
     assert row["sketch_dim"] == 8
     assert row["topk_blocks"] == 3
     assert row["block_score_mode"] == "mean"

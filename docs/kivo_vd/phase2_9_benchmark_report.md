@@ -23,6 +23,10 @@ The policy simulator needs full approximate block rankings:
   --output outputs/kivo_vd/hf_qk_head_sweep_ranked.jsonl
 ```
 
+Experimental SRHT rows can be added by including `srht` in `--sketch-types`.
+Treat SRHT report entries as exploratory until they pass the same offline,
+runtime dry-run, quality, and memory validations as the baseline backends.
+
 ## Run Active KV Policy Simulation
 
 ```bash

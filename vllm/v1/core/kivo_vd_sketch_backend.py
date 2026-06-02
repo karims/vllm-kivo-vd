@@ -16,6 +16,37 @@ class CountSketchSpec:
     bucket_sign: np.ndarray
 
 
+@dataclass(slots=True)
+class SRHTSpec:
+    input_dim: int
+    padded_dim: int
+    sketch_dim: int
+    signs: np.ndarray
+    sampled_indices: np.ndarray
+
+
+def _next_power_of_two(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def _fwht(x: np.ndarray) -> np.ndarray:
+    out = np.asarray(x, dtype=np.float64).copy()
+    n = out.shape[-1]
+    if n <= 0 or n & (n - 1):
+        raise ValueError("FWHT input dimension must be a power of two")
+    h = 1
+    while h < n:
+        reshaped = out.reshape(*out.shape[:-1], -1, h * 2)
+        left = reshaped[..., :, :h].copy()
+        right = reshaped[..., :, h : h * 2].copy()
+        reshaped[..., :, :h] = left + right
+        reshaped[..., :, h : h * 2] = left - right
+        h *= 2
+    return out
+
+
 class KivoVDSketchBackend(ABC):
     """NumPy-only sketch backend interface for runtime dry-run planning."""
 
@@ -115,10 +146,55 @@ class RandomProjectionBackend(KivoVDSketchBackend):
         )
 
 
+class SRHTBackend(KivoVDSketchBackend):
+    sketch_type = KivoVDSketchType.SRHT
+
+    def make_params(self, input_dim: int, sketch_dim: int, seed: int) -> SRHTSpec:
+        if input_dim <= 0 or sketch_dim <= 0:
+            raise ValueError("input_dim and sketch_dim must be positive")
+        padded_dim = _next_power_of_two(input_dim)
+        if sketch_dim > padded_dim:
+            raise ValueError("sketch_dim must be <= padded_dim for SRHT")
+        rng = np.random.default_rng(seed)
+        signs = rng.choice(np.array([-1.0, 1.0]), size=padded_dim)
+        sampled_indices = rng.choice(padded_dim, size=sketch_dim, replace=False)
+        return SRHTSpec(
+            input_dim=input_dim,
+            padded_dim=padded_dim,
+            sketch_dim=sketch_dim,
+            signs=signs.astype(np.float64),
+            sampled_indices=np.sort(sampled_indices.astype(np.int64)),
+        )
+
+    def sketch_vector(self, vector: np.ndarray, params: SRHTSpec) -> np.ndarray:
+        vector = np.asarray(vector, dtype=np.float64)
+        if vector.ndim != 1:
+            raise ValueError("vector must be 1D")
+        if vector.shape[0] != params.input_dim:
+            raise ValueError("vector length mismatch with sketch params")
+        if params.padded_dim != params.input_dim:
+            vector = np.pad(vector, (0, params.padded_dim - params.input_dim))
+        signed = vector * params.signs
+        transformed = _fwht(signed) / np.sqrt(float(params.padded_dim))
+        sampled = transformed[params.sampled_indices]
+        return sampled * np.sqrt(float(params.padded_dim) / float(params.sketch_dim))
+
+    def score_query_against_blocks(
+        self,
+        query_sketch: np.ndarray,
+        block_sketches: np.ndarray,
+    ) -> np.ndarray:
+        return np.asarray(block_sketches, dtype=np.float64) @ np.asarray(
+            query_sketch, dtype=np.float64
+        )
+
+
 def make_sketch_backend(sketch_type: KivoVDSketchType | str) -> KivoVDSketchBackend:
     normalized = KivoVDSketchType(sketch_type)
     if normalized == KivoVDSketchType.COUNT_SKETCH:
         return CountSketchBackend()
     if normalized == KivoVDSketchType.RANDOM_PROJECTION:
         return RandomProjectionBackend()
+    if normalized == KivoVDSketchType.SRHT:
+        return SRHTBackend()
     raise ValueError(f"Unsupported sketch backend type: {normalized.value}")

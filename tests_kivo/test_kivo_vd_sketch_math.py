@@ -31,6 +31,26 @@ def test_count_sketch_shape() -> None:
     assert spec.bucket_sign.shape == (10,)
 
 
+def test_srht_shape_and_non_power_of_two_input_dim() -> None:
+    m = _load_module()
+    spec = m.make_srht(input_dim=10, sketch_dim=4, seed=3)
+    x = np.arange(20, dtype=np.float64).reshape(2, 10)
+    sketched = m.apply_srht(x, spec)
+    assert spec.padded_dim == 16
+    assert spec.sampled_indices.shape == (4,)
+    assert sketched.shape == (2, 4)
+
+
+def test_srht_deterministic_same_seed() -> None:
+    m = _load_module()
+    x = np.arange(10, dtype=np.float64)
+    spec1 = m.make_srht(input_dim=10, sketch_dim=4, seed=5)
+    spec2 = m.make_srht(input_dim=10, sketch_dim=4, seed=5)
+    assert np.array_equal(spec1.signs, spec2.signs)
+    assert np.array_equal(spec1.sampled_indices, spec2.sampled_indices)
+    assert np.allclose(m.apply_srht(x, spec1), m.apply_srht(x, spec2))
+
+
 def test_exact_score_shape() -> None:
     m = _load_module()
     q = np.array([1.0, 2.0, 3.0])
@@ -75,7 +95,7 @@ def test_cli_smoke() -> None:
             "--seed",
             "7",
             "--sketch-type",
-            "random_projection",
+            "srht",
             "--mode",
             "gaussian",
         ],

@@ -36,6 +36,7 @@ def test_hf_head_sweep_help_smoke() -> None:
     assert "--sketch-dims" in out
     assert "--include-ranked-blocks" in out
     assert "--extraction-mode" in out
+    assert "srht" in out
 
 
 def test_parse_index_list() -> None:
@@ -57,6 +58,10 @@ def test_parse_sketch_types() -> None:
     assert m._parse_sketch_types(
         "random_projection", "count_sketch,random_projection"
     ) == ["count_sketch", "random_projection"]
+    assert m._parse_sketch_types("random_projection", "srht,count_sketch") == [
+        "srht",
+        "count_sketch",
+    ]
 
 
 def test_parse_sketch_dims() -> None:

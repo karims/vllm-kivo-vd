@@ -38,6 +38,7 @@ def test_hf_qk_script_help_smoke() -> None:
     assert "--query-position" in out
     assert "--sweep-query-positions" in out
     assert "--extraction-mode" in out
+    assert "srht" in out
 
 
 def test_truncate_input_ids_right_and_left() -> None:

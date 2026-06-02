@@ -15,6 +15,37 @@ class CountSketchSpec:
     bucket_sign: np.ndarray
 
 
+@dataclass(slots=True)
+class SRHTSpec:
+    input_dim: int
+    padded_dim: int
+    sketch_dim: int
+    signs: np.ndarray
+    sampled_indices: np.ndarray
+
+
+def _next_power_of_two(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def _fwht(x: np.ndarray) -> np.ndarray:
+    out = np.asarray(x, dtype=np.float64).copy()
+    n = out.shape[-1]
+    if n <= 0 or n & (n - 1):
+        raise ValueError("FWHT input dimension must be a power of two")
+    h = 1
+    while h < n:
+        reshaped = out.reshape(*out.shape[:-1], -1, h * 2)
+        left = reshaped[..., :, :h].copy()
+        right = reshaped[..., :, h : h * 2].copy()
+        reshaped[..., :, :h] = left + right
+        reshaped[..., :, h : h * 2] = left - right
+        h *= 2
+    return out
+
+
 def generate_synthetic_keys_and_query(
     num_tokens: int,
     input_dim: int,
@@ -138,6 +169,27 @@ def make_count_sketch(
     )
 
 
+def make_srht(input_dim: int, sketch_dim: int, seed: int) -> SRHTSpec:
+    if input_dim <= 0 or sketch_dim <= 0:
+        raise ValueError("input_dim and sketch_dim must be positive")
+    padded_dim = _next_power_of_two(input_dim)
+    if sketch_dim > padded_dim:
+        raise ValueError(
+            f"sketch_dim={sketch_dim} must be <= padded_dim={padded_dim}"
+        )
+    rng = np.random.default_rng(seed)
+    signs = rng.choice(np.array([-1.0, 1.0]), size=padded_dim).astype(np.float64)
+    sampled_indices = rng.choice(padded_dim, size=sketch_dim, replace=False)
+    sampled_indices = np.sort(sampled_indices.astype(np.int64))
+    return SRHTSpec(
+        input_dim=input_dim,
+        padded_dim=padded_dim,
+        sketch_dim=sketch_dim,
+        signs=signs,
+        sampled_indices=sampled_indices,
+    )
+
+
 def apply_random_projection(x: np.ndarray, projection: np.ndarray) -> np.ndarray:
     return np.asarray(x, dtype=np.float64) @ np.asarray(projection, dtype=np.float64)
 
@@ -153,6 +205,23 @@ def apply_count_sketch(x: np.ndarray, sketch_spec: CountSketchSpec) -> np.ndarra
     for dim in range(sketch_spec.input_dim):
         out[:, sketch_spec.bucket_index[dim]] += weighted[:, dim]
     return out if np.asarray(x).ndim > 1 else out[0]
+
+
+def apply_srht(x: np.ndarray, sketch_spec: SRHTSpec) -> np.ndarray:
+    x_arr = np.asarray(x, dtype=np.float64)
+    x_2d = np.atleast_2d(x_arr)
+    if x_2d.shape[1] != sketch_spec.input_dim:
+        raise ValueError(
+            f"Expected input dim {sketch_spec.input_dim}, got {x_2d.shape[1]}"
+        )
+    if sketch_spec.padded_dim != sketch_spec.input_dim:
+        pad_width = sketch_spec.padded_dim - sketch_spec.input_dim
+        x_2d = np.pad(x_2d, ((0, 0), (0, pad_width)), mode="constant")
+    signed = x_2d * sketch_spec.signs[None, :]
+    transformed = _fwht(signed) / np.sqrt(float(sketch_spec.padded_dim))
+    sampled = transformed[:, sketch_spec.sampled_indices]
+    sampled *= np.sqrt(float(sketch_spec.padded_dim) / float(sketch_spec.sketch_dim))
+    return sampled if x_arr.ndim > 1 else sampled[0]
 
 
 def compute_exact_scores(query: np.ndarray, keys: np.ndarray) -> np.ndarray:
@@ -180,6 +249,10 @@ def compute_sketched_scores(
         spec = make_count_sketch(input_dim, sketch_dim, seed)
         keys_s = apply_count_sketch(keys_arr, spec)
         query_s = apply_count_sketch(query_arr, spec)
+    elif sketch_type == "srht":
+        spec = make_srht(input_dim, sketch_dim, seed)
+        keys_s = apply_srht(keys_arr, spec)
+        query_s = apply_srht(query_arr, spec)
     else:
         raise ValueError(f"Unknown sketch_type: {sketch_type}")
 

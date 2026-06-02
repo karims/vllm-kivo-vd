@@ -21,6 +21,11 @@ def _load_sketch_math_module():
     return module
 
 
+def _srht_sketch_dim_is_valid(input_dim: int, sketch_dim: int) -> bool:
+    padded_dim = 1 << (input_dim - 1).bit_length()
+    return sketch_dim <= padded_dim
+
+
 def _run_one(
     math: Any,
     sketch_type: str,
@@ -141,14 +146,14 @@ def main() -> int:
     math = _load_sketch_math_module()
 
     if args.quick:
-        sketch_types = ["random_projection", "count_sketch"]
+        sketch_types = ["random_projection", "count_sketch", "srht"]
         sketch_dims = [16, 64]
         num_tokens_list = [1024]
         topk_blocks_list = [4, 8]
         seeds = [0]
         modes = ["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"]
     else:
-        sketch_types = ["random_projection", "count_sketch"]
+        sketch_types = ["random_projection", "count_sketch", "srht"]
         sketch_dims = [16, 32, 64, 128]
         num_tokens_list = [1024, 4096, 8192]
         topk_blocks_list = [4, 8, 16]
@@ -167,6 +172,13 @@ def main() -> int:
                 for num_tokens in num_tokens_list:
                     for topk_blocks in topk_blocks_list:
                         for seed in seeds:
+                            if sketch_type == "srht" and not (
+                                _srht_sketch_dim_is_valid(
+                                    input_dim=args.input_dim,
+                                    sketch_dim=sketch_dim,
+                                )
+                            ):
+                                continue
                             rows.append(
                                 _run_one(
                                     math=math,

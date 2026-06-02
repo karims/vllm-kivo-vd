@@ -8,6 +8,28 @@ import torch
 from vllm.v1.core.kivo_vd_sketch import KivoVDSketchType
 
 
+def _next_power_of_two(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def _torch_fwht(x: torch.Tensor) -> torch.Tensor:
+    out = x.clone()
+    n = out.shape[-1]
+    if n <= 0 or n & (n - 1):
+        raise ValueError("FWHT input dimension must be a power of two")
+    h = 1
+    while h < n:
+        reshaped = out.reshape(*out.shape[:-1], -1, h * 2)
+        left = reshaped[..., :, :h].clone()
+        right = reshaped[..., :, h : h * 2].clone()
+        reshaped[..., :, :h] = left + right
+        reshaped[..., :, h : h * 2] = left - right
+        h *= 2
+    return out
+
+
 class TorchKivoSketchBackend(ABC):
     """Torch-only offline sketch backend for Phase 2.6 benchmarking."""
 
@@ -162,6 +184,65 @@ class TorchRandomProjectionBackend(TorchKivoSketchBackend):
         return query @ self.projection
 
 
+class TorchSRHTBackend(TorchKivoSketchBackend):
+    def __init__(
+        self,
+        input_dim: int,
+        sketch_dim: int,
+        seed: int,
+        device: torch.device | str,
+        dtype: torch.dtype,
+        block_score_mode: str = "max",
+    ) -> None:
+        super().__init__(
+            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+        )
+        self.padded_dim = _next_power_of_two(input_dim)
+        if sketch_dim > self.padded_dim:
+            raise ValueError("sketch_dim must be <= padded_dim for SRHT")
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
+        signs = torch.randint(
+            0,
+            2,
+            (self.padded_dim,),
+            generator=generator,
+            dtype=torch.int8,
+            device="cpu",
+        )
+        self.signs = (signs.to(dtype) * 2 - 1).to(self.device)
+        self.sampled_indices = torch.randperm(
+            self.padded_dim,
+            generator=generator,
+            device="cpu",
+        )[:sketch_dim].sort().values.to(self.device)
+        self.hadamard_scale = float(self.padded_dim) ** -0.5
+        self.sample_scale = (float(self.padded_dim) / float(sketch_dim)) ** 0.5
+
+    def _pad(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[-1] == self.padded_dim:
+            return x
+        pad_shape = (*x.shape[:-1], self.padded_dim - self.input_dim)
+        padding = torch.zeros(pad_shape, device=self.device, dtype=self.dtype)
+        return torch.cat([x, padding], dim=-1)
+
+    def sketch_keys(self, keys: torch.Tensor) -> torch.Tensor:
+        if keys.ndim != 2 or keys.shape[1] != self.input_dim:
+            raise ValueError("keys must have shape [num_tokens, input_dim]")
+        keys = keys.to(device=self.device, dtype=self.dtype)
+        signed = self._pad(keys) * self.signs
+        transformed = _torch_fwht(signed) * self.hadamard_scale
+        return transformed[:, self.sampled_indices] * self.sample_scale
+
+    def sketch_query(self, query: torch.Tensor) -> torch.Tensor:
+        if query.ndim != 1 or query.shape[0] != self.input_dim:
+            raise ValueError("query must have shape [input_dim]")
+        query = query.to(device=self.device, dtype=self.dtype)
+        signed = self._pad(query) * self.signs
+        transformed = _torch_fwht(signed) * self.hadamard_scale
+        return transformed[self.sampled_indices] * self.sample_scale
+
+
 def make_torch_sketch_backend(
     sketch_type: KivoVDSketchType | str,
     input_dim: int,
@@ -178,6 +259,10 @@ def make_torch_sketch_backend(
         )
     if normalized == KivoVDSketchType.RANDOM_PROJECTION:
         return TorchRandomProjectionBackend(
+            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+        )
+    if normalized == KivoVDSketchType.SRHT:
+        return TorchSRHTBackend(
             input_dim, sketch_dim, seed, device, dtype, block_score_mode
         )
     raise ValueError(f"Unsupported torch sketch backend type: {normalized.value}")

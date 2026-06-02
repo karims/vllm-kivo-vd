@@ -15,6 +15,7 @@ from vllm.v1.core.kivo_vd_sketch import (
 from vllm.v1.core.kivo_vd_sketch_backend import (
     CountSketchBackend,
     RandomProjectionBackend,
+    SRHTBackend,
     make_sketch_backend,
 )
 
@@ -37,6 +38,7 @@ def test_backend_factory_creates_expected_backends() -> None:
         make_sketch_backend(KivoVDSketchType.RANDOM_PROJECTION),
         RandomProjectionBackend,
     )
+    assert isinstance(make_sketch_backend(KivoVDSketchType.SRHT), SRHTBackend)
 
 
 def test_backend_params_deterministic_for_same_seed() -> None:
@@ -50,6 +52,12 @@ def test_backend_params_deterministic_for_same_seed() -> None:
     p1 = rp.make_params(input_dim=8, sketch_dim=4, seed=5)
     p2 = rp.make_params(input_dim=8, sketch_dim=4, seed=5)
     assert np.allclose(p1, p2)
+
+    srht = SRHTBackend()
+    s1 = srht.make_params(input_dim=10, sketch_dim=4, seed=11)
+    s2 = srht.make_params(input_dim=10, sketch_dim=4, seed=11)
+    assert np.array_equal(s1.signs, s2.signs)
+    assert np.array_equal(s1.sampled_indices, s2.sampled_indices)
 
 
 def test_candidate_selector_includes_recent_blocks() -> None:

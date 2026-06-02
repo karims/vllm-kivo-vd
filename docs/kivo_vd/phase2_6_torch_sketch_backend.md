@@ -2,6 +2,7 @@
 
 Phase 2.6 adds an optional torch-based sketch backend and benchmark script for
 measuring CountSketch and Random Projection feasibility on torch tensors.
+Phase 4A adds experimental SRHT support to the same offline benchmark path.
 
 ## What this phase adds
 
@@ -9,6 +10,7 @@ measuring CountSketch and Random Projection feasibility on torch tensors.
   - `TorchKivoSketchBackend`
   - `TorchCountSketchBackend`
   - `TorchRandomProjectionBackend`
+  - `TorchSRHTBackend` (experimental, Phase 4A)
   - `make_torch_sketch_backend(...)`
 - `scripts/kivo_vd/benchmark_torch_sketch_backend.py`
   - synthetic key/query tensors
@@ -42,6 +44,18 @@ CPU:
   --device cpu \
   --num-tokens 4096 \
   --head-dim 128
+```
+
+Experimental SRHT smoke run:
+
+```bash
+.venv/bin/python scripts/kivo_vd/benchmark_torch_sketch_backend.py \
+  --sketch-types srht \
+  --device cpu \
+  --num-tokens 1024 \
+  --head-dim 128 \
+  --iters 3 \
+  --warmup 1
 ```
 
 MPS on Apple Silicon, if available:
@@ -79,3 +93,6 @@ Each JSONL row includes:
 The benchmark separates sketch update cost, query sketch cost, and scoring cost.
 Those numbers guide whether Phase 2.8 runtime tensor capture should start with
 generic torch ops or skip directly to a backend-specific implementation.
+
+SRHT numbers should be interpreted as exploratory. They do not change the
+current conservative default or imply runtime memory reduction.

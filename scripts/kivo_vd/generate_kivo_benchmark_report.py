@@ -166,7 +166,7 @@ def _has_pre_rope_rows(hf_rows: list[dict[str, Any]]) -> bool:
 
 
 def _selected_policy_rows(policy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    selected_types = {"count_sketch", "random_projection"}
+    selected_types = {"count_sketch", "random_projection", "srht"}
     selected_dims = {64, 128}
     selected_policies = {(8, 16), (4, 8)}
     return [
@@ -335,6 +335,8 @@ def generate_report(
         "",
         "- `sketch_type`: `count_sketch` dim 64, with "
         "`random_projection` dim 64 retained as a baseline.",
+        "- `srht` is experimental and should be compared offline before any "
+        "runtime policy uses it.",
         "- `recent_window_blocks`: 8",
         "- `candidate_budget_blocks`: 16",
         "",
