@@ -184,8 +184,8 @@ def _extract_gpt2_head_qk(
     _validate_query_position(query_position, seq_len)
 
     # Causal: use keys up to (but excluding) query position.
-    query = q_head[query_position].detach().cpu().numpy().astype(np.float64)
-    keys = k_head[:query_position].detach().cpu().numpy().astype(np.float64)
+    query = q_head[query_position].detach().float().cpu().numpy().astype(np.float64)
+    keys = k_head[:query_position].detach().float().cpu().numpy().astype(np.float64)
     return QKExtractionResult(
         query=query,
         keys=keys,
@@ -251,8 +251,8 @@ def _extract_separate_qk_proj(
     seq_len = q_head.shape[0]
     _validate_query_position(query_position, seq_len)
 
-    query = q_head[query_position].detach().cpu().numpy().astype(np.float64)
-    keys = k_head[:query_position].detach().cpu().numpy().astype(np.float64)
+    query = q_head[query_position].detach().float().cpu().numpy().astype(np.float64)
+    keys = k_head[:query_position].detach().float().cpu().numpy().astype(np.float64)
     return QKExtractionResult(
         query=query,
         keys=keys,
