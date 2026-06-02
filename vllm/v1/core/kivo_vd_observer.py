@@ -7,9 +7,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from vllm.v1.core.kivo_vd_sketch import (
+    KivoVDRoutingDecision,
     KivoVDBlockSketch,
     KivoVDSketchConfig,
     KivoVDSketchIndex,
+)
+from vllm.v1.core.kivo_vd_candidate_selector import (
+    KivoVDCandidateSelector,
+    KivoVDCandidateSelectorConfig,
 )
 
 
@@ -21,10 +26,12 @@ class KivoVDObserver:
         enabled: bool = False,
         max_events: int = 10_000,
         sketch_index: KivoVDSketchIndex | None = None,
+        candidate_selector: KivoVDCandidateSelector | None = None,
     ) -> None:
         self.enabled = enabled
         self.max_events = max_events
         self.sketch_index = sketch_index
+        self.candidate_selector = candidate_selector
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
@@ -133,6 +140,27 @@ class KivoVDObserver:
     ) -> None:
         return
 
+    def dry_run_select_candidates(
+        self,
+        request_id: str,
+        query_metadata_or_sketch: Any | None = None,
+    ) -> KivoVDRoutingDecision | None:
+        if self.sketch_index is None or self.candidate_selector is None:
+            return None
+        decision = self.candidate_selector.select_candidates(
+            request_id=request_id,
+            query_metadata_or_sketch=query_metadata_or_sketch,
+            sketch_index=self.sketch_index,
+        )
+        self._record_event(
+            "dry_run_select_candidates",
+            request_id=request_id,
+            num_selected_blocks=len(decision.selected_block_ids),
+            num_recent_blocks=len(decision.recent_block_ids),
+            selector_reason=decision.reason,
+        )
+        return decision
+
     def get_counters(self) -> dict[str, int]:
         return {
             "num_before_allocate_calls": self.num_before_allocate_calls,
@@ -157,11 +185,15 @@ class KivoVDObserver:
 def create_kivo_vd_observer(enable_kivo_vd: bool) -> KivoVDObserver | None:
     if not enable_kivo_vd:
         return None
+    sketch_index = KivoVDSketchIndex(
+        config=KivoVDSketchConfig(
+            enabled=True,
+        )
+    )
     return KivoVDObserver(
         enabled=True,
-        sketch_index=KivoVDSketchIndex(
-            config=KivoVDSketchConfig(
-                enabled=True,
-            )
+        sketch_index=sketch_index,
+        candidate_selector=KivoVDCandidateSelector(
+            KivoVDCandidateSelectorConfig()
         ),
     )
