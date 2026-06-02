@@ -37,6 +37,15 @@ The policy simulator needs full approximate block rankings:
 .venv/bin/python scripts/kivo_vd/generate_kivo_benchmark_report.py
 ```
 
+The full offline evidence bundle can also be regenerated through the Phase 3.4
+pipeline runner:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_offline_benchmark_pipeline.py \
+  --model-name gpt2 \
+  --prompt-mode blue_orchid
+```
+
 Defaults:
 
 - HF sweep input: `outputs/kivo_vd/hf_qk_head_sweep_ranked.jsonl`
