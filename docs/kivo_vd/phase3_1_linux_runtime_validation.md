@@ -71,6 +71,9 @@ Tiny-model dry-run:
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
   --enable-kivo-vd
+
+.venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
+  --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
 ```
 
 Small-model follow-up:
@@ -103,6 +106,9 @@ uv pip install pytest
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
   --enable-kivo-vd
+
+.venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
+  --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
 ```
 
 ## Setup Option C: Cloud GPU Instance
@@ -119,6 +125,9 @@ nvidia-smi
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
   --enable-kivo-vd
+
+.venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
+  --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
 ```
 
 ## Expected Dry-Run JSON
