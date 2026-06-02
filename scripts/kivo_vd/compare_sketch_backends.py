@@ -17,6 +17,12 @@ METRIC_KEYS = [
     "block_score_correlation",
 ]
 
+COMPRESSION_KEYS = [
+    "effective_sketch_dim",
+    "sketch_compression_ratio",
+    "is_full_dimensional_sketch",
+]
+
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
@@ -40,21 +46,28 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def summarize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         if "sketch_type" not in row or "sketch_dim" not in row:
             continue
         if not all(key in row for key in METRIC_KEYS):
             continue
-        grouped[(str(row["sketch_type"]), int(row["sketch_dim"]))].append(row)
+        group_key = [str(row["sketch_type"]), int(row["sketch_dim"])]
+        for key in COMPRESSION_KEYS:
+            group_key.append(row.get(key))
+        grouped[tuple(group_key)].append(row)
 
     summary: list[dict[str, Any]] = []
-    for (sketch_type, sketch_dim), group_rows in sorted(grouped.items()):
+    for values, group_rows in sorted(grouped.items()):
+        sketch_type, sketch_dim, *compression_values = values
         payload: dict[str, Any] = {
             "sketch_type": sketch_type,
             "sketch_dim": sketch_dim,
             "count": len(group_rows),
         }
+        for key, value in zip(COMPRESSION_KEYS, compression_values, strict=True):
+            if value is not None:
+                payload[key] = value
         for key in METRIC_KEYS:
             payload[f"avg_{key}"] = sum(float(row[key]) for row in group_rows) / len(
                 group_rows

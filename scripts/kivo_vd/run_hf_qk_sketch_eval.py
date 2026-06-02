@@ -400,6 +400,26 @@ def _sweep_query_positions(seq_len: int) -> list[int]:
     return out
 
 
+def _sketch_compression_metadata(
+    *,
+    head_dim: int,
+    sketch_type: str,
+    sketch_dim: int,
+) -> dict[str, Any]:
+    if head_dim <= 0:
+        raise ValueError("head_dim must be positive.")
+    if sketch_dim <= 0:
+        raise ValueError("sketch_dim must be positive.")
+    effective_sketch_dim = min(sketch_dim, head_dim)
+    return {
+        "head_dim": int(head_dim),
+        "effective_input_dim": int(head_dim),
+        "effective_sketch_dim": int(effective_sketch_dim),
+        "sketch_compression_ratio": float(effective_sketch_dim / head_dim),
+        "is_full_dimensional_sketch": bool(effective_sketch_dim >= head_dim),
+    }
+
+
 def _evaluate_at_query_position(
     *,
     math: Any,
@@ -427,6 +447,7 @@ def _evaluate_at_query_position(
     query = extraction.query
     keys = extraction.keys
     resolved_position = extraction.query_position
+    head_dim = int(query.shape[0])
 
     exact_scores = math.compute_exact_scores(query, keys)
     approx_scores = math.compute_sketched_scores(
@@ -476,6 +497,11 @@ def _evaluate_at_query_position(
         "block_score_correlation": float(block_score_corr),
         "exact_top_block_ids": exact_top_blocks.tolist(),
         "approx_top_block_ids": approx_top_blocks.tolist(),
+        **_sketch_compression_metadata(
+            head_dim=head_dim,
+            sketch_type=sketch_type,
+            sketch_dim=sketch_dim,
+        ),
         **extraction.metadata,
     }
     if include_ranked_blocks:

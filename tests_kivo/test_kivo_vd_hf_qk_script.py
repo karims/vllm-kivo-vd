@@ -100,3 +100,31 @@ def test_detect_extraction_mode_with_fake_attention() -> None:
 
     assert m._detect_extraction_mode(GPT2Attention(), "auto") == "gpt2_fused_c_attn"
     assert m._detect_extraction_mode(SeparateAttention(), "auto") == "separate_qk_proj"
+
+
+def test_sketch_compression_metadata_marks_full_dimensional() -> None:
+    m = _load_hf_script_module()
+    compressed = m._sketch_compression_metadata(
+        head_dim=64,
+        sketch_type="srht",
+        sketch_dim=32,
+    )
+    full_dim = m._sketch_compression_metadata(
+        head_dim=64,
+        sketch_type="srht",
+        sketch_dim=64,
+    )
+    expanded = m._sketch_compression_metadata(
+        head_dim=64,
+        sketch_type="random_projection",
+        sketch_dim=128,
+    )
+
+    assert compressed["head_dim"] == 64
+    assert compressed["effective_sketch_dim"] == 32
+    assert compressed["sketch_compression_ratio"] == 0.5
+    assert compressed["is_full_dimensional_sketch"] is False
+    assert full_dim["effective_sketch_dim"] == 64
+    assert full_dim["is_full_dimensional_sketch"] is True
+    assert expanded["effective_sketch_dim"] == 64
+    assert expanded["is_full_dimensional_sketch"] is True

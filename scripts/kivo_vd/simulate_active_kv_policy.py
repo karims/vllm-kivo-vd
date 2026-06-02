@@ -18,6 +18,11 @@ METADATA_FIELDS = [
     "num_key_value_heads",
     "selected_query_head",
     "selected_kv_head",
+    "head_dim",
+    "effective_input_dim",
+    "effective_sketch_dim",
+    "sketch_compression_ratio",
+    "is_full_dimensional_sketch",
 ]
 
 

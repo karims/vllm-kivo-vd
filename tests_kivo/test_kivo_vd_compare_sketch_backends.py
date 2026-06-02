@@ -24,6 +24,9 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
             {
                 "sketch_type": "count_sketch",
                 "sketch_dim": 64,
+                "effective_sketch_dim": 64,
+                "sketch_compression_ratio": 1.0,
+                "is_full_dimensional_sketch": True,
                 "block_topk_recall": 0.8,
                 "block_recall_at_2x_budget": 0.9,
                 "block_recall_at_4x_budget": 1.0,
@@ -32,6 +35,9 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
             {
                 "sketch_type": "srht",
                 "sketch_dim": 64,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
                 "block_topk_recall": 0.7,
                 "block_recall_at_2x_budget": 0.85,
                 "block_recall_at_4x_budget": 0.95,
@@ -59,5 +65,8 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
     summary = payload["summary"]
     assert {row["sketch_type"] for row in summary} == {"count_sketch", "srht"}
     srht = next(row for row in summary if row["sketch_type"] == "srht")
+    assert srht["effective_sketch_dim"] == 32
+    assert srht["sketch_compression_ratio"] == 0.5
+    assert srht["is_full_dimensional_sketch"] is False
     assert srht["avg_block_topk_recall"] == 0.7
     assert srht["avg_block_recall_at_2x_budget"] == 0.85

@@ -30,6 +30,10 @@ METADATA_FIELDS = [
     "qk_space",
     "num_query_heads",
     "num_key_value_heads",
+    "head_dim",
+    "effective_sketch_dim",
+    "sketch_compression_ratio",
+    "is_full_dimensional_sketch",
 ]
 
 
@@ -71,7 +75,9 @@ def _group_rows(
         grouped[tuple(row.get(key) for key in keys)].append(row)
 
     out: list[dict[str, Any]] = []
-    for values, group_rows in sorted(grouped.items(), key=lambda item: item[0]):
+    for values, group_rows in sorted(
+        grouped.items(), key=lambda item: tuple(str(value) for value in item[0])
+    ):
         payload = dict(zip(keys, values, strict=True))
         payload["count"] = len(group_rows)
         for metric in HF_METRICS:
@@ -109,6 +115,10 @@ def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
             "qk_space",
             "sketch_type",
             "sketch_dim",
+            "head_dim",
+            "effective_sketch_dim",
+            "sketch_compression_ratio",
+            "is_full_dimensional_sketch",
         ]
         if any(key in row for row in hf_rows)
     ]
@@ -122,6 +132,10 @@ def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
                 str(row.get("qk_space", "-")),
                 str(row["sketch_type"]),
                 str(row["sketch_dim"]),
+                str(row.get("head_dim", "-")),
+                str(row.get("effective_sketch_dim", "-")),
+                _format_float(row.get("sketch_compression_ratio")),
+                str(row.get("is_full_dimensional_sketch", "-")),
                 _format_float(row.get("avg_block_topk_recall")),
                 _format_float(row.get("avg_block_recall_at_2x_budget")),
                 _format_float(row.get("avg_block_recall_at_4x_budget")),
@@ -136,6 +150,10 @@ def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
             "qk_space",
             "sketch_type",
             "sketch_dim",
+            "head_dim",
+            "effective_sketch_dim",
+            "compression ratio",
+            "full-dim",
             "avg block top-k recall",
             "avg recall@2x",
             "avg recall@4x",
@@ -167,6 +185,10 @@ def _has_pre_rope_rows(hf_rows: list[dict[str, Any]]) -> bool:
 
 def _has_srht_rows(rows: list[dict[str, Any]]) -> bool:
     return any(row.get("sketch_type") == "srht" for row in rows)
+
+
+def _has_full_dimensional_rows(rows: list[dict[str, Any]]) -> bool:
+    return any(bool(row.get("is_full_dimensional_sketch")) for row in rows)
 
 
 def _selected_policy_rows(policy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -338,6 +360,20 @@ def generate_report(
                 "",
             ]
             if _has_srht_rows(hf_rows) or _has_srht_rows(policy_rows)
+            else []
+        ),
+        *(
+            [
+                "## Full-Dimensional Sketch Caveat",
+                "",
+                "Rows with `is_full_dimensional_sketch=True` should not be "
+                "treated as compressed KV sketches. For example, SRHT dim 64 "
+                "on GPT-2 head_dim 64 is useful as a correctness/reference "
+                "result, but it is not evidence of sketch compression.",
+                "",
+            ]
+            if _has_full_dimensional_rows(hf_rows)
+            or _has_full_dimensional_rows(policy_rows)
             else []
         ),
         "## Active KV Policy Simulation Summary",

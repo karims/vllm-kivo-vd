@@ -37,6 +37,11 @@ def _tiny_row() -> dict:
         "num_key_value_heads": 2,
         "selected_query_head": 3,
         "selected_kv_head": 0,
+        "head_dim": 64,
+        "effective_input_dim": 64,
+        "effective_sketch_dim": 32,
+        "sketch_compression_ratio": 0.5,
+        "is_full_dimensional_sketch": False,
     }
 
 
@@ -61,6 +66,10 @@ def test_active_block_union_and_reduction() -> None:
     assert out["qk_space"] == "pre_rope_projection"
     assert out["selected_query_head"] == 3
     assert out["selected_kv_head"] == 0
+    assert out["head_dim"] == 64
+    assert out["effective_sketch_dim"] == 32
+    assert out["sketch_compression_ratio"] == 0.5
+    assert out["is_full_dimensional_sketch"] is False
 
 
 def test_missing_ranked_blocks_gives_clear_error() -> None:

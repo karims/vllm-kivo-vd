@@ -31,6 +31,10 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "num_key_value_heads": 2,
                 "sketch_type": "count_sketch",
                 "sketch_dim": 64,
+                "head_dim": 64,
+                "effective_sketch_dim": 64,
+                "sketch_compression_ratio": 1.0,
+                "is_full_dimensional_sketch": True,
                 "block_topk_recall": 0.8,
                 "block_recall_at_2x_budget": 0.95,
                 "block_recall_at_4x_budget": 1.0,
@@ -44,6 +48,10 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "num_key_value_heads": 2,
                 "sketch_type": "random_projection",
                 "sketch_dim": 64,
+                "head_dim": 64,
+                "effective_sketch_dim": 64,
+                "sketch_compression_ratio": 1.0,
+                "is_full_dimensional_sketch": True,
                 "block_topk_recall": 0.7,
                 "block_recall_at_2x_budget": 0.9,
                 "block_recall_at_4x_budget": 0.98,
@@ -57,6 +65,10 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "num_key_value_heads": 2,
                 "sketch_type": "srht",
                 "sketch_dim": 64,
+                "head_dim": 64,
+                "effective_sketch_dim": 64,
+                "sketch_compression_ratio": 1.0,
+                "is_full_dimensional_sketch": True,
                 "block_topk_recall": 0.75,
                 "block_recall_at_2x_budget": 0.93,
                 "block_recall_at_4x_budget": 0.99,
@@ -97,6 +109,10 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "qk_space": "pre_rope_projection",
                 "sketch_type": "srht",
                 "sketch_dim": 64,
+                "head_dim": 64,
+                "effective_sketch_dim": 64,
+                "sketch_compression_ratio": 1.0,
+                "is_full_dimensional_sketch": True,
                 "recent_window_blocks": 8,
                 "candidate_budget_blocks": 16,
                 "active_block_ratio": 0.62,
@@ -135,6 +151,8 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     assert "Runtime post-RoPE attention behavior may differ" in report
     assert "Active KV Policy Simulation Summary" in report
     assert "SRHT should be compared against CountSketch" in report
+    assert "Full-Dimensional Sketch Caveat" in report
+    assert "should not be treated as compressed KV sketches" in report
     assert "Conservative Recommended Policy" in report
     assert "Aggressive Policy Notes" in report
     assert "What Is Proven vs Not Proven" in report
