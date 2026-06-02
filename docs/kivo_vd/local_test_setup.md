@@ -85,6 +85,22 @@ Optional layer/head sweep:
   --max-tokens 512
 ```
 
+For active KV policy simulation, rerun the sweep with full approximate block
+rankings:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_head_sweep.py \
+  --model-name distilgpt2 \
+  --sketch-types count_sketch,random_projection \
+  --sketch-dims 32,64,128 \
+  --layers 0,1 \
+  --heads 0,1 \
+  --max-tokens 512 \
+  --include-ranked-blocks
+
+.venv/bin/python scripts/kivo_vd/simulate_active_kv_policy.py
+```
+
 ## Optional: Torch Sketch Backend Benchmark (Phase 2.6)
 
 Install torch if needed:

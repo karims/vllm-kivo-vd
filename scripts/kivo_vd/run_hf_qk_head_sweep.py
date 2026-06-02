@@ -116,6 +116,11 @@ def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser.add_argument(
         "--output", default="outputs/kivo_vd/hf_qk_head_sweep.jsonl"
     )
+    parser.add_argument(
+        "--include-ranked-blocks",
+        action="store_true",
+        help="Include full approximate block rankings for policy simulation.",
+    )
     return parser.parse_args()
 
 
@@ -242,6 +247,7 @@ def main() -> int:
                                 seed=args.seed,
                                 block_size=args.block_size,
                                 topk_blocks=args.topk_blocks,
+                                include_ranked_blocks=args.include_ranked_blocks,
                             )
                             row = {
                                 "model_name": args.model_name,

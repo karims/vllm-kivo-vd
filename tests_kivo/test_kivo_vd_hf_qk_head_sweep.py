@@ -34,6 +34,7 @@ def test_hf_head_sweep_help_smoke() -> None:
     assert "--output" in out
     assert "--sketch-types" in out
     assert "--sketch-dims" in out
+    assert "--include-ranked-blocks" in out
 
 
 def test_parse_index_list() -> None:

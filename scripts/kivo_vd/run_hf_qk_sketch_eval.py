@@ -106,6 +106,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--query-position", default="last")
     parser.add_argument("--sweep-query-positions", action="store_true")
+    parser.add_argument(
+        "--include-ranked-blocks",
+        action="store_true",
+        help="Include full approximate block ranking in JSON output.",
+    )
     return parser.parse_args()
 
 
@@ -184,6 +189,7 @@ def _evaluate_at_query_position(
     seed: int,
     block_size: int,
     topk_blocks: int,
+    include_ranked_blocks: bool = False,
 ) -> dict[str, Any]:
     query, keys, resolved_position = _extract_gpt2_head_qk(
         model=model,
@@ -229,7 +235,7 @@ def _evaluate_at_query_position(
     )
     block_mrr = math.mean_reciprocal_rank(exact_top_blocks, approx_block_ranking)
 
-    return {
+    out = {
         "query_position": int(resolved_position),
         "num_keys_used": int(keys.shape[0]),
         "token_topk_recall": float(token_recall),
@@ -242,6 +248,9 @@ def _evaluate_at_query_position(
         "exact_top_block_ids": exact_top_blocks.tolist(),
         "approx_top_block_ids": approx_top_blocks.tolist(),
     }
+    if include_ranked_blocks:
+        out["approx_ranked_block_ids"] = approx_block_ranking.tolist()
+    return out
 
 
 def main() -> int:
@@ -298,6 +307,7 @@ def main() -> int:
             seed=args.seed,
             block_size=args.block_size,
             topk_blocks=args.topk_blocks,
+            include_ranked_blocks=args.include_ranked_blocks,
         )
         payload = {
             "model_name": args.model_name,

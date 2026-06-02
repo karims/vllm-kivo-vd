@@ -13,6 +13,8 @@ across many layers, heads, and query positions for GPT-2 style models.
     - `--sketch-type` / `--sketch-dim` (single, backward compatible)
     - `--sketch-types` / `--sketch-dims` (comma-separated sweep)
   - Computes the same metrics as Phase 1.5 for each layer/head/position.
+  - Can optionally emit `approx_ranked_block_ids` with
+    `--include-ranked-blocks` for downstream policy simulation.
   - Writes one JSONL row per combination.
   - Prints aggregate summary for:
     - overall
@@ -56,6 +58,20 @@ Multi-sketch + multi-dim comparison:
 
 Default output:
 - `outputs/kivo_vd/hf_qk_head_sweep.jsonl`
+
+For Phase 2.8 active-KV policy simulation, include full approximate block
+rankings:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_hf_qk_head_sweep.py \
+  --model-name distilgpt2 \
+  --sketch-types count_sketch,random_projection \
+  --sketch-dims 32,64,128 \
+  --layers 0,1 \
+  --heads 0,1 \
+  --max-tokens 512 \
+  --include-ranked-blocks
+```
 
 ## Scope limits
 
