@@ -85,6 +85,32 @@ Optional layer/head sweep:
   --max-tokens 512
 ```
 
+## Optional: Torch Sketch Backend Benchmark (Phase 2.6)
+
+Install torch if needed:
+
+```bash
+uv pip install torch
+```
+
+CPU benchmark:
+
+```bash
+.venv/bin/python scripts/kivo_vd/benchmark_torch_sketch_backend.py \
+  --device cpu \
+  --num-tokens 4096 \
+  --head-dim 128
+```
+
+MPS benchmark, if available:
+
+```bash
+.venv/bin/python scripts/kivo_vd/benchmark_torch_sketch_backend.py \
+  --device mps \
+  --num-tokens 4096 \
+  --head-dim 128
+```
+
 ## Troubleshooting
 
 - If `pytest` is missing: `uv pip install pytest`
