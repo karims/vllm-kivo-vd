@@ -357,6 +357,10 @@ class VllmConfig:
     you are using. Contents must be hashable."""
     enable_kivo_vd: bool = False
     """Enable Kivo-VD observer hooks (Phase 0: no-op only)."""
+    kivo_vd_event_export_path: str | None = None
+    """Optional JSONL path for explicit Kivo-VD event export."""
+    kivo_vd_export_event_limit: int = 10_000
+    """Maximum Kivo-VD events to export when explicitly requested."""
     instance_id: str = ""
     """The ID of the vLLM instance."""
     optimization_level: OptimizationLevel = OptimizationLevel.O2

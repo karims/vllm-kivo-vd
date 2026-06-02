@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from pathlib import Path
+
 from vllm.v1.core.kivo_vd_observer import (
     KivoVDObserver,
     create_kivo_vd_observer,
@@ -134,3 +137,57 @@ def test_observer_dry_run_without_sketch_index_returns_none() -> None:
     decision = observer.dry_run_select_candidates("req-empty", source="test")
     assert decision is None
     assert observer.get_counters()["num_dry_run_select_calls"] == 1
+
+
+def test_observer_export_events_writes_jsonl(tmp_path: Path) -> None:
+    export_path = tmp_path / "events.jsonl"
+    observer = KivoVDObserver(enabled=True, event_export_path=str(export_path))
+    observer.on_before_allocate_slots("req-export", 2, 0, source="unit")
+
+    written = observer.export_events()
+
+    assert written == 1
+    row = json.loads(export_path.read_text(encoding="utf-8").strip())
+    assert row["event_type"] == "before_allocate_slots"
+    assert row["request_id"] == "req-export"
+
+
+def test_observer_export_events_respects_limit(tmp_path: Path) -> None:
+    export_path = tmp_path / "limited.jsonl"
+    observer = KivoVDObserver(enabled=True, event_export_path=str(export_path))
+    for i in range(5):
+        observer.on_before_allocate_slots(f"req-{i}", 1, 0)
+
+    written = observer.export_events(limit=2)
+
+    rows = [
+        json.loads(line)
+        for line in export_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert written == 2
+    assert [row["request_id"] for row in rows] == ["req-3", "req-4"]
+
+
+def test_observer_export_events_creates_parent_directory(tmp_path: Path) -> None:
+    export_path = tmp_path / "nested" / "kivo" / "events.jsonl"
+    observer = KivoVDObserver(enabled=True, event_export_path=str(export_path))
+    observer.on_before_allocate_slots("req-parent", 1, 0)
+
+    assert observer.export_events() == 1
+    assert export_path.exists()
+
+
+def test_observer_export_events_sanitizes_tensor_like_data(tmp_path: Path) -> None:
+    class FakeTensor:
+        shape = (1024, 1024)
+        dtype = "float16"
+
+    export_path = tmp_path / "sanitized.jsonl"
+    observer = KivoVDObserver(enabled=True, event_export_path=str(export_path))
+    observer._record_event("fake_tensor_event", payload=FakeTensor())
+
+    observer.export_events()
+
+    row = json.loads(export_path.read_text(encoding="utf-8").strip())
+    assert row["event_type"] == "fake_tensor_event"
+    assert row["payload"] == {"type": "FakeTensor"}

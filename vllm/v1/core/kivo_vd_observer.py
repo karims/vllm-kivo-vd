@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import json
 import time
 from collections import deque
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from vllm.v1.core.kivo_vd_sketch import (
@@ -27,11 +29,15 @@ class KivoVDObserver:
         max_events: int = 10_000,
         sketch_index: KivoVDSketchIndex | None = None,
         candidate_selector: KivoVDCandidateSelector | None = None,
+        event_export_path: str | None = None,
+        export_event_limit: int = 10_000,
     ) -> None:
         self.enabled = enabled
         self.max_events = max_events
         self.sketch_index = sketch_index
         self.candidate_selector = candidate_selector
+        self.event_export_path = event_export_path
+        self.export_event_limit = export_event_limit
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
@@ -186,6 +192,37 @@ class KivoVDObserver:
             return []
         return list(self._events)[-limit:]
 
+    def _json_safe(self, value: Any) -> Any:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, list | tuple):
+            return [self._json_safe(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): self._json_safe(v) for k, v in value.items()}
+        # Avoid serializing tensor-like or arbitrary large objects.
+        if hasattr(value, "shape") or hasattr(value, "dtype"):
+            return {"type": type(value).__name__}
+        return str(value)
+
+    def export_events(self, path: str | None = None, limit: int | None = None) -> int:
+        export_path = path or self.event_export_path
+        if export_path is None:
+            return 0
+
+        effective_limit = self.export_event_limit if limit is None else limit
+        if effective_limit <= 0:
+            events: list[dict[str, Any]] = []
+        else:
+            events = list(self._events)[-effective_limit:]
+
+        output_path = Path(export_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            for event in events:
+                row = self._json_safe(event)
+                f.write(json.dumps(row, separators=(",", ":")) + "\n")
+        return len(events)
+
     def reset(self) -> None:
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
@@ -195,7 +232,11 @@ class KivoVDObserver:
         self._events.clear()
 
 
-def create_kivo_vd_observer(enable_kivo_vd: bool) -> KivoVDObserver | None:
+def create_kivo_vd_observer(
+    enable_kivo_vd: bool,
+    event_export_path: str | None = None,
+    export_event_limit: int = 10_000,
+) -> KivoVDObserver | None:
     if not enable_kivo_vd:
         return None
     sketch_index = KivoVDSketchIndex(
@@ -209,4 +250,6 @@ def create_kivo_vd_observer(enable_kivo_vd: bool) -> KivoVDObserver | None:
         candidate_selector=KivoVDCandidateSelector(
             KivoVDCandidateSelectorConfig()
         ),
+        event_export_path=event_export_path,
+        export_event_limit=export_event_limit,
     )

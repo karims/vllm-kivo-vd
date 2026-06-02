@@ -75,7 +75,11 @@ class Scheduler(SchedulerInterface):
         log_stats: bool = False,
     ) -> None:
         self.vllm_config = vllm_config
-        self.kivo_vd_observer = create_kivo_vd_observer(vllm_config.enable_kivo_vd)
+        self.kivo_vd_observer = create_kivo_vd_observer(
+            vllm_config.enable_kivo_vd,
+            event_export_path=vllm_config.kivo_vd_event_export_path,
+            export_event_limit=vllm_config.kivo_vd_export_event_limit,
+        )
         self.scheduler_config = vllm_config.scheduler_config
         self.cache_config = vllm_config.cache_config
         self.lora_config = vllm_config.lora_config
