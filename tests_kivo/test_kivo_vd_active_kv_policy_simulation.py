@@ -30,6 +30,13 @@ def _tiny_row() -> dict:
         "layer": 0,
         "head": 1,
         "query_position": 159,
+        "model_name": "Qwen/Qwen2.5-0.5B",
+        "extraction_mode": "separate_qk_proj",
+        "qk_space": "pre_rope_projection",
+        "num_query_heads": 14,
+        "num_key_value_heads": 2,
+        "selected_query_head": 3,
+        "selected_kv_head": 0,
     }
 
 
@@ -50,6 +57,10 @@ def test_active_block_union_and_reduction() -> None:
     assert out["active_block_ratio"] == 0.5
     assert out["estimated_kv_reduction"] == 0.5
     assert out["exact_top_recall_in_active"] == 0.25
+    assert out["model_name"] == "Qwen/Qwen2.5-0.5B"
+    assert out["qk_space"] == "pre_rope_projection"
+    assert out["selected_query_head"] == 3
+    assert out["selected_kv_head"] == 0
 
 
 def test_missing_ranked_blocks_gives_clear_error() -> None:

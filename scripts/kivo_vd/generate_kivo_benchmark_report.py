@@ -24,6 +24,14 @@ POLICY_METRICS = [
     "exact_top_recall_in_active",
 ]
 
+METADATA_FIELDS = [
+    "model_name",
+    "extraction_mode",
+    "qk_space",
+    "num_query_heads",
+    "num_key_value_heads",
+]
+
 
 def _read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
     if not path.exists():
@@ -93,11 +101,25 @@ def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
-    grouped = _group_rows(hf_rows, ["sketch_type", "sketch_dim"])
+    group_keys = [
+        key
+        for key in [
+            "model_name",
+            "extraction_mode",
+            "qk_space",
+            "sketch_type",
+            "sketch_dim",
+        ]
+        if any(key in row for row in hf_rows)
+    ]
+    grouped = _group_rows(hf_rows, group_keys)
     rows: list[list[str]] = []
     for row in grouped:
         rows.append(
             [
+                str(row.get("model_name", "-")),
+                str(row.get("extraction_mode", "-")),
+                str(row.get("qk_space", "-")),
                 str(row["sketch_type"]),
                 str(row["sketch_dim"]),
                 _format_float(row.get("avg_block_topk_recall")),
@@ -109,6 +131,9 @@ def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
         )
     return _markdown_table(
         [
+            "model_name",
+            "extraction_mode",
+            "qk_space",
             "sketch_type",
             "sketch_dim",
             "avg block top-k recall",
@@ -119,6 +144,25 @@ def _retrieval_summary_table(hf_rows: list[dict[str, Any]]) -> str:
         ],
         rows,
     )
+
+
+def _metadata_summary_table(hf_rows: list[dict[str, Any]]) -> str:
+    present_fields = [
+        field for field in METADATA_FIELDS if any(field in row for row in hf_rows)
+    ]
+    if not present_fields:
+        return "No model/extraction metadata fields were present in the HF rows."
+
+    grouped = _group_rows(hf_rows, present_fields)
+    rows = [
+        [str(row.get(field, "-")) for field in present_fields] + [str(row["count"])]
+        for row in grouped
+    ]
+    return _markdown_table([*present_fields, "count"], rows)
+
+
+def _has_pre_rope_rows(hf_rows: list[dict[str, Any]]) -> bool:
+    return any(row.get("qk_space") == "pre_rope_projection" for row in hf_rows)
 
 
 def _selected_policy_rows(policy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -261,6 +305,22 @@ def generate_report(
         "- No model architecture, tokenizer, training, or weight changes are "
         "part of these results.",
         "",
+        "## Model and Extraction Metadata",
+        "",
+        _metadata_summary_table(hf_rows),
+        "",
+        *(
+            [
+                "Note: at least one row uses `qk_space=pre_rope_projection`. "
+                "Those results are based on Q/K after linear projection but "
+                "before RoPE is applied. Runtime post-RoPE attention behavior "
+                "may differ, so these numbers are not final vLLM runtime "
+                "claims.",
+                "",
+            ]
+            if _has_pre_rope_rows(hf_rows)
+            else []
+        ),
         "## Retrieval Benchmark Summary",
         "",
         _retrieval_summary_table(hf_rows),

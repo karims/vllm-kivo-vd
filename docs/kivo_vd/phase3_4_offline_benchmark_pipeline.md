@@ -45,6 +45,15 @@ Add the optional torch benchmark:
   --run-torch-benchmark
 ```
 
+Future Qwen-style modern-model dry run:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_offline_benchmark_pipeline.py \
+  --dry-run \
+  --model-name Qwen/Qwen2.5-0.5B \
+  --extraction-mode auto
+```
+
 ## Output Layout
 
 Each run writes into:

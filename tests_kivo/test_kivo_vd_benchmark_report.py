@@ -24,6 +24,11 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
         hf_path,
         [
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
                 "sketch_type": "count_sketch",
                 "sketch_dim": 64,
                 "block_topk_recall": 0.8,
@@ -32,6 +37,11 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "block_score_correlation": 0.9,
             },
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
                 "sketch_type": "random_projection",
                 "sketch_dim": 64,
                 "block_topk_recall": 0.7,
@@ -45,6 +55,9 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
         policy_path,
         [
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
                 "sketch_type": "count_sketch",
                 "sketch_dim": 64,
                 "recent_window_blocks": 8,
@@ -54,6 +67,9 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "exact_top_recall_in_active": 0.99,
             },
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
                 "sketch_type": "count_sketch",
                 "sketch_dim": 64,
                 "recent_window_blocks": 4,
@@ -88,6 +104,10 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     assert "Kivo-VD Offline Benchmark Report" in report
     assert "Executive Summary" in report
     assert "Retrieval Benchmark Summary" in report
+    assert "Model and Extraction Metadata" in report
+    assert "Qwen/Qwen2.5-0.5B" in report
+    assert "pre_rope_projection" in report
+    assert "Runtime post-RoPE attention behavior may differ" in report
     assert "Active KV Policy Simulation Summary" in report
     assert "Conservative Recommended Policy" in report
     assert "Aggressive Policy Notes" in report

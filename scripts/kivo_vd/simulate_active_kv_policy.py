@@ -10,6 +10,16 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+METADATA_FIELDS = [
+    "model_name",
+    "extraction_mode",
+    "qk_space",
+    "num_query_heads",
+    "num_key_value_heads",
+    "selected_query_head",
+    "selected_kv_head",
+]
+
 
 def _parse_int_csv(spec: str, *, label: str) -> list[int]:
     out: list[int] = []
@@ -115,7 +125,7 @@ def simulate_policy_for_row(
         else 0.0
     )
 
-    return {
+    output = {
         "sketch_type": row.get("sketch_type"),
         "sketch_dim": row.get("sketch_dim"),
         "layer": row.get("layer"),
@@ -129,6 +139,10 @@ def simulate_policy_for_row(
         "estimated_kv_reduction": float(1.0 - active_block_ratio),
         "exact_top_recall_in_active": float(exact_top_recall),
     }
+    for field in METADATA_FIELDS:
+        if field in row:
+            output[field] = row[field]
+    return output
 
 
 def _aggregate(rows: list[dict[str, Any]], group_by: list[str]) -> list[dict[str, Any]]:

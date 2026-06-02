@@ -99,6 +99,7 @@ def test_dry_run_pipeline_writes_planned_summary(tmp_path: Path) -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert payload["success"] is True
     assert summary["dry_run"] is True
+    assert summary["parameters"]["extraction_mode"] == "auto"
     assert all(stage["status"] == "planned" for stage in summary["stages"])
     assert not (tmp_path / "dry-run" / "hf_qk_head_sweep_ranked.jsonl").exists()
 
