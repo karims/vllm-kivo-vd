@@ -114,6 +114,39 @@ made in this phase.
   access is allowed.
 - The bfloat16 extraction issue is fixed for offline Q/K extraction.
 
+## Tiny Qwen Smoke Sweep Result
+
+A tiny Qwen head sweep was run after the bfloat16 extraction fix:
+
+- Model: `Qwen/Qwen2.5-0.5B`
+- Extraction mode: `auto`
+- Q/K space: `pre_rope_projection`
+- Layer: `0`
+- Heads: `0,1,2,3`
+- Max tokens: `256`
+- Sketch dim: `32`
+- Sketches:
+  - `count_sketch`
+  - `random_projection`
+  - `srht`
+
+| sketch_type | sketch_dim | avg block top-k recall | avg recall@2x | avg recall@4x | avg block score corr |
+| --- | --- | --- | --- | --- | --- |
+| count_sketch | 32 | 0.734375 | 0.937500 | 1.000000 | 0.545078 |
+| random_projection | 32 | 0.750000 | 0.875000 | 1.000000 | 0.309832 |
+| srht | 32 | 0.500000 | 0.796875 | 1.000000 | -0.026410 |
+
+Conservative interpretation:
+
+- The modern extraction path works for this tiny Qwen smoke sweep.
+- The bfloat16 conversion issue is fixed.
+- These rows use pre-RoPE projected Q/K, not post-RoPE attention tensors.
+- This is not a full benchmark.
+- SRHT does not look better than CountSketch or Random Projection in this tiny
+  Qwen smoke test.
+- CountSketch and Random Projection remain safer defaults.
+- SRHT remains experimental and model-dependent.
+
 ## What Was Not Validated
 
 - Full Qwen layer/head sweep completion.
