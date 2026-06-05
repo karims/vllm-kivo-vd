@@ -3,6 +3,9 @@
 Phase 3.1 defines the reproducible path for validating Kivo-VD runtime dry-run
 on a proper vLLM runtime environment.
 
+For the first successful RunPod result and source-overlay details, see
+[Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md).
+
 This phase does not change scheduler behavior, GPUModelRunner, attention
 metadata, block tables, kernels, model architecture, training, or model output
 logic.
@@ -64,6 +67,14 @@ uv pip install pytest
 .venv/bin/python scripts/kivo_vd/check_vllm_runtime_env.py
 ```
 
+If using a prebuilt vLLM wheel plus repo source overlay, run:
+
+```bash
+export PYTHONPATH="$PWD:$PYTHONPATH"
+.venv/bin/python scripts/kivo_vd/setup_runtime_source_overlay.py \
+  --repo-root "$PWD"
+```
+
 Tiny-model dry-run:
 
 ```bash
@@ -110,6 +121,8 @@ uv pip install pytest
 
 .venv/bin/python -m pytest tests_kivo -q
 .venv/bin/python scripts/kivo_vd/check_vllm_runtime_env.py
+.venv/bin/python scripts/kivo_vd/setup_runtime_source_overlay.py \
+  --repo-root "$PWD"
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
@@ -133,6 +146,8 @@ Recommended first pass:
 ```bash
 nvidia-smi
 .venv/bin/python scripts/kivo_vd/check_vllm_runtime_env.py
+.venv/bin/python scripts/kivo_vd/setup_runtime_source_overlay.py \
+  --repo-root "$PWD"
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
@@ -150,6 +165,12 @@ These runtime limits are intentionally low for validation. On large GPUs, a
 tiny model can otherwise produce an unexpectedly large KV-cache allocation plan.
 Use the conservative command first, then increase limits only after dry-run
 event export and output equality are confirmed.
+
+Note: the first successful RunPod validation used `gpt2`, not
+`sshleifer/tiny-gpt2`, because the tiny model can hit an attention embedding
+dimension limitation in the selected vLLM backend. If `tiny-gpt2` fails with a
+small `FLEX_ATTENTION` embedding-dimension error, retry with `gpt2` and the same
+conservative runtime limits.
 
 ## Expected Dry-Run JSON
 

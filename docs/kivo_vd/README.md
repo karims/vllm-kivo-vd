@@ -8,6 +8,7 @@ Recommended reading order:
 ## Status
 
 - [Phase 3.7: Status and Next Steps](phase3_7_status_and_next_steps.md)
+- [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 
 ## vLLM KV Runtime Map And Integration Plan
 
