@@ -47,6 +47,17 @@ def test_structured_param_summary_groups_tiny_jsonl(tmp_path: Path) -> None:
         input_path,
         [
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "selected_query_head": 0,
+                "selected_kv_head": 0,
+                "head_dim": 128,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.25,
+                "is_full_dimensional_sketch": False,
                 "sketch_type": "bidiagonal_sign_subsample",
                 "sketch_dim": 32,
                 "structured_alpha": 0.5,
@@ -57,6 +68,17 @@ def test_structured_param_summary_groups_tiny_jsonl(tmp_path: Path) -> None:
                 "block_score_correlation": 0.8,
             },
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "selected_query_head": 1,
+                "selected_kv_head": 0,
+                "head_dim": 128,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.25,
+                "is_full_dimensional_sketch": False,
                 "sketch_type": "bidiagonal_sign_subsample",
                 "sketch_dim": 32,
                 "structured_alpha": 0.5,
@@ -67,6 +89,17 @@ def test_structured_param_summary_groups_tiny_jsonl(tmp_path: Path) -> None:
                 "block_score_correlation": 0.9,
             },
             {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "selected_query_head": 0,
+                "selected_kv_head": 0,
+                "head_dim": 128,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.25,
+                "is_full_dimensional_sketch": False,
                 "sketch_type": "tridiagonal_sign",
                 "sketch_dim": 32,
                 "structured_alpha": 0.25,
@@ -85,9 +118,9 @@ def test_structured_param_summary_groups_tiny_jsonl(tmp_path: Path) -> None:
             str(script),
             "--input",
             str(input_path),
-            "--json-output",
+            "--output-json",
             str(json_output),
-            "--markdown-output",
+            "--output-md",
             str(markdown_output),
         ],
         check=True,
@@ -106,6 +139,17 @@ def test_structured_param_summary_groups_tiny_jsonl(tmp_path: Path) -> None:
     assert best["sketch_type"] == "bidiagonal_sign_subsample"
     assert best["structured_alpha"] == 0.5
     assert best["structured_coordinate_strategy"] == "uniform"
+    assert best["model_name"] == "Qwen/Qwen2.5-0.5B"
+    assert best["extraction_mode"] == "separate_qk_proj"
+    assert best["qk_space"] == "pre_rope_projection"
+    assert best["num_query_heads"] == 14
+    assert best["num_key_value_heads"] == 2
+    assert best["selected_query_head"] == [0, 1]
+    assert best["selected_kv_head"] == 0
+    assert best["head_dim"] == 128
+    assert best["effective_sketch_dim"] == 32
+    assert best["sketch_compression_ratio"] == 0.25
+    assert best["is_full_dimensional_sketch"] is False
     assert best["count"] == 2
     assert best["avg_block_topk_recall"] == 0.75
     assert best["avg_block_recall_at_2x_budget"] == 0.95

@@ -25,6 +25,20 @@ METRIC_KEYS = [
     "block_score_correlation",
 ]
 
+METADATA_FIELDS = [
+    "model_name",
+    "extraction_mode",
+    "qk_space",
+    "num_query_heads",
+    "num_key_value_heads",
+    "selected_query_head",
+    "selected_kv_head",
+    "head_dim",
+    "effective_sketch_dim",
+    "sketch_compression_ratio",
+    "is_full_dimensional_sketch",
+]
+
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
@@ -60,6 +74,19 @@ def summarize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for values, group_rows in grouped.items():
         payload = {key: value for key, value in zip(GROUP_KEYS, values, strict=True)}
         payload["count"] = len(group_rows)
+        for key in METADATA_FIELDS:
+            values_for_key = [
+                row[key]
+                for row in group_rows
+                if key in row and row[key] is not None
+            ]
+            if not values_for_key:
+                continue
+            unique_values = sorted(
+                {json.dumps(value, sort_keys=True) for value in values_for_key}
+            )
+            decoded = [json.loads(value) for value in unique_values]
+            payload[key] = decoded[0] if len(decoded) == 1 else decoded
         for key in METRIC_KEYS:
             payload[f"avg_{key}"] = sum(float(row[key]) for row in group_rows) / len(
                 group_rows
@@ -149,6 +176,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--json-output",
+        "--output-json",
+        dest="json_output",
         default=(
             "outputs/kivo_vd/runs/phase6_2_structured_param_sweep/"
             "structured_param_sweep_summary.json"
@@ -156,6 +185,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--markdown-output",
+        "--output-md",
+        dest="markdown_output",
         default=(
             "outputs/kivo_vd/runs/phase6_2_structured_param_sweep/"
             "structured_param_sweep_summary.md"

@@ -52,6 +52,7 @@ Recommended reading order:
 - [Phase 6.0: Structured Linear Sketches](phase6_0_structured_linear_sketches.md)
 - [Phase 6.1: Structured Sketch Variants](phase6_1_structured_sketch_variants.md)
 - [Phase 6.2: Structured Parameter Sweep](phase6_2_structured_parameter_sweep.md)
+- [Phase 6.3: Modern Model Structured Check](phase6_3_modern_model_structured_check.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
