@@ -13,17 +13,30 @@ or model architecture.
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
-  --enable-kivo-vd
+  --enable-kivo-vd \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1
 ```
 
 Defaults:
 
 - Model: `sshleifer/tiny-gpt2`
 - Prompt: a short Kivo-VD dry-run prompt
+- GPU memory utilization: `0.05`
+- Max model length: `128`
+- Max batched tokens: `128`
+- Max sequences: `1`
 - Event output: `outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl`
 - Baseline comparison: enabled
 - In-process V1 engine core: enabled by setting
   `VLLM_ENABLE_V1_MULTIPROCESSING=0` before importing vLLM
+
+The runtime limits are intentionally conservative. They are meant to prevent
+tiny validation runs, such as `sshleifer/tiny-gpt2` on an RTX 4090, from
+planning a very large KV cache. This script favors correctness/debugging over
+throughput.
 
 ## What The Script Does
 
@@ -37,6 +50,7 @@ The script:
 6. Prints compact JSON with:
    - model
    - prompt token length if available
+   - GPU/runtime safety limits
    - baseline text
    - Kivo text
    - whether outputs match exactly

@@ -70,7 +70,11 @@ Tiny-model dry-run:
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
-  --enable-kivo-vd
+  --enable-kivo-vd \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1
 
 .venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
   --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
@@ -82,7 +86,11 @@ Small-model follow-up:
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model gpt2 \
   --max-tokens 16 \
-  --enable-kivo-vd
+  --enable-kivo-vd \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1
 ```
 
 ## Setup Option B: Docker-Based Linux/NVIDIA
@@ -105,7 +113,11 @@ uv pip install pytest
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
-  --enable-kivo-vd
+  --enable-kivo-vd \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1
 
 .venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
   --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
@@ -124,11 +136,20 @@ nvidia-smi
 .venv/bin/python scripts/kivo_vd/run_vllm_kivo_dry_run.py \
   --model sshleifer/tiny-gpt2 \
   --max-tokens 8 \
-  --enable-kivo-vd
+  --enable-kivo-vd \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1
 
 .venv/bin/python scripts/kivo_vd/analyze_dry_run_events.py \
   --input outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl
 ```
+
+These runtime limits are intentionally low for validation. On large GPUs, a
+tiny model can otherwise produce an unexpectedly large KV-cache allocation plan.
+Use the conservative command first, then increase limits only after dry-run
+event export and output equality are confirmed.
 
 ## Expected Dry-Run JSON
 
@@ -137,6 +158,10 @@ The dry-run script prints compact JSON. Important fields:
 - `model`
 - `prompt_token_length`
 - `kivo_enabled`
+- `gpu_memory_utilization`
+- `max_model_len`
+- `max_num_batched_tokens`
+- `max_num_seqs`
 - `baseline_text`
 - `kivo_text`
 - `outputs_match`

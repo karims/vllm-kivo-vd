@@ -32,6 +32,52 @@ def test_vllm_kivo_dry_run_help_smoke() -> None:
     assert "--enable-kivo-vd" in out
     assert "--event-output" in out
     assert "--compare-baseline" in out
+    assert "--gpu-memory-utilization" in out
+    assert "--max-model-len" in out
+    assert "--max-num-batched-tokens" in out
+    assert "--max-num-seqs" in out
+
+
+def test_vllm_kivo_dry_run_runtime_limits_are_parsed() -> None:
+    m = _load_module()
+
+    args = m._parse_args([
+        "--gpu-memory-utilization",
+        "0.07",
+        "--max-model-len",
+        "256",
+        "--max-num-batched-tokens",
+        "192",
+        "--max-num-seqs",
+        "2",
+    ])
+
+    assert args.gpu_memory_utilization == 0.07
+    assert args.max_model_len == 256
+    assert args.max_num_batched_tokens == 192
+    assert args.max_num_seqs == 2
+
+
+def test_vllm_kivo_dry_run_runtime_limits_are_llm_kwargs() -> None:
+    m = _load_module()
+
+    kwargs = m._build_llm_kwargs(
+        model="sshleifer/tiny-gpt2",
+        seed=123,
+        dtype="auto",
+        device="cuda",
+        gpu_memory_utilization=0.05,
+        max_model_len=128,
+        max_num_batched_tokens=128,
+        max_num_seqs=1,
+    )
+
+    assert kwargs["model"] == "sshleifer/tiny-gpt2"
+    assert kwargs["gpu_memory_utilization"] == 0.05
+    assert kwargs["max_model_len"] == 128
+    assert kwargs["max_num_batched_tokens"] == 128
+    assert kwargs["max_num_seqs"] == 1
+    assert kwargs["device"] == "cuda"
 
 
 def test_extract_generation_text_handles_empty_outputs() -> None:

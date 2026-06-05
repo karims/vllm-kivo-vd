@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run vLLM inference with optional Kivo-VD dry-run hooks."
     )
@@ -47,7 +47,34 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--device", default="auto")
-    return parser.parse_args()
+    parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=0.05,
+        help=(
+            "Fraction of GPU memory vLLM may reserve. The default is "
+            "intentionally conservative for tiny dry-run validation."
+        ),
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=128,
+        help="Conservative maximum model length for dry-run validation.",
+    )
+    parser.add_argument(
+        "--max-num-batched-tokens",
+        type=int,
+        default=128,
+        help="Conservative scheduler token budget for dry-run validation.",
+    )
+    parser.add_argument(
+        "--max-num-seqs",
+        type=int,
+        default=1,
+        help="Conservative sequence budget for dry-run validation.",
+    )
+    return parser.parse_args(argv)
 
 
 @contextmanager
@@ -97,6 +124,32 @@ def _get_inproc_kivo_observer(llm: Any) -> Any | None:
     return getattr(scheduler, "kivo_vd_observer", None)
 
 
+def _build_llm_kwargs(
+    *,
+    model: str,
+    seed: int,
+    dtype: str,
+    device: str,
+    gpu_memory_utilization: float,
+    max_model_len: int,
+    max_num_batched_tokens: int,
+    max_num_seqs: int,
+) -> dict[str, Any]:
+    llm_kwargs: dict[str, Any] = {
+        "model": model,
+        "dtype": dtype,
+        "seed": seed,
+        "enforce_eager": True,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "max_model_len": max_model_len,
+        "max_num_batched_tokens": max_num_batched_tokens,
+        "max_num_seqs": max_num_seqs,
+    }
+    if device != "auto":
+        llm_kwargs["device"] = device
+    return llm_kwargs
+
+
 def _run_generation(
     *,
     model: str,
@@ -105,6 +158,10 @@ def _run_generation(
     seed: int,
     dtype: str,
     device: str,
+    gpu_memory_utilization: float,
+    max_model_len: int,
+    max_num_batched_tokens: int,
+    max_num_seqs: int,
     enable_kivo_vd: bool,
     event_output: str | None,
 ) -> dict[str, Any]:
@@ -115,14 +172,16 @@ def _run_generation(
         max_tokens=max_tokens,
         seed=seed,
     )
-    llm_kwargs: dict[str, Any] = {
-        "model": model,
-        "dtype": dtype,
-        "seed": seed,
-        "enforce_eager": True,
-    }
-    if device != "auto":
-        llm_kwargs["device"] = device
+    llm_kwargs = _build_llm_kwargs(
+        model=model,
+        seed=seed,
+        dtype=dtype,
+        device=device,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        max_num_batched_tokens=max_num_batched_tokens,
+        max_num_seqs=max_num_seqs,
+    )
 
     with _patched_kivo_vllm_config(
         enabled=enable_kivo_vd,
@@ -171,6 +230,10 @@ def main() -> int:
                 seed=args.seed,
                 dtype=args.dtype,
                 device=args.device,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                max_model_len=args.max_model_len,
+                max_num_batched_tokens=args.max_num_batched_tokens,
+                max_num_seqs=args.max_num_seqs,
                 enable_kivo_vd=False,
                 event_output=None,
             )
@@ -183,6 +246,10 @@ def main() -> int:
             seed=args.seed,
             dtype=args.dtype,
             device=args.device,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            max_num_seqs=args.max_num_seqs,
             enable_kivo_vd=args.enable_kivo_vd,
             event_output=event_output if args.enable_kivo_vd else None,
         )
@@ -195,6 +262,10 @@ def main() -> int:
             "model": args.model,
             "prompt_token_length": kivo["prompt_token_length"],
             "kivo_enabled": bool(args.enable_kivo_vd),
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "max_model_len": args.max_model_len,
+            "max_num_batched_tokens": args.max_num_batched_tokens,
+            "max_num_seqs": args.max_num_seqs,
             "baseline_text": baseline["text"] if baseline is not None else None,
             "kivo_text": kivo["text"],
             "outputs_match": outputs_match,
