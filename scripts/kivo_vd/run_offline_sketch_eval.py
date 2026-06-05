@@ -24,7 +24,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--sketch-type",
-        choices=["random_projection", "count_sketch", "srht", "bidiagonal_sign"],
+        choices=[
+            "random_projection",
+            "count_sketch",
+            "srht",
+            "bidiagonal_sign",
+            "bidiagonal_sign_subsample",
+            "tridiagonal_sign",
+        ],
         default="random_projection",
     )
     parser.add_argument("--input-dim", type=int, default=256)

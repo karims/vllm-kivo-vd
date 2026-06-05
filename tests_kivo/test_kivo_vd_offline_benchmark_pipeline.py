@@ -179,7 +179,10 @@ def test_pipeline_dry_run_can_plan_bidiagonal_sign_comparison(
             "--run-name",
             "bidiagonal-dry-run",
             "--sketch-types",
-            "count_sketch,random_projection,srht,bidiagonal_sign",
+            (
+                "count_sketch,random_projection,srht,bidiagonal_sign,"
+                "bidiagonal_sign_subsample,tridiagonal_sign"
+            ),
             "--layers",
             "0",
             "--heads",
@@ -195,7 +198,11 @@ def test_pipeline_dry_run_can_plan_bidiagonal_sign_comparison(
     payload = json.loads(proc.stdout)
     hf_command = payload["stages"][0]["command"]
     assert payload["parameters"]["sketch_types"] == (
-        "count_sketch,random_projection,srht,bidiagonal_sign"
+        "count_sketch,random_projection,srht,bidiagonal_sign,"
+        "bidiagonal_sign_subsample,tridiagonal_sign"
     )
     assert "--sketch-types" in hf_command
-    assert "count_sketch,random_projection,srht,bidiagonal_sign" in hf_command
+    assert (
+        "count_sketch,random_projection,srht,bidiagonal_sign,"
+        "bidiagonal_sign_subsample,tridiagonal_sign"
+    ) in hf_command

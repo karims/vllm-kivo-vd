@@ -298,6 +298,86 @@ class TorchBidiagonalSignBackend(TorchKivoSketchBackend):
         return self._mix(query)
 
 
+class TorchBidiagonalSignSubsampleBackend(TorchBidiagonalSignBackend):
+    def _mix(self, x: torch.Tensor) -> torch.Tensor:
+        idx = self.sampled_indices
+        sampled = x[..., idx] * self.signs[idx]
+        prev_mask = idx > 0
+        if bool(prev_mask.any()):
+            prev_idx = idx[prev_mask] - 1
+            sampled[..., prev_mask] = sampled[..., prev_mask] + (
+                self.alpha * x[..., prev_idx] * self.signs[prev_idx]
+            )
+        return sampled * self.sample_scale
+
+
+class TorchTridiagonalSignBackend(TorchKivoSketchBackend):
+    def __init__(
+        self,
+        input_dim: int,
+        sketch_dim: int,
+        seed: int,
+        device: torch.device | str,
+        dtype: torch.dtype,
+        block_score_mode: str = "max",
+        alpha_left: float = 0.25,
+        alpha_right: float = 0.25,
+    ) -> None:
+        super().__init__(
+            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+        )
+        if sketch_dim > input_dim:
+            raise ValueError("sketch_dim must be <= input_dim for tridiagonal_sign")
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
+        signs = torch.randint(
+            0,
+            2,
+            (input_dim,),
+            generator=generator,
+            dtype=torch.int8,
+            device="cpu",
+        )
+        self.signs = (signs.to(dtype) * 2 - 1).to(self.device)
+        self.sampled_indices = torch.randperm(
+            input_dim,
+            generator=generator,
+            device="cpu",
+        )[:sketch_dim].sort().values.to(self.device)
+        self.alpha_left = float(alpha_left)
+        self.alpha_right = float(alpha_right)
+        self.sample_scale = (float(input_dim) / float(sketch_dim)) ** 0.5
+
+    def _mix(self, x: torch.Tensor) -> torch.Tensor:
+        idx = self.sampled_indices
+        sampled = x[..., idx] * self.signs[idx]
+        prev_mask = idx > 0
+        if bool(prev_mask.any()):
+            prev_idx = idx[prev_mask] - 1
+            sampled[..., prev_mask] = sampled[..., prev_mask] + (
+                self.alpha_left * x[..., prev_idx] * self.signs[prev_idx]
+            )
+        next_mask = idx < (self.input_dim - 1)
+        if bool(next_mask.any()):
+            next_idx = idx[next_mask] + 1
+            sampled[..., next_mask] = sampled[..., next_mask] + (
+                self.alpha_right * x[..., next_idx] * self.signs[next_idx]
+            )
+        return sampled * self.sample_scale
+
+    def sketch_keys(self, keys: torch.Tensor) -> torch.Tensor:
+        if keys.ndim != 2 or keys.shape[1] != self.input_dim:
+            raise ValueError("keys must have shape [num_tokens, input_dim]")
+        keys = keys.to(device=self.device, dtype=self.dtype)
+        return self._mix(keys)
+
+    def sketch_query(self, query: torch.Tensor) -> torch.Tensor:
+        if query.ndim != 1 or query.shape[0] != self.input_dim:
+            raise ValueError("query must have shape [input_dim]")
+        query = query.to(device=self.device, dtype=self.dtype)
+        return self._mix(query)
+
+
 def make_torch_sketch_backend(
     sketch_type: KivoVDSketchType | str,
     input_dim: int,
@@ -322,6 +402,14 @@ def make_torch_sketch_backend(
         )
     if normalized == KivoVDSketchType.BIDIAGONAL_SIGN:
         return TorchBidiagonalSignBackend(
+            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+        )
+    if normalized == KivoVDSketchType.BIDIAGONAL_SIGN_SUBSAMPLE:
+        return TorchBidiagonalSignSubsampleBackend(
+            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+        )
+    if normalized == KivoVDSketchType.TRIDIAGONAL_SIGN:
+        return TorchTridiagonalSignBackend(
             input_dim, sketch_dim, seed, device, dtype, block_score_mode
         )
     raise ValueError(f"Unsupported torch sketch backend type: {normalized.value}")

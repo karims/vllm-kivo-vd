@@ -34,6 +34,16 @@ class BidiagonalSignSpec:
     alpha: float = 0.5
 
 
+@dataclass(slots=True)
+class TridiagonalSignSpec:
+    input_dim: int
+    sketch_dim: int
+    signs: np.ndarray
+    sampled_indices: np.ndarray
+    alpha_left: float = 0.25
+    alpha_right: float = 0.25
+
+
 def _next_power_of_two(value: int) -> int:
     if value <= 0:
         raise ValueError("value must be positive")
@@ -243,6 +253,82 @@ class BidiagonalSignBackend(KivoVDSketchBackend):
         )
 
 
+class BidiagonalSignSubsampleBackend(BidiagonalSignBackend):
+    sketch_type = KivoVDSketchType.BIDIAGONAL_SIGN_SUBSAMPLE
+
+    def sketch_vector(
+        self, vector: np.ndarray, params: BidiagonalSignSpec
+    ) -> np.ndarray:
+        vector = np.asarray(vector, dtype=np.float64)
+        if vector.ndim != 1:
+            raise ValueError("vector must be 1D")
+        if vector.shape[0] != params.input_dim:
+            raise ValueError("vector length mismatch with sketch params")
+        idx = params.sampled_indices
+        sampled = vector[idx] * params.signs[idx]
+        prev_mask = idx > 0
+        if np.any(prev_mask):
+            prev_idx = idx[prev_mask] - 1
+            sampled[prev_mask] += (
+                params.alpha * vector[prev_idx] * params.signs[prev_idx]
+            )
+        return sampled * np.sqrt(float(params.input_dim) / float(params.sketch_dim))
+
+
+class TridiagonalSignBackend(KivoVDSketchBackend):
+    sketch_type = KivoVDSketchType.TRIDIAGONAL_SIGN
+
+    def make_params(
+        self, input_dim: int, sketch_dim: int, seed: int
+    ) -> TridiagonalSignSpec:
+        if input_dim <= 0 or sketch_dim <= 0:
+            raise ValueError("input_dim and sketch_dim must be positive")
+        if sketch_dim > input_dim:
+            raise ValueError("sketch_dim must be <= input_dim for tridiagonal_sign")
+        rng = np.random.default_rng(seed)
+        signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim)
+        sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
+        return TridiagonalSignSpec(
+            input_dim=input_dim,
+            sketch_dim=sketch_dim,
+            signs=signs.astype(np.float64),
+            sampled_indices=np.sort(sampled_indices.astype(np.int64)),
+        )
+
+    def sketch_vector(
+        self, vector: np.ndarray, params: TridiagonalSignSpec
+    ) -> np.ndarray:
+        vector = np.asarray(vector, dtype=np.float64)
+        if vector.ndim != 1:
+            raise ValueError("vector must be 1D")
+        if vector.shape[0] != params.input_dim:
+            raise ValueError("vector length mismatch with sketch params")
+        idx = params.sampled_indices
+        sampled = vector[idx] * params.signs[idx]
+        prev_mask = idx > 0
+        if np.any(prev_mask):
+            prev_idx = idx[prev_mask] - 1
+            sampled[prev_mask] += (
+                params.alpha_left * vector[prev_idx] * params.signs[prev_idx]
+            )
+        next_mask = idx < (params.input_dim - 1)
+        if np.any(next_mask):
+            next_idx = idx[next_mask] + 1
+            sampled[next_mask] += (
+                params.alpha_right * vector[next_idx] * params.signs[next_idx]
+            )
+        return sampled * np.sqrt(float(params.input_dim) / float(params.sketch_dim))
+
+    def score_query_against_blocks(
+        self,
+        query_sketch: np.ndarray,
+        block_sketches: np.ndarray,
+    ) -> np.ndarray:
+        return np.asarray(block_sketches, dtype=np.float64) @ np.asarray(
+            query_sketch, dtype=np.float64
+        )
+
+
 def make_sketch_backend(sketch_type: KivoVDSketchType | str) -> KivoVDSketchBackend:
     normalized = KivoVDSketchType(sketch_type)
     if normalized == KivoVDSketchType.COUNT_SKETCH:
@@ -253,4 +339,8 @@ def make_sketch_backend(sketch_type: KivoVDSketchType | str) -> KivoVDSketchBack
         return SRHTBackend()
     if normalized == KivoVDSketchType.BIDIAGONAL_SIGN:
         return BidiagonalSignBackend()
+    if normalized == KivoVDSketchType.BIDIAGONAL_SIGN_SUBSAMPLE:
+        return BidiagonalSignSubsampleBackend()
+    if normalized == KivoVDSketchType.TRIDIAGONAL_SIGN:
+        return TridiagonalSignBackend()
     raise ValueError(f"Unsupported sketch backend type: {normalized.value}")

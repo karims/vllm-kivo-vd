@@ -309,7 +309,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--head", type=int, default=0)
     parser.add_argument(
         "--sketch-type",
-        choices=["random_projection", "count_sketch", "srht", "bidiagonal_sign"],
+        choices=[
+            "random_projection",
+            "count_sketch",
+            "srht",
+            "bidiagonal_sign",
+            "bidiagonal_sign_subsample",
+            "tridiagonal_sign",
+        ],
         default="random_projection",
     )
     parser.add_argument("--sketch-dim", type=int, default=64)

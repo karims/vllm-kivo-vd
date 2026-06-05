@@ -43,6 +43,17 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
                 "block_recall_at_4x_budget": 0.95,
                 "block_score_correlation": 0.88,
             },
+            {
+                "sketch_type": "tridiagonal_sign",
+                "sketch_dim": 32,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
+                "block_topk_recall": 0.72,
+                "block_recall_at_2x_budget": 0.86,
+                "block_recall_at_4x_budget": 0.96,
+                "block_score_correlation": 0.87,
+            },
         ],
     )
 
@@ -66,6 +77,7 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
     assert {row["sketch_type"] for row in summary} == {
         "bidiagonal_sign",
         "count_sketch",
+        "tridiagonal_sign",
     }
     bidiag = next(row for row in summary if row["sketch_type"] == "bidiagonal_sign")
     assert bidiag["effective_sketch_dim"] == 32
@@ -73,3 +85,5 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
     assert bidiag["is_full_dimensional_sketch"] is False
     assert bidiag["avg_block_topk_recall"] == 0.7
     assert bidiag["avg_block_recall_at_2x_budget"] == 0.85
+    tridiag = next(row for row in summary if row["sketch_type"] == "tridiagonal_sign")
+    assert tridiag["avg_block_topk_recall"] == 0.72

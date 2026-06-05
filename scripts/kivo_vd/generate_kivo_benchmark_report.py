@@ -194,9 +194,11 @@ def _has_full_dimensional_rows(rows: list[dict[str, Any]]) -> bool:
 def _selected_policy_rows(policy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     selected_types = {
         "bidiagonal_sign",
+        "bidiagonal_sign_subsample",
         "count_sketch",
         "random_projection",
         "srht",
+        "tridiagonal_sign",
     }
     selected_dims = {32, 64, 128}
     selected_policies = {(8, 16), (4, 8)}
@@ -369,14 +371,21 @@ def generate_report(
         ),
         *(
             [
-                "Note: `bidiagonal_sign` rows are experimental structured "
+                "Note: structured sign-mixing rows (`bidiagonal_sign`, "
+                "`bidiagonal_sign_subsample`, and `tridiagonal_sign`) are "
+                "experimental "
                 "linear-algebra sketch rows. They are baseline research "
                 "signals only and do not imply active routing, quality "
                 "preservation, or measured memory reduction.",
                 "",
             ]
             if any(
-                row.get("sketch_type") == "bidiagonal_sign"
+                row.get("sketch_type")
+                in {
+                    "bidiagonal_sign",
+                    "bidiagonal_sign_subsample",
+                    "tridiagonal_sign",
+                }
                 for row in [*hf_rows, *policy_rows]
             )
             else []
@@ -405,7 +414,8 @@ def generate_report(
         "",
         "- `sketch_type`: `count_sketch` dim 64, with "
         "`random_projection` dim 64 retained as a baseline.",
-        "- `srht` and `bidiagonal_sign` are experimental and should be "
+        "- `srht`, `bidiagonal_sign`, `bidiagonal_sign_subsample`, and "
+        "`tridiagonal_sign` are experimental and should be "
         "compared offline before any runtime policy uses them.",
         "- `recent_window_blocks`: 8",
         "- `candidate_budget_blocks`: 16",

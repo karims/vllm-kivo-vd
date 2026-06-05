@@ -174,7 +174,14 @@ def main() -> int:
     if args.num_tokens is not None:
         num_tokens_list = [args.num_tokens]
     if args.sketch_types is not None:
-        allowed = {"random_projection", "count_sketch", "srht", "bidiagonal_sign"}
+        allowed = {
+            "random_projection",
+            "count_sketch",
+            "srht",
+            "bidiagonal_sign",
+            "bidiagonal_sign_subsample",
+            "tridiagonal_sign",
+        }
         sketch_types = []
         for part in args.sketch_types.split(","):
             sketch_type = part.strip()

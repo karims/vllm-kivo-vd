@@ -14,9 +14,11 @@ from vllm.v1.core.kivo_vd_sketch import (
 )
 from vllm.v1.core.kivo_vd_sketch_backend import (
     BidiagonalSignBackend,
+    BidiagonalSignSubsampleBackend,
     CountSketchBackend,
     RandomProjectionBackend,
     SRHTBackend,
+    TridiagonalSignBackend,
     make_sketch_backend,
 )
 
@@ -44,6 +46,14 @@ def test_backend_factory_creates_expected_backends() -> None:
         make_sketch_backend(KivoVDSketchType.BIDIAGONAL_SIGN),
         BidiagonalSignBackend,
     )
+    assert isinstance(
+        make_sketch_backend(KivoVDSketchType.BIDIAGONAL_SIGN_SUBSAMPLE),
+        BidiagonalSignSubsampleBackend,
+    )
+    assert isinstance(
+        make_sketch_backend(KivoVDSketchType.TRIDIAGONAL_SIGN),
+        TridiagonalSignBackend,
+    )
 
 
 def test_backend_params_deterministic_for_same_seed() -> None:
@@ -69,6 +79,12 @@ def test_backend_params_deterministic_for_same_seed() -> None:
     b2 = bidiag.make_params(input_dim=10, sketch_dim=4, seed=13)
     assert np.array_equal(b1.signs, b2.signs)
     assert np.array_equal(b1.sampled_indices, b2.sampled_indices)
+
+    tri = TridiagonalSignBackend()
+    t1 = tri.make_params(input_dim=10, sketch_dim=4, seed=15)
+    t2 = tri.make_params(input_dim=10, sketch_dim=4, seed=15)
+    assert np.array_equal(t1.signs, t2.signs)
+    assert np.array_equal(t1.sampled_indices, t2.sampled_indices)
 
 
 def test_candidate_selector_includes_recent_blocks() -> None:

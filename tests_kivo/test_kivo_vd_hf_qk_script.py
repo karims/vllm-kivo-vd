@@ -40,6 +40,8 @@ def test_hf_qk_script_help_smoke() -> None:
     assert "--extraction-mode" in out
     assert "srht" in out
     assert "bidiagonal_sign" in out
+    assert "bidiagonal_sign_subsample" in out
+    assert "tridiagonal_sign" in out
 
 
 def test_truncate_input_ids_right_and_left() -> None:

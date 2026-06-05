@@ -83,6 +83,42 @@ def test_bidiagonal_sign_rejects_sketch_dim_larger_than_input_dim() -> None:
         raise AssertionError("Expected ValueError for oversized sketch_dim")
 
 
+def test_phase6_1_structured_variants_shape_and_determinism() -> None:
+    m = _load_module()
+    variants = [
+        (
+            m.make_bidiagonal_sign_subsample,
+            m.apply_bidiagonal_sign_subsample,
+        ),
+        (
+            m.make_tridiagonal_sign,
+            m.apply_tridiagonal_sign,
+        ),
+    ]
+    x = np.arange(20, dtype=np.float64).reshape(2, 10)
+    q = np.arange(10, dtype=np.float64)
+
+    for make_fn, apply_fn in variants:
+        spec1 = make_fn(input_dim=10, sketch_dim=4, seed=17)
+        spec2 = make_fn(input_dim=10, sketch_dim=4, seed=17)
+        sketched = apply_fn(x, spec1)
+        assert sketched.shape == (2, 4)
+        assert np.array_equal(spec1.signs, spec2.signs)
+        assert np.array_equal(spec1.sampled_indices, spec2.sampled_indices)
+        assert np.allclose(apply_fn(q, spec1), apply_fn(q, spec2))
+
+
+def test_phase6_1_structured_variants_reject_oversized_sketch_dim() -> None:
+    m = _load_module()
+    for make_fn in (m.make_bidiagonal_sign_subsample, m.make_tridiagonal_sign):
+        try:
+            make_fn(input_dim=4, sketch_dim=5, seed=1)
+        except ValueError as exc:
+            assert "must be <= input_dim" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for oversized sketch_dim")
+
+
 def test_exact_score_shape() -> None:
     m = _load_module()
     q = np.array([1.0, 2.0, 3.0])

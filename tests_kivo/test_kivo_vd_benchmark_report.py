@@ -91,6 +91,40 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "block_recall_at_4x_budget": 0.98,
                 "block_score_correlation": 0.84,
             },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "sketch_type": "bidiagonal_sign_subsample",
+                "sketch_dim": 32,
+                "head_dim": 64,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
+                "block_topk_recall": 0.73,
+                "block_recall_at_2x_budget": 0.92,
+                "block_recall_at_4x_budget": 0.98,
+                "block_score_correlation": 0.85,
+            },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "num_query_heads": 14,
+                "num_key_value_heads": 2,
+                "sketch_type": "tridiagonal_sign",
+                "sketch_dim": 32,
+                "head_dim": 64,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
+                "block_topk_recall": 0.74,
+                "block_recall_at_2x_budget": 0.93,
+                "block_recall_at_4x_budget": 0.99,
+                "block_score_correlation": 0.86,
+            },
         ],
     )
     _write_jsonl(
@@ -152,6 +186,38 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
                 "estimated_kv_reduction": 0.37,
                 "exact_top_recall_in_active": 0.97,
             },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "sketch_type": "bidiagonal_sign_subsample",
+                "sketch_dim": 32,
+                "head_dim": 64,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
+                "recent_window_blocks": 8,
+                "candidate_budget_blocks": 16,
+                "active_block_ratio": 0.64,
+                "estimated_kv_reduction": 0.36,
+                "exact_top_recall_in_active": 0.97,
+            },
+            {
+                "model_name": "Qwen/Qwen2.5-0.5B",
+                "extraction_mode": "separate_qk_proj",
+                "qk_space": "pre_rope_projection",
+                "sketch_type": "tridiagonal_sign",
+                "sketch_dim": 32,
+                "head_dim": 64,
+                "effective_sketch_dim": 32,
+                "sketch_compression_ratio": 0.5,
+                "is_full_dimensional_sketch": False,
+                "recent_window_blocks": 8,
+                "candidate_budget_blocks": 16,
+                "active_block_ratio": 0.65,
+                "estimated_kv_reduction": 0.35,
+                "exact_top_recall_in_active": 0.96,
+            },
         ],
     )
 
@@ -172,7 +238,7 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     )
 
     summary = json.loads(proc.stdout)
-    assert summary["hf_rows"] == 4
+    assert summary["hf_rows"] == 6
     assert output_path.exists()
     report = output_path.read_text(encoding="utf-8")
     assert "Kivo-VD Offline Benchmark Report" in report
@@ -184,7 +250,7 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     assert "Runtime post-RoPE attention behavior may differ" in report
     assert "Active KV Policy Simulation Summary" in report
     assert "SRHT should be compared against CountSketch" in report
-    assert "`bidiagonal_sign` rows are experimental" in report
+    assert "structured sign-mixing rows" in report
     assert "Full-Dimensional Sketch Caveat" in report
     assert "should not be treated as compressed KV sketches" in report
     assert "Conservative Recommended Policy" in report
@@ -194,6 +260,8 @@ def test_benchmark_report_generator_writes_markdown(tmp_path: Path) -> None:
     assert "| count_sketch | 64 | 4 | 8 |" in report
     assert "| srht | 64 | 8 | 16 |" in report
     assert "| bidiagonal_sign | 32 | 8 | 16 |" in report
+    assert "| bidiagonal_sign_subsample | 32 | 8 | 16 |" in report
+    assert "| tridiagonal_sign | 32 | 8 | 16 |" in report
 
 
 def test_benchmark_report_generator_missing_input_is_clear(

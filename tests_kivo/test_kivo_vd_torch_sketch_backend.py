@@ -11,9 +11,11 @@ torch = pytest.importorskip("torch")
 
 from vllm.v1.core.kivo_vd_torch_sketch_backend import (  # noqa: E402
     TorchBidiagonalSignBackend,
+    TorchBidiagonalSignSubsampleBackend,
     TorchCountSketchBackend,
     TorchRandomProjectionBackend,
     TorchSRHTBackend,
+    TorchTridiagonalSignBackend,
     make_torch_sketch_backend,
 )
 
@@ -29,10 +31,18 @@ def test_torch_backend_factory_works() -> None:
     bidiag = make_torch_sketch_backend(
         "bidiagonal_sign", 10, 4, 1, "cpu", torch.float32
     )
+    bidiag_sub = make_torch_sketch_backend(
+        "bidiagonal_sign_subsample", 10, 4, 1, "cpu", torch.float32
+    )
+    tridiag = make_torch_sketch_backend(
+        "tridiagonal_sign", 10, 4, 1, "cpu", torch.float32
+    )
     assert isinstance(count, TorchCountSketchBackend)
     assert isinstance(rp, TorchRandomProjectionBackend)
     assert isinstance(srht, TorchSRHTBackend)
     assert isinstance(bidiag, TorchBidiagonalSignBackend)
+    assert isinstance(bidiag_sub, TorchBidiagonalSignSubsampleBackend)
+    assert isinstance(tridiag, TorchTridiagonalSignBackend)
 
 
 def test_torch_count_sketch_deterministic_same_seed() -> None:
@@ -67,6 +77,16 @@ def test_torch_bidiagonal_sign_deterministic_same_seed() -> None:
     assert torch.allclose(a.sketch_query(x), b.sketch_query(x))
 
 
+def test_torch_phase6_1_structured_variants_deterministic_same_seed() -> None:
+    x = torch.arange(10, dtype=torch.float32)
+    for cls in (TorchBidiagonalSignSubsampleBackend, TorchTridiagonalSignBackend):
+        a = cls(10, 4, 9, "cpu", torch.float32)
+        b = cls(10, 4, 9, "cpu", torch.float32)
+        assert torch.equal(a.signs, b.signs)
+        assert torch.equal(a.sampled_indices, b.sampled_indices)
+        assert torch.allclose(a.sketch_query(x), b.sketch_query(x))
+
+
 def test_torch_backend_output_shapes() -> None:
     backend = TorchCountSketchBackend(8, 4, 3, "cpu", torch.float32)
     keys = torch.randn(16, 8)
@@ -95,7 +115,7 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
             sys.executable,
             str(script),
             "--sketch-types",
-            "bidiagonal_sign",
+            "bidiagonal_sign_subsample,tridiagonal_sign",
             "--sketch-dims",
             "8",
             "--num-tokens",
@@ -123,9 +143,16 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
     )
 
     summary = json.loads(proc.stdout)
-    assert summary["num_rows"] == 1
-    row = json.loads(output.read_text(encoding="utf-8").strip())
-    assert row["sketch_type"] == "bidiagonal_sign"
+    assert summary["num_rows"] == 2
+    rows = [
+        json.loads(line)
+        for line in output.read_text(encoding="utf-8").splitlines()
+    ]
+    assert {row["sketch_type"] for row in rows} == {
+        "bidiagonal_sign_subsample",
+        "tridiagonal_sign",
+    }
+    row = rows[0]
     assert row["sketch_dim"] == 8
     assert row["topk_blocks"] == 3
     assert row["block_score_mode"] == "mean"

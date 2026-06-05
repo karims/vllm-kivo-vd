@@ -11,6 +11,8 @@ class KivoVDSketchType(str, Enum):
     COUNT_SKETCH = "count_sketch"
     SRHT = "srht"
     BIDIAGONAL_SIGN = "bidiagonal_sign"
+    BIDIAGONAL_SIGN_SUBSAMPLE = "bidiagonal_sign_subsample"
+    TRIDIAGONAL_SIGN = "tridiagonal_sign"
     BIDIAGONAL = "bidiagonal"
     VARIATION_DIMINISHING = "variation_diminishing"
 
