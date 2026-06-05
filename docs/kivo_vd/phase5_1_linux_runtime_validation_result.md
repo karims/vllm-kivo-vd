@@ -3,6 +3,10 @@
 Phase 5.1 records the first successful real vLLM GPU runtime dry-run
 validation for Kivo-VD and documents the reproducible RunPod setup.
 
+For the follow-up RunPod benchmark summary that connects this runtime dry-run
+with offline sketch/policy evidence, see
+[Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md).
+
 This result is still dry-run only. It does not change attention behavior, block
 tables, slot mapping, attention metadata, kernels, model architecture, training,
 or tokenizer behavior.

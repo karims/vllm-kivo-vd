@@ -9,6 +9,16 @@ Recommended reading order:
 
 - [Phase 3.7: Status and Next Steps](phase3_7_status_and_next_steps.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
+- [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
+
+## Current Evidence Snapshot
+
+| evidence | status |
+| --- | --- |
+| Real vLLM GPU dry-run | `gpt2` RunPod validation passed with matching greedy output |
+| Dry-run event export | 97 lifecycle/routing events exported and analyzed |
+| Offline active-KV policy estimate | conservative estimate about `17.7%` active-KV reduction at about `99.8%` exact-top-block recall |
+| Runtime memory reduction | not measured or claimed yet |
 
 ## vLLM KV Runtime Map And Integration Plan
 
