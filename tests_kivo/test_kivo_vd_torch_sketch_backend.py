@@ -130,6 +130,10 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
             "3",
             "--block-score-mode",
             "mean",
+            "--structured-alpha",
+            "0.75",
+            "--structured-coordinate-strategy",
+            "stride",
             "--warmup",
             "1",
             "--iters",
@@ -156,6 +160,8 @@ def test_torch_benchmark_script_smoke(tmp_path: Path) -> None:
     assert row["sketch_dim"] == 8
     assert row["topk_blocks"] == 3
     assert row["block_score_mode"] == "mean"
+    assert row["structured_alpha"] == 0.75
+    assert row["structured_coordinate_strategy"] == "stride"
     assert "key_sketch_build_ms" in row
     assert "block_aggregation_ms" in row
     assert "query_sketch_ms" in row

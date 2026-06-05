@@ -119,6 +119,71 @@ def test_phase6_1_structured_variants_reject_oversized_sketch_dim() -> None:
             raise AssertionError("Expected ValueError for oversized sketch_dim")
 
 
+def test_structured_coordinate_strategies_are_deterministic() -> None:
+    m = _load_module()
+    expected = {
+        "stride": [0, 3, 6, 9],
+        "low": [0, 1, 2, 3],
+        "high": [6, 7, 8, 9],
+        "alternating": [0, 1, 8, 9],
+    }
+    for strategy, coords in expected.items():
+        selected = m.select_structured_coordinates(
+            input_dim=10,
+            sketch_dim=4,
+            seed=123,
+            strategy=strategy,
+        )
+        assert selected.tolist() == coords
+
+    a = m.select_structured_coordinates(10, 4, 123, "uniform")
+    b = m.select_structured_coordinates(10, 4, 123, "uniform")
+    assert a.shape == (4,)
+    assert np.array_equal(a, b)
+
+
+def test_structured_alpha_changes_neighbor_mixing_output() -> None:
+    m = _load_module()
+    x = np.arange(1, 11, dtype=np.float64)
+    spec_zero = m.make_bidiagonal_sign_subsample(
+        input_dim=10,
+        sketch_dim=4,
+        seed=5,
+        alpha=0.0,
+        coordinate_strategy="high",
+    )
+    spec_one = m.make_bidiagonal_sign_subsample(
+        input_dim=10,
+        sketch_dim=4,
+        seed=5,
+        alpha=1.0,
+        coordinate_strategy="high",
+    )
+    assert not np.allclose(
+        m.apply_bidiagonal_sign_subsample(x, spec_zero),
+        m.apply_bidiagonal_sign_subsample(x, spec_one),
+    )
+
+
+def test_structured_defaults_match_prior_bidiagonal_behavior() -> None:
+    m = _load_module()
+    x = np.arange(10, dtype=np.float64)
+    prior = m.make_bidiagonal_sign(input_dim=10, sketch_dim=4, seed=5)
+    explicit = m.make_bidiagonal_sign(
+        input_dim=10,
+        sketch_dim=4,
+        seed=5,
+        alpha=0.5,
+        coordinate_strategy="uniform",
+    )
+    assert np.array_equal(prior.signs, explicit.signs)
+    assert np.array_equal(prior.sampled_indices, explicit.sampled_indices)
+    assert np.allclose(
+        m.apply_bidiagonal_sign(x, prior),
+        m.apply_bidiagonal_sign(x, explicit),
+    )
+
+
 def test_exact_score_shape() -> None:
     m = _load_module()
     q = np.array([1.0, 2.0, 3.0])

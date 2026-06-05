@@ -31,6 +31,7 @@ class BidiagonalSignSpec:
     signs: np.ndarray
     sampled_indices: np.ndarray
     alpha: float = 0.5
+    coordinate_strategy: str = "uniform"
 
 
 @dataclass(slots=True)
@@ -41,6 +42,7 @@ class TridiagonalSignSpec:
     sampled_indices: np.ndarray
     alpha_left: float = 0.25
     alpha_right: float = 0.25
+    coordinate_strategy: str = "uniform"
 
 
 def _next_power_of_two(value: int) -> int:
@@ -63,6 +65,59 @@ def _fwht(x: np.ndarray) -> np.ndarray:
         reshaped[..., :, h : h * 2] = left - right
         h *= 2
     return out
+
+
+def select_structured_coordinates(
+    input_dim: int,
+    sketch_dim: int,
+    seed: int,
+    strategy: str = "uniform",
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    if input_dim <= 0 or sketch_dim <= 0:
+        raise ValueError("input_dim and sketch_dim must be positive")
+    if sketch_dim > input_dim:
+        raise ValueError(
+            f"sketch_dim={sketch_dim} must be <= input_dim={input_dim}"
+        )
+    if strategy == "uniform":
+        generator = rng if rng is not None else np.random.default_rng(seed)
+        coords = generator.choice(input_dim, size=sketch_dim, replace=False)
+    elif strategy == "stride":
+        coords = np.round(
+            np.linspace(0, input_dim - 1, sketch_dim)
+        ).astype(np.int64)
+    elif strategy == "low":
+        coords = np.arange(sketch_dim, dtype=np.int64)
+    elif strategy == "high":
+        coords = np.arange(input_dim - sketch_dim, input_dim, dtype=np.int64)
+    elif strategy == "alternating":
+        coords_list: list[int] = []
+        low = 0
+        high = input_dim - 1
+        take_low = True
+        while len(coords_list) < sketch_dim:
+            if take_low:
+                candidate = low
+                low += 1
+            else:
+                candidate = high
+                high -= 1
+            take_low = not take_low
+            if candidate not in coords_list:
+                coords_list.append(candidate)
+        coords = np.array(coords_list, dtype=np.int64)
+    else:
+        raise ValueError(
+            "Unknown coordinate strategy "
+            f"{strategy!r}; expected one of "
+            "['uniform', 'stride', 'low', 'high', 'alternating']"
+        )
+    if np.unique(coords).shape[0] != sketch_dim:
+        raise ValueError(
+            f"coordinate strategy {strategy!r} produced duplicate coordinates"
+        )
+    return np.sort(coords.astype(np.int64))
 
 
 def generate_synthetic_keys_and_query(
@@ -214,6 +269,7 @@ def make_bidiagonal_sign(
     sketch_dim: int,
     seed: int,
     alpha: float = 0.5,
+    coordinate_strategy: str = "uniform",
 ) -> BidiagonalSignSpec:
     if input_dim <= 0 or sketch_dim <= 0:
         raise ValueError("input_dim and sketch_dim must be positive")
@@ -223,14 +279,20 @@ def make_bidiagonal_sign(
         )
     rng = np.random.default_rng(seed)
     signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim).astype(np.float64)
-    sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
-    sampled_indices = np.sort(sampled_indices.astype(np.int64))
+    sampled_indices = select_structured_coordinates(
+        input_dim,
+        sketch_dim,
+        seed,
+        strategy=coordinate_strategy,
+        rng=rng,
+    )
     return BidiagonalSignSpec(
         input_dim=input_dim,
         sketch_dim=sketch_dim,
         signs=signs,
         sampled_indices=sampled_indices,
         alpha=float(alpha),
+        coordinate_strategy=coordinate_strategy,
     )
 
 
@@ -239,8 +301,15 @@ def make_bidiagonal_sign_subsample(
     sketch_dim: int,
     seed: int,
     alpha: float = 0.5,
+    coordinate_strategy: str = "uniform",
 ) -> BidiagonalSignSpec:
-    return make_bidiagonal_sign(input_dim, sketch_dim, seed, alpha)
+    return make_bidiagonal_sign(
+        input_dim,
+        sketch_dim,
+        seed,
+        alpha,
+        coordinate_strategy,
+    )
 
 
 def make_tridiagonal_sign(
@@ -249,6 +318,7 @@ def make_tridiagonal_sign(
     seed: int,
     alpha_left: float = 0.25,
     alpha_right: float = 0.25,
+    coordinate_strategy: str = "uniform",
 ) -> TridiagonalSignSpec:
     if input_dim <= 0 or sketch_dim <= 0:
         raise ValueError("input_dim and sketch_dim must be positive")
@@ -258,8 +328,13 @@ def make_tridiagonal_sign(
         )
     rng = np.random.default_rng(seed)
     signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim).astype(np.float64)
-    sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
-    sampled_indices = np.sort(sampled_indices.astype(np.int64))
+    sampled_indices = select_structured_coordinates(
+        input_dim,
+        sketch_dim,
+        seed,
+        strategy=coordinate_strategy,
+        rng=rng,
+    )
     return TridiagonalSignSpec(
         input_dim=input_dim,
         sketch_dim=sketch_dim,
@@ -267,6 +342,7 @@ def make_tridiagonal_sign(
         sampled_indices=sampled_indices,
         alpha_left=float(alpha_left),
         alpha_right=float(alpha_right),
+        coordinate_strategy=coordinate_strategy,
     )
 
 
@@ -391,6 +467,8 @@ def compute_sketched_scores(
     sketch_type: str,
     sketch_dim: int,
     seed: int,
+    structured_alpha: float | None = None,
+    structured_coordinate_strategy: str = "uniform",
 ) -> np.ndarray:
     keys_arr = np.asarray(keys, dtype=np.float64)
     query_arr = np.asarray(query, dtype=np.float64)
@@ -409,15 +487,35 @@ def compute_sketched_scores(
         keys_s = apply_srht(keys_arr, spec)
         query_s = apply_srht(query_arr, spec)
     elif sketch_type == "bidiagonal_sign":
-        spec = make_bidiagonal_sign(input_dim, sketch_dim, seed)
+        spec = make_bidiagonal_sign(
+            input_dim,
+            sketch_dim,
+            seed,
+            alpha=0.5 if structured_alpha is None else structured_alpha,
+            coordinate_strategy=structured_coordinate_strategy,
+        )
         keys_s = apply_bidiagonal_sign(keys_arr, spec)
         query_s = apply_bidiagonal_sign(query_arr, spec)
     elif sketch_type == "bidiagonal_sign_subsample":
-        spec = make_bidiagonal_sign_subsample(input_dim, sketch_dim, seed)
+        spec = make_bidiagonal_sign_subsample(
+            input_dim,
+            sketch_dim,
+            seed,
+            alpha=0.5 if structured_alpha is None else structured_alpha,
+            coordinate_strategy=structured_coordinate_strategy,
+        )
         keys_s = apply_bidiagonal_sign_subsample(keys_arr, spec)
         query_s = apply_bidiagonal_sign_subsample(query_arr, spec)
     elif sketch_type == "tridiagonal_sign":
-        spec = make_tridiagonal_sign(input_dim, sketch_dim, seed)
+        alpha = 0.25 if structured_alpha is None else structured_alpha
+        spec = make_tridiagonal_sign(
+            input_dim,
+            sketch_dim,
+            seed,
+            alpha_left=alpha,
+            alpha_right=alpha,
+            coordinate_strategy=structured_coordinate_strategy,
+        )
         keys_s = apply_tridiagonal_sign(keys_arr, spec)
         query_s = apply_tridiagonal_sign(query_arr, spec)
     else:

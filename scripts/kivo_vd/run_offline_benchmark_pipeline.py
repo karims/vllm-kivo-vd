@@ -66,6 +66,10 @@ def build_stage_commands(
     policy_output = run_dir / "active_kv_policy_simulation.jsonl"
     report_output = run_dir / "kivo_vd_benchmark_report.md"
     torch_output = run_dir / "torch_sketch_benchmark.jsonl"
+    structured_alpha = getattr(args, "structured_alpha", None)
+    structured_coordinate_strategy = getattr(
+        args, "structured_coordinate_strategy", "uniform"
+    )
 
     hf_command = [
         sys.executable,
@@ -82,6 +86,8 @@ def build_stage_commands(
         args.heads,
         "--extraction-mode",
         args.extraction_mode,
+        "--structured-coordinate-strategy",
+        structured_coordinate_strategy,
         "--block-size",
         str(args.block_size),
         "--topk-blocks",
@@ -94,6 +100,8 @@ def build_stage_commands(
     ]
     if prompt is not None:
         hf_command.extend(["--prompt", prompt])
+    if structured_alpha is not None:
+        hf_command.extend(["--structured-alpha", str(structured_alpha)])
 
     commands = [
         {
@@ -135,23 +143,28 @@ def build_stage_commands(
         },
     ]
     if args.run_torch_benchmark:
+        torch_command = [
+            sys.executable,
+            "scripts/kivo_vd/benchmark_torch_sketch_backend.py",
+            "--sketch-types",
+            args.sketch_types,
+            "--sketch-dims",
+            args.sketch_dims,
+            "--block-size",
+            str(args.block_size),
+            "--topk-blocks",
+            str(args.topk_blocks),
+            "--structured-coordinate-strategy",
+            structured_coordinate_strategy,
+            "--output",
+            str(torch_output),
+        ]
+        if structured_alpha is not None:
+            torch_command.extend(["--structured-alpha", str(structured_alpha)])
         commands.append(
             {
                 "name": "torch_sketch_benchmark",
-                "command": [
-                    sys.executable,
-                    "scripts/kivo_vd/benchmark_torch_sketch_backend.py",
-                    "--sketch-types",
-                    args.sketch_types,
-                    "--sketch-dims",
-                    args.sketch_dims,
-                    "--block-size",
-                    str(args.block_size),
-                    "--topk-blocks",
-                    str(args.topk_blocks),
-                    "--output",
-                    str(torch_output),
-                ],
+                "command": torch_command,
                 "output": str(torch_output),
             }
         )
@@ -210,6 +223,12 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--sketch-dims", default="32,64,128")
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
+    )
     parser.add_argument("--layers", default="0,1,2,3")
     parser.add_argument("--heads", default="0,1,2,3")
     parser.add_argument(
@@ -246,6 +265,8 @@ def build_initial_summary(
             "prompt_mode": args.prompt_mode,
             "sketch_types": args.sketch_types,
             "sketch_dims": args.sketch_dims,
+            "structured_alpha": args.structured_alpha,
+            "structured_coordinate_strategy": args.structured_coordinate_strategy,
             "layers": args.layers,
             "heads": args.heads,
             "extraction_mode": args.extraction_mode,

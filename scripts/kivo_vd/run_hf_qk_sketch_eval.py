@@ -320,6 +320,12 @@ def _parse_args() -> argparse.Namespace:
         default="random_projection",
     )
     parser.add_argument("--sketch-dim", type=int, default=64)
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
+    )
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk-blocks", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
@@ -442,6 +448,8 @@ def _evaluate_at_query_position(
     topk_blocks: int,
     include_ranked_blocks: bool = False,
     extraction_mode: str = "auto",
+    structured_alpha: float | None = None,
+    structured_coordinate_strategy: str = "uniform",
 ) -> dict[str, Any]:
     extraction = _extract_head_qk(
         model=model,
@@ -463,6 +471,8 @@ def _evaluate_at_query_position(
         sketch_type=sketch_type,
         sketch_dim=sketch_dim,
         seed=seed,
+        structured_alpha=structured_alpha,
+        structured_coordinate_strategy=structured_coordinate_strategy,
     )
 
     token_topk = min(keys.shape[0], max(1, topk_blocks * block_size))
@@ -504,6 +514,8 @@ def _evaluate_at_query_position(
         "block_score_correlation": float(block_score_corr),
         "exact_top_block_ids": exact_top_blocks.tolist(),
         "approx_top_block_ids": approx_top_blocks.tolist(),
+        "structured_alpha": structured_alpha,
+        "structured_coordinate_strategy": structured_coordinate_strategy,
         **_sketch_compression_metadata(
             head_dim=head_dim,
             sketch_type=sketch_type,
@@ -576,6 +588,8 @@ def main() -> int:
             topk_blocks=args.topk_blocks,
             include_ranked_blocks=args.include_ranked_blocks,
             extraction_mode=args.extraction_mode,
+            structured_alpha=args.structured_alpha,
+            structured_coordinate_strategy=args.structured_coordinate_strategy,
         )
         payload = {
             "model_name": args.model_name,

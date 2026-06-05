@@ -40,6 +40,12 @@ def main() -> int:
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk", type=int, default=32)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
+    )
     parser.add_argument(
         "--mode",
         choices=["gaussian", "clustered", "smooth_sequence", "needle_blocks", "mixed"],
@@ -64,6 +70,8 @@ def main() -> int:
         sketch_type=args.sketch_type,
         sketch_dim=args.sketch_dim,
         seed=args.seed,
+        structured_alpha=args.structured_alpha,
+        structured_coordinate_strategy=args.structured_coordinate_strategy,
     )
 
     exact_topk = math.topk_indices(exact_scores, args.topk)
@@ -109,6 +117,10 @@ def main() -> int:
                 "block_size": args.block_size,
                 "topk": args.topk,
                 "mode": args.mode,
+                "structured_alpha": args.structured_alpha,
+                "structured_coordinate_strategy": (
+                    args.structured_coordinate_strategy
+                ),
                 "token_topk_recall": token_recall,
                 "block_topk_recall": block_recall,
                 "block_recall_at_2x_budget": block_recall_2x,

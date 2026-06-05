@@ -150,6 +150,12 @@ def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser.add_argument("--sketch-dim", type=int, default=64)
     parser.add_argument("--sketch-types", default=None)
     parser.add_argument("--sketch-dims", default=None)
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
+    )
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--topk-blocks", type=int, default=4)
     parser.add_argument("--max-tokens", type=int, default=900)
@@ -313,6 +319,10 @@ def main() -> int:
                                 topk_blocks=args.topk_blocks,
                                 include_ranked_blocks=args.include_ranked_blocks,
                                 extraction_mode=args.extraction_mode,
+                                structured_alpha=args.structured_alpha,
+                                structured_coordinate_strategy=(
+                                    args.structured_coordinate_strategy
+                                ),
                             )
                             row = {
                                 "model_name": args.model_name,
@@ -335,6 +345,10 @@ def main() -> int:
                                 "block_size": args.block_size,
                                 "topk_blocks": args.topk_blocks,
                                 "seed": args.seed,
+                                "structured_alpha": args.structured_alpha,
+                                "structured_coordinate_strategy": (
+                                    args.structured_coordinate_strategy
+                                ),
                             }
                             row.update(metrics)
                             f.write(json.dumps(row, separators=(",", ":")) + "\n")

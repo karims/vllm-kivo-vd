@@ -51,6 +51,7 @@ Recommended reading order:
 - [Phase 4A.5: Qwen SRHT Attempt](phase4a_5_qwen_srht_results.md)
 - [Phase 6.0: Structured Linear Sketches](phase6_0_structured_linear_sketches.md)
 - [Phase 6.1: Structured Sketch Variants](phase6_1_structured_sketch_variants.md)
+- [Phase 6.2: Structured Parameter Sweep](phase6_2_structured_parameter_sweep.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

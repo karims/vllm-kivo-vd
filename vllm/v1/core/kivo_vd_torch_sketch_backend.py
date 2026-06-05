@@ -30,6 +30,51 @@ def _torch_fwht(x: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def _select_structured_coordinates(
+    input_dim: int,
+    sketch_dim: int,
+    seed: int,
+    strategy: str,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    if input_dim <= 0 or sketch_dim <= 0:
+        raise ValueError("input_dim and sketch_dim must be positive")
+    if sketch_dim > input_dim:
+        raise ValueError("sketch_dim must be <= input_dim")
+    if strategy == "uniform":
+        gen = generator
+        if gen is None:
+            gen = torch.Generator(device="cpu")
+            gen.manual_seed(seed)
+        coords = torch.randperm(input_dim, generator=gen, device="cpu")[:sketch_dim]
+    elif strategy == "stride":
+        coords = torch.linspace(0, input_dim - 1, sketch_dim).round().to(torch.long)
+    elif strategy == "low":
+        coords = torch.arange(sketch_dim, dtype=torch.long)
+    elif strategy == "high":
+        coords = torch.arange(input_dim - sketch_dim, input_dim, dtype=torch.long)
+    elif strategy == "alternating":
+        coords_list: list[int] = []
+        low = 0
+        high = input_dim - 1
+        take_low = True
+        while len(coords_list) < sketch_dim:
+            candidate = low if take_low else high
+            low += int(take_low)
+            high -= int(not take_low)
+            take_low = not take_low
+            if candidate not in coords_list:
+                coords_list.append(candidate)
+        coords = torch.tensor(coords_list, dtype=torch.long)
+    else:
+        raise ValueError(f"Unknown coordinate strategy: {strategy}")
+    if torch.unique(coords).numel() != sketch_dim:
+        raise ValueError(
+            f"coordinate strategy {strategy!r} produced duplicate coordinates"
+        )
+    return coords.sort().values
+
+
 class TorchKivoSketchBackend(ABC):
     """Torch-only offline sketch backend for Phase 2.6 benchmarking."""
 
@@ -253,6 +298,7 @@ class TorchBidiagonalSignBackend(TorchKivoSketchBackend):
         dtype: torch.dtype,
         block_score_mode: str = "max",
         alpha: float = 0.5,
+        coordinate_strategy: str = "uniform",
     ) -> None:
         super().__init__(
             input_dim, sketch_dim, seed, device, dtype, block_score_mode
@@ -270,12 +316,15 @@ class TorchBidiagonalSignBackend(TorchKivoSketchBackend):
             device="cpu",
         )
         self.signs = (signs.to(dtype) * 2 - 1).to(self.device)
-        self.sampled_indices = torch.randperm(
+        self.sampled_indices = _select_structured_coordinates(
             input_dim,
-            generator=generator,
-            device="cpu",
-        )[:sketch_dim].sort().values.to(self.device)
+            sketch_dim,
+            seed,
+            coordinate_strategy,
+            generator,
+        ).to(self.device)
         self.alpha = float(alpha)
+        self.coordinate_strategy = coordinate_strategy
         self.sample_scale = (float(input_dim) / float(sketch_dim)) ** 0.5
 
     def _mix(self, x: torch.Tensor) -> torch.Tensor:
@@ -322,6 +371,7 @@ class TorchTridiagonalSignBackend(TorchKivoSketchBackend):
         block_score_mode: str = "max",
         alpha_left: float = 0.25,
         alpha_right: float = 0.25,
+        coordinate_strategy: str = "uniform",
     ) -> None:
         super().__init__(
             input_dim, sketch_dim, seed, device, dtype, block_score_mode
@@ -339,13 +389,16 @@ class TorchTridiagonalSignBackend(TorchKivoSketchBackend):
             device="cpu",
         )
         self.signs = (signs.to(dtype) * 2 - 1).to(self.device)
-        self.sampled_indices = torch.randperm(
+        self.sampled_indices = _select_structured_coordinates(
             input_dim,
-            generator=generator,
-            device="cpu",
-        )[:sketch_dim].sort().values.to(self.device)
+            sketch_dim,
+            seed,
+            coordinate_strategy,
+            generator,
+        ).to(self.device)
         self.alpha_left = float(alpha_left)
         self.alpha_right = float(alpha_right)
+        self.coordinate_strategy = coordinate_strategy
         self.sample_scale = (float(input_dim) / float(sketch_dim)) ** 0.5
 
     def _mix(self, x: torch.Tensor) -> torch.Tensor:
@@ -386,6 +439,8 @@ def make_torch_sketch_backend(
     device: torch.device | str,
     dtype: torch.dtype,
     block_score_mode: str = "max",
+    structured_alpha: float | None = None,
+    structured_coordinate_strategy: str = "uniform",
 ) -> TorchKivoSketchBackend:
     normalized = KivoVDSketchType(sketch_type)
     if normalized == KivoVDSketchType.COUNT_SKETCH:
@@ -402,14 +457,37 @@ def make_torch_sketch_backend(
         )
     if normalized == KivoVDSketchType.BIDIAGONAL_SIGN:
         return TorchBidiagonalSignBackend(
-            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+            input_dim,
+            sketch_dim,
+            seed,
+            device,
+            dtype,
+            block_score_mode,
+            alpha=0.5 if structured_alpha is None else structured_alpha,
+            coordinate_strategy=structured_coordinate_strategy,
         )
     if normalized == KivoVDSketchType.BIDIAGONAL_SIGN_SUBSAMPLE:
         return TorchBidiagonalSignSubsampleBackend(
-            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+            input_dim,
+            sketch_dim,
+            seed,
+            device,
+            dtype,
+            block_score_mode,
+            alpha=0.5 if structured_alpha is None else structured_alpha,
+            coordinate_strategy=structured_coordinate_strategy,
         )
     if normalized == KivoVDSketchType.TRIDIAGONAL_SIGN:
+        alpha = 0.25 if structured_alpha is None else structured_alpha
         return TorchTridiagonalSignBackend(
-            input_dim, sketch_dim, seed, device, dtype, block_score_mode
+            input_dim,
+            sketch_dim,
+            seed,
+            device,
+            dtype,
+            block_score_mode,
+            alpha_left=alpha,
+            alpha_right=alpha,
+            coordinate_strategy=structured_coordinate_strategy,
         )
     raise ValueError(f"Unsupported torch sketch backend type: {normalized.value}")

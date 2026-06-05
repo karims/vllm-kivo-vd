@@ -32,6 +32,7 @@ class BidiagonalSignSpec:
     signs: np.ndarray
     sampled_indices: np.ndarray
     alpha: float = 0.5
+    coordinate_strategy: str = "uniform"
 
 
 @dataclass(slots=True)
@@ -42,6 +43,7 @@ class TridiagonalSignSpec:
     sampled_indices: np.ndarray
     alpha_left: float = 0.25
     alpha_right: float = 0.25
+    coordinate_strategy: str = "uniform"
 
 
 def _next_power_of_two(value: int) -> int:
@@ -64,6 +66,50 @@ def _fwht(x: np.ndarray) -> np.ndarray:
         reshaped[..., :, h : h * 2] = left - right
         h *= 2
     return out
+
+
+def select_structured_coordinates(
+    input_dim: int,
+    sketch_dim: int,
+    seed: int,
+    strategy: str = "uniform",
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    if input_dim <= 0 or sketch_dim <= 0:
+        raise ValueError("input_dim and sketch_dim must be positive")
+    if sketch_dim > input_dim:
+        raise ValueError("sketch_dim must be <= input_dim")
+    if strategy == "uniform":
+        generator = rng if rng is not None else np.random.default_rng(seed)
+        coords = generator.choice(input_dim, size=sketch_dim, replace=False)
+    elif strategy == "stride":
+        coords = np.round(
+            np.linspace(0, input_dim - 1, sketch_dim)
+        ).astype(np.int64)
+    elif strategy == "low":
+        coords = np.arange(sketch_dim, dtype=np.int64)
+    elif strategy == "high":
+        coords = np.arange(input_dim - sketch_dim, input_dim, dtype=np.int64)
+    elif strategy == "alternating":
+        coords_list: list[int] = []
+        low = 0
+        high = input_dim - 1
+        take_low = True
+        while len(coords_list) < sketch_dim:
+            candidate = low if take_low else high
+            low += int(take_low)
+            high -= int(not take_low)
+            take_low = not take_low
+            if candidate not in coords_list:
+                coords_list.append(candidate)
+        coords = np.array(coords_list, dtype=np.int64)
+    else:
+        raise ValueError(f"Unknown coordinate strategy: {strategy}")
+    if np.unique(coords).shape[0] != sketch_dim:
+        raise ValueError(
+            f"coordinate strategy {strategy!r} produced duplicate coordinates"
+        )
+    return np.sort(coords.astype(np.int64))
 
 
 class KivoVDSketchBackend(ABC):
@@ -211,6 +257,14 @@ class SRHTBackend(KivoVDSketchBackend):
 class BidiagonalSignBackend(KivoVDSketchBackend):
     sketch_type = KivoVDSketchType.BIDIAGONAL_SIGN
 
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        coordinate_strategy: str = "uniform",
+    ) -> None:
+        self.alpha = float(alpha)
+        self.coordinate_strategy = coordinate_strategy
+
     def make_params(
         self, input_dim: int, sketch_dim: int, seed: int
     ) -> BidiagonalSignSpec:
@@ -220,12 +274,20 @@ class BidiagonalSignBackend(KivoVDSketchBackend):
             raise ValueError("sketch_dim must be <= input_dim for bidiagonal_sign")
         rng = np.random.default_rng(seed)
         signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim)
-        sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
+        sampled_indices = select_structured_coordinates(
+            input_dim,
+            sketch_dim,
+            seed,
+            strategy=self.coordinate_strategy,
+            rng=rng,
+        )
         return BidiagonalSignSpec(
             input_dim=input_dim,
             sketch_dim=sketch_dim,
             signs=signs.astype(np.float64),
-            sampled_indices=np.sort(sampled_indices.astype(np.int64)),
+            sampled_indices=sampled_indices,
+            alpha=self.alpha,
+            coordinate_strategy=self.coordinate_strategy,
         )
 
     def sketch_vector(
@@ -278,6 +340,16 @@ class BidiagonalSignSubsampleBackend(BidiagonalSignBackend):
 class TridiagonalSignBackend(KivoVDSketchBackend):
     sketch_type = KivoVDSketchType.TRIDIAGONAL_SIGN
 
+    def __init__(
+        self,
+        alpha_left: float = 0.25,
+        alpha_right: float = 0.25,
+        coordinate_strategy: str = "uniform",
+    ) -> None:
+        self.alpha_left = float(alpha_left)
+        self.alpha_right = float(alpha_right)
+        self.coordinate_strategy = coordinate_strategy
+
     def make_params(
         self, input_dim: int, sketch_dim: int, seed: int
     ) -> TridiagonalSignSpec:
@@ -287,12 +359,21 @@ class TridiagonalSignBackend(KivoVDSketchBackend):
             raise ValueError("sketch_dim must be <= input_dim for tridiagonal_sign")
         rng = np.random.default_rng(seed)
         signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim)
-        sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
+        sampled_indices = select_structured_coordinates(
+            input_dim,
+            sketch_dim,
+            seed,
+            strategy=self.coordinate_strategy,
+            rng=rng,
+        )
         return TridiagonalSignSpec(
             input_dim=input_dim,
             sketch_dim=sketch_dim,
             signs=signs.astype(np.float64),
-            sampled_indices=np.sort(sampled_indices.astype(np.int64)),
+            sampled_indices=sampled_indices,
+            alpha_left=self.alpha_left,
+            alpha_right=self.alpha_right,
+            coordinate_strategy=self.coordinate_strategy,
         )
 
     def sketch_vector(

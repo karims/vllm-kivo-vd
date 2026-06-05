@@ -68,6 +68,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--topk-blocks", type=int, default=16)
     parser.add_argument("--num-queries", type=int, default=32)
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--warmup", type=int, default=3)
@@ -94,6 +100,8 @@ def _run_one(
         device=device,
         dtype=dtype,
         block_score_mode=args.block_score_mode,
+        structured_alpha=args.structured_alpha,
+        structured_coordinate_strategy=args.structured_coordinate_strategy,
     )
     generator = torch.Generator(device="cpu")
     generator.manual_seed(123)
@@ -183,6 +191,8 @@ def _run_one(
         "num_queries": args.num_queries,
         "topk_blocks": args.topk_blocks,
         "block_score_mode": args.block_score_mode,
+        "structured_alpha": args.structured_alpha,
+        "structured_coordinate_strategy": args.structured_coordinate_strategy,
         "device": str(device),
         "dtype": str(dtype).replace("torch.", ""),
         "warmup": args.warmup,

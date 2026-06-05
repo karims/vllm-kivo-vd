@@ -36,6 +36,8 @@ def _run_one(
     topk_blocks: int,
     seed: int,
     mode: str,
+    structured_alpha: float | None,
+    structured_coordinate_strategy: str,
 ) -> dict[str, Any]:
     keys, query = math.generate_synthetic_keys_and_query(
         num_tokens=num_tokens,
@@ -53,6 +55,8 @@ def _run_one(
         sketch_type=sketch_type,
         sketch_dim=sketch_dim,
         seed=seed,
+        structured_alpha=structured_alpha,
+        structured_coordinate_strategy=structured_coordinate_strategy,
     )
     runtime_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -94,6 +98,8 @@ def _run_one(
         "topk_blocks": topk_blocks,
         "seed": seed,
         "mode": mode,
+        "structured_alpha": structured_alpha,
+        "structured_coordinate_strategy": structured_coordinate_strategy,
         "token_topk_recall": float(token_recall),
         "block_topk_recall": float(block_recall),
         "block_recall_at_2x_budget": float(block_recall_2x),
@@ -146,6 +152,12 @@ def _parse_args() -> argparse.Namespace:
             "random_projection,count_sketch,srht. Experimental values such as "
             "bidiagonal_sign must be requested explicitly."
         ),
+    )
+    parser.add_argument("--structured-alpha", type=float, default=None)
+    parser.add_argument(
+        "--structured-coordinate-strategy",
+        choices=["uniform", "stride", "low", "high", "alternating"],
+        default="uniform",
     )
     return parser.parse_args()
 
@@ -222,6 +234,10 @@ def main() -> int:
                                     topk_blocks=topk_blocks,
                                     seed=seed,
                                     mode=mode,
+                                    structured_alpha=args.structured_alpha,
+                                    structured_coordinate_strategy=(
+                                        args.structured_coordinate_strategy
+                                    ),
                                 )
                             )
 

@@ -38,6 +38,8 @@ def test_hf_qk_script_help_smoke() -> None:
     assert "--query-position" in out
     assert "--sweep-query-positions" in out
     assert "--extraction-mode" in out
+    assert "--structured-alpha" in out
+    assert "--structured-coordinate-strategy" in out
     assert "srht" in out
     assert "bidiagonal_sign" in out
     assert "bidiagonal_sign_subsample" in out
