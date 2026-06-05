@@ -24,6 +24,15 @@ class SRHTSpec:
     sampled_indices: np.ndarray
 
 
+@dataclass(slots=True)
+class BidiagonalSignSpec:
+    input_dim: int
+    sketch_dim: int
+    signs: np.ndarray
+    sampled_indices: np.ndarray
+    alpha: float = 0.5
+
+
 def _next_power_of_two(value: int) -> int:
     if value <= 0:
         raise ValueError("value must be positive")
@@ -190,6 +199,31 @@ def make_srht(input_dim: int, sketch_dim: int, seed: int) -> SRHTSpec:
     )
 
 
+def make_bidiagonal_sign(
+    input_dim: int,
+    sketch_dim: int,
+    seed: int,
+    alpha: float = 0.5,
+) -> BidiagonalSignSpec:
+    if input_dim <= 0 or sketch_dim <= 0:
+        raise ValueError("input_dim and sketch_dim must be positive")
+    if sketch_dim > input_dim:
+        raise ValueError(
+            f"sketch_dim={sketch_dim} must be <= input_dim={input_dim}"
+        )
+    rng = np.random.default_rng(seed)
+    signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim).astype(np.float64)
+    sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
+    sampled_indices = np.sort(sampled_indices.astype(np.int64))
+    return BidiagonalSignSpec(
+        input_dim=input_dim,
+        sketch_dim=sketch_dim,
+        signs=signs,
+        sampled_indices=sampled_indices,
+        alpha=float(alpha),
+    )
+
+
 def apply_random_projection(x: np.ndarray, projection: np.ndarray) -> np.ndarray:
     return np.asarray(x, dtype=np.float64) @ np.asarray(projection, dtype=np.float64)
 
@@ -224,6 +258,25 @@ def apply_srht(x: np.ndarray, sketch_spec: SRHTSpec) -> np.ndarray:
     return sampled if x_arr.ndim > 1 else sampled[0]
 
 
+def apply_bidiagonal_sign(
+    x: np.ndarray,
+    sketch_spec: BidiagonalSignSpec,
+) -> np.ndarray:
+    x_arr = np.asarray(x, dtype=np.float64)
+    x_2d = np.atleast_2d(x_arr)
+    if x_2d.shape[1] != sketch_spec.input_dim:
+        raise ValueError(
+            f"Expected input dim {sketch_spec.input_dim}, got {x_2d.shape[1]}"
+        )
+    signed = x_2d * sketch_spec.signs[None, :]
+    mixed = signed.copy()
+    if sketch_spec.input_dim > 1:
+        mixed[:, 1:] += sketch_spec.alpha * signed[:, :-1]
+    sampled = mixed[:, sketch_spec.sampled_indices]
+    sampled *= np.sqrt(float(sketch_spec.input_dim) / float(sketch_spec.sketch_dim))
+    return sampled if x_arr.ndim > 1 else sampled[0]
+
+
 def compute_exact_scores(query: np.ndarray, keys: np.ndarray) -> np.ndarray:
     q = np.asarray(query, dtype=np.float64)
     k = np.asarray(keys, dtype=np.float64)
@@ -253,6 +306,10 @@ def compute_sketched_scores(
         spec = make_srht(input_dim, sketch_dim, seed)
         keys_s = apply_srht(keys_arr, spec)
         query_s = apply_srht(query_arr, spec)
+    elif sketch_type == "bidiagonal_sign":
+        spec = make_bidiagonal_sign(input_dim, sketch_dim, seed)
+        keys_s = apply_bidiagonal_sign(keys_arr, spec)
+        query_s = apply_bidiagonal_sign(query_arr, spec)
     else:
         raise ValueError(f"Unknown sketch_type: {sketch_type}")
 

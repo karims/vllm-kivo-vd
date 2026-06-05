@@ -33,7 +33,7 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
                 "block_score_correlation": 0.91,
             },
             {
-                "sketch_type": "srht",
+                "sketch_type": "bidiagonal_sign",
                 "sketch_dim": 64,
                 "effective_sketch_dim": 32,
                 "sketch_compression_ratio": 0.5,
@@ -63,10 +63,13 @@ def test_compare_sketch_backends_summarizes_tiny_jsonl(tmp_path: Path) -> None:
     payload = json.loads(proc.stdout)
     assert output_path.exists()
     summary = payload["summary"]
-    assert {row["sketch_type"] for row in summary} == {"count_sketch", "srht"}
-    srht = next(row for row in summary if row["sketch_type"] == "srht")
-    assert srht["effective_sketch_dim"] == 32
-    assert srht["sketch_compression_ratio"] == 0.5
-    assert srht["is_full_dimensional_sketch"] is False
-    assert srht["avg_block_topk_recall"] == 0.7
-    assert srht["avg_block_recall_at_2x_budget"] == 0.85
+    assert {row["sketch_type"] for row in summary} == {
+        "bidiagonal_sign",
+        "count_sketch",
+    }
+    bidiag = next(row for row in summary if row["sketch_type"] == "bidiagonal_sign")
+    assert bidiag["effective_sketch_dim"] == 32
+    assert bidiag["sketch_compression_ratio"] == 0.5
+    assert bidiag["is_full_dimensional_sketch"] is False
+    assert bidiag["avg_block_topk_recall"] == 0.7
+    assert bidiag["avg_block_recall_at_2x_budget"] == 0.85

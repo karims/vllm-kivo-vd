@@ -51,6 +51,38 @@ def test_srht_deterministic_same_seed() -> None:
     assert np.allclose(m.apply_srht(x, spec1), m.apply_srht(x, spec2))
 
 
+def test_bidiagonal_sign_shape_and_non_power_of_two_input_dim() -> None:
+    m = _load_module()
+    spec = m.make_bidiagonal_sign(input_dim=10, sketch_dim=4, seed=3)
+    x = np.arange(20, dtype=np.float64).reshape(2, 10)
+    sketched = m.apply_bidiagonal_sign(x, spec)
+    assert spec.sampled_indices.shape == (4,)
+    assert sketched.shape == (2, 4)
+
+
+def test_bidiagonal_sign_deterministic_same_seed() -> None:
+    m = _load_module()
+    x = np.arange(10, dtype=np.float64)
+    spec1 = m.make_bidiagonal_sign(input_dim=10, sketch_dim=4, seed=5)
+    spec2 = m.make_bidiagonal_sign(input_dim=10, sketch_dim=4, seed=5)
+    assert np.array_equal(spec1.signs, spec2.signs)
+    assert np.array_equal(spec1.sampled_indices, spec2.sampled_indices)
+    assert np.allclose(
+        m.apply_bidiagonal_sign(x, spec1),
+        m.apply_bidiagonal_sign(x, spec2),
+    )
+
+
+def test_bidiagonal_sign_rejects_sketch_dim_larger_than_input_dim() -> None:
+    m = _load_module()
+    try:
+        m.make_bidiagonal_sign(input_dim=4, sketch_dim=5, seed=1)
+    except ValueError as exc:
+        assert "must be <= input_dim" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for oversized sketch_dim")
+
+
 def test_exact_score_shape() -> None:
     m = _load_module()
     q = np.array([1.0, 2.0, 3.0])
@@ -95,7 +127,7 @@ def test_cli_smoke() -> None:
             "--seed",
             "7",
             "--sketch-type",
-            "srht",
+            "bidiagonal_sign",
             "--mode",
             "gaussian",
         ],

@@ -138,6 +138,15 @@ def _parse_args() -> argparse.Namespace:
         default=16,
         help="Block size for block-level recall.",
     )
+    parser.add_argument(
+        "--sketch-types",
+        default=None,
+        help=(
+            "Optional comma-separated sketch types. Defaults remain "
+            "random_projection,count_sketch,srht. Experimental values such as "
+            "bidiagonal_sign must be requested explicitly."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -164,6 +173,22 @@ def main() -> int:
         seeds = [args.seed]
     if args.num_tokens is not None:
         num_tokens_list = [args.num_tokens]
+    if args.sketch_types is not None:
+        allowed = {"random_projection", "count_sketch", "srht", "bidiagonal_sign"}
+        sketch_types = []
+        for part in args.sketch_types.split(","):
+            sketch_type = part.strip()
+            if not sketch_type:
+                continue
+            if sketch_type not in allowed:
+                raise ValueError(
+                    f"Invalid sketch type {sketch_type!r}; expected one of "
+                    f"{sorted(allowed)}"
+                )
+            if sketch_type not in sketch_types:
+                sketch_types.append(sketch_type)
+        if not sketch_types:
+            raise ValueError("--sketch-types list is empty")
 
     rows = []
     for mode in modes:

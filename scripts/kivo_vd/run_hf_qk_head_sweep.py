@@ -57,7 +57,7 @@ def _parse_query_positions(spec: str, seq_len: int, hf_eval: Any) -> list[int]:
 def _parse_sketch_types(sketch_type: str, sketch_types: str | None) -> list[str]:
     if sketch_types is None:
         return [sketch_type]
-    allowed = {"random_projection", "count_sketch", "srht"}
+    allowed = {"random_projection", "count_sketch", "srht", "bidiagonal_sign"}
     out: list[str] = []
     for part in sketch_types.split(","):
         part = part.strip()
@@ -130,7 +130,7 @@ def _parse_args(hf_eval: Any) -> argparse.Namespace:
     parser.add_argument("--prompt", default=hf_eval._default_prompt())
     parser.add_argument(
         "--sketch-type",
-        choices=["random_projection", "count_sketch", "srht"],
+        choices=["random_projection", "count_sketch", "srht", "bidiagonal_sign"],
         default="random_projection",
     )
     parser.add_argument("--sketch-dim", type=int, default=64)

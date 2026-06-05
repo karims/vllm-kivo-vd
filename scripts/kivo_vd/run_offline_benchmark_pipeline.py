@@ -205,8 +205,8 @@ def _parse_args() -> argparse.Namespace:
         default="count_sketch,random_projection",
         help=(
             "Comma-separated sketch types. Defaults to the conservative "
-            "baseline pair. Include experimental SRHT with "
-            "`count_sketch,random_projection,srht`."
+            "baseline pair. Include experimental SRHT/bidiagonal_sign with "
+            "`count_sketch,random_projection,srht,bidiagonal_sign`."
         ),
     )
     parser.add_argument("--sketch-dims", default="32,64,128")

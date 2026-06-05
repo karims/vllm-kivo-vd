@@ -161,3 +161,41 @@ def test_pipeline_dry_run_can_plan_srht_comparison(tmp_path: Path) -> None:
     )
     assert "--sketch-types" in hf_command
     assert "count_sketch,random_projection,srht" in hf_command
+
+
+def test_pipeline_dry_run_can_plan_bidiagonal_sign_comparison(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "kivo_vd" / "run_offline_benchmark_pipeline.py"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--run-name",
+            "bidiagonal-dry-run",
+            "--sketch-types",
+            "count_sketch,random_projection,srht,bidiagonal_sign",
+            "--layers",
+            "0",
+            "--heads",
+            "0",
+            "--sketch-dims",
+            "32",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(proc.stdout)
+    hf_command = payload["stages"][0]["command"]
+    assert payload["parameters"]["sketch_types"] == (
+        "count_sketch,random_projection,srht,bidiagonal_sign"
+    )
+    assert "--sketch-types" in hf_command
+    assert "count_sketch,random_projection,srht,bidiagonal_sign" in hf_command

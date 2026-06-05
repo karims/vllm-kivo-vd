@@ -25,6 +25,15 @@ class SRHTSpec:
     sampled_indices: np.ndarray
 
 
+@dataclass(slots=True)
+class BidiagonalSignSpec:
+    input_dim: int
+    sketch_dim: int
+    signs: np.ndarray
+    sampled_indices: np.ndarray
+    alpha: float = 0.5
+
+
 def _next_power_of_two(value: int) -> int:
     if value <= 0:
         raise ValueError("value must be positive")
@@ -189,6 +198,51 @@ class SRHTBackend(KivoVDSketchBackend):
         )
 
 
+class BidiagonalSignBackend(KivoVDSketchBackend):
+    sketch_type = KivoVDSketchType.BIDIAGONAL_SIGN
+
+    def make_params(
+        self, input_dim: int, sketch_dim: int, seed: int
+    ) -> BidiagonalSignSpec:
+        if input_dim <= 0 or sketch_dim <= 0:
+            raise ValueError("input_dim and sketch_dim must be positive")
+        if sketch_dim > input_dim:
+            raise ValueError("sketch_dim must be <= input_dim for bidiagonal_sign")
+        rng = np.random.default_rng(seed)
+        signs = rng.choice(np.array([-1.0, 1.0]), size=input_dim)
+        sampled_indices = rng.choice(input_dim, size=sketch_dim, replace=False)
+        return BidiagonalSignSpec(
+            input_dim=input_dim,
+            sketch_dim=sketch_dim,
+            signs=signs.astype(np.float64),
+            sampled_indices=np.sort(sampled_indices.astype(np.int64)),
+        )
+
+    def sketch_vector(
+        self, vector: np.ndarray, params: BidiagonalSignSpec
+    ) -> np.ndarray:
+        vector = np.asarray(vector, dtype=np.float64)
+        if vector.ndim != 1:
+            raise ValueError("vector must be 1D")
+        if vector.shape[0] != params.input_dim:
+            raise ValueError("vector length mismatch with sketch params")
+        signed = vector * params.signs
+        mixed = signed.copy()
+        if params.input_dim > 1:
+            mixed[1:] += params.alpha * signed[:-1]
+        sampled = mixed[params.sampled_indices]
+        return sampled * np.sqrt(float(params.input_dim) / float(params.sketch_dim))
+
+    def score_query_against_blocks(
+        self,
+        query_sketch: np.ndarray,
+        block_sketches: np.ndarray,
+    ) -> np.ndarray:
+        return np.asarray(block_sketches, dtype=np.float64) @ np.asarray(
+            query_sketch, dtype=np.float64
+        )
+
+
 def make_sketch_backend(sketch_type: KivoVDSketchType | str) -> KivoVDSketchBackend:
     normalized = KivoVDSketchType(sketch_type)
     if normalized == KivoVDSketchType.COUNT_SKETCH:
@@ -197,4 +251,6 @@ def make_sketch_backend(sketch_type: KivoVDSketchType | str) -> KivoVDSketchBack
         return RandomProjectionBackend()
     if normalized == KivoVDSketchType.SRHT:
         return SRHTBackend()
+    if normalized == KivoVDSketchType.BIDIAGONAL_SIGN:
+        return BidiagonalSignBackend()
     raise ValueError(f"Unsupported sketch backend type: {normalized.value}")
