@@ -20,6 +20,15 @@ Recommended reading order:
 | Offline active-KV policy estimate | conservative estimate about `17.7%` active-KV reduction at about `99.8%` exact-top-block recall |
 | Runtime memory reduction | not measured or claimed yet |
 
+## Current Research Status
+
+- Runtime dry-run is validated on Linux/NVIDIA for a GPT-2 run.
+- Offline sketch baselines are established for CountSketch, Random Projection,
+  and SRHT.
+- Structured sketches have been explored; `bidiagonal_sign_subsample` is the
+  most promising sign-mixing variant so far, but not a proven runtime winner.
+- Next recommended work is memory accounting, not active routing.
+
 ## vLLM KV Runtime Map And Integration Plan
 
 - [Phase 0: vLLM KV Map](phase0_vllm_kv_map.md)
@@ -53,6 +62,7 @@ Recommended reading order:
 - [Phase 6.1: Structured Sketch Variants](phase6_1_structured_sketch_variants.md)
 - [Phase 6.2: Structured Parameter Sweep](phase6_2_structured_parameter_sweep.md)
 - [Phase 6.3: Modern Model Structured Check](phase6_3_modern_model_structured_check.md)
+- [Phase 6.4: Structured Sketch Summary](phase6_4_structured_sketch_summary.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
