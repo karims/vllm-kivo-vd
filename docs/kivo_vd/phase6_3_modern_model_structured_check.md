@@ -113,6 +113,52 @@ It preserves modern-model metadata when present, including model name,
 extraction mode, Q/K space, query/KV head counts, selected heads, head dimension,
 and compression metadata.
 
+## RunPod Partial Qwen Smoke Results
+
+The smoke sweep was executed on a RunPod PyTorch development pod. Its partial
+artifacts were:
+
+- input:
+  `outputs/kivo_vd/runs/phase6_3_qwen_structured_smoke/structured_param_sweep.jsonl`
+- summary:
+  `outputs/kivo_vd/runs/phase6_3_qwen_structured_smoke/structured_param_summary_partial.md`
+- input rows: `2,205`
+- grouped summary rows: `69`
+
+The recorded extraction metadata was:
+
+| field | value |
+| --- | --- |
+| model | `Qwen/Qwen2.5-0.5B` |
+| extraction mode | `separate_qk_proj` |
+| Q/K space | `pre_rope_projection` |
+| query heads | `14` |
+| KV heads | `2` |
+| head dimension | `64` |
+| effective sketch dimensions | `16`, `32` |
+| full-dimensional sketches | no |
+
+Among rows with saturated average retrieval recall, the strongest block score
+correlations were:
+
+| sketch | dim | alpha | coordinates | avg block score correlation |
+| --- | ---: | ---: | --- | ---: |
+| `bidiagonal_sign_subsample` | 32 | 0.00 | `stride` | about `0.5969` |
+| `bidiagonal_sign_subsample` | 32 | 0.25 | `stride` | about `0.5830` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `uniform` | about `0.5162` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `stride` | about `0.4862` |
+
+The top rows reached average top-k recall, recall@2x, and recall@4x of `1.0`.
+Within this partial smoke run, dim `32` with `stride` was consistently useful,
+and lower alpha values (`0.0` or `0.25`) were stronger than the GPT-2 balanced
+choice of `0.5`. Higher alpha values and the `low` coordinate strategy were
+weaker.
+
+This result confirms that the modern separate-Q/K extraction and GQA metadata
+path can drive the structured sweep. It does not validate post-RoPE retrieval:
+all reported Qwen metrics use `pre_rope_projection` Q/K. The sweep is partial,
+offline, and retrieval-only.
+
 ## How To Interpret Results
 
 Good signs:

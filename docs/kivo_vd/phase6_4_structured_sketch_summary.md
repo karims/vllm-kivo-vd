@@ -35,7 +35,7 @@ Implemented sweep mechanisms:
 - structured alpha sweep;
 - coordinate strategy sweep;
 - GPT-2 structured comparison;
-- Qwen/Qwen2.5-0.5B modern-model smoke-check workflow.
+- Qwen/Qwen2.5-0.5B modern-model smoke check.
 
 Coordinate strategies supported:
 
@@ -71,43 +71,57 @@ Known GPT-2 Phase 6.0/6.1 evidence:
   implementation.
 - `tridiagonal_sign` did not clearly beat the bidiagonal variants.
 
+The RunPod Phase 6.2 partial sweep added `5,814` GPT-2 rows and `91` grouped
+summary rows. Among saturated-recall settings, the leading score-correlation
+signals were:
+
+| sketch | dim | alpha | coordinates | avg block score correlation |
+| --- | ---: | ---: | --- | ---: |
+| `bidiagonal_sign_subsample` | 48 | 0.25 | `uniform` | about `0.6994` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `stride` | about `0.6765` |
+| `bidiagonal_sign_subsample` | 48 | 0.00 | `uniform` | about `0.6729` |
+
+The dim `48` rows retain `75%` of GPT-2's head dimension of `64`. Dim `32`,
+alpha `0.5`, and `stride` is therefore the more balanced GPT-2 candidate. A
+focused sweep of `1,440` rows and `45` grouped settings produced a similar
+signal.
+
 Interpretation: `bidiagonal_sign_subsample` is the most promising structured
 sign-mixing variant so far, but it is not yet a practical runtime winner.
 
 ## Qwen Smoke Check
 
 Phase 6.3 added the Qwen/Qwen2.5-0.5B modern-model structured smoke-check
-workflow. This is important because GPT-2 is not enough: modern models use
+run. This is important because GPT-2 is not enough: modern models use
 separate Q/K projections, RoPE-oriented attention, and sometimes GQA/MQA-style
 query-head to KV-head mapping.
 
-No Phase 6.3 Qwen structured-smoke result artifacts were present in this local
-checkout at the time this summary was written. Fill this section after RunPod
-execution of:
+The RunPod partial smoke sweep produced `2,205` input rows and `69` grouped
+summary rows. It used:
 
-```bash
-python scripts/kivo_vd/run_structured_sketch_param_sweep.py \
-  --model-name Qwen/Qwen2.5-0.5B \
-  --sketch-types bidiagonal_sign_subsample,bidiagonal_sign,tridiagonal_sign \
-  --sketch-dims 16,32 \
-  --alphas 0.0,0.25,0.5,0.75,1.0 \
-  --coordinate-strategies uniform,stride,low,high,alternating \
-  --layers 0,1 \
-  --heads 0,1,2,3 \
-  --max-tokens 256 \
-  --output outputs/kivo_vd/runs/phase6_3_qwen_structured_smoke/structured_param_sweep.jsonl
-```
+- model: `Qwen/Qwen2.5-0.5B`;
+- extraction mode: `separate_qk_proj`;
+- Q/K space: `pre_rope_projection`;
+- query/KV heads: `14` / `2`;
+- head dimension: `64`;
+- compressed sketch dimensions: `16` and `32`.
 
-When results are available, summarize:
+The strongest saturated-recall settings were:
 
-- best `bidiagonal_sign_subsample` alpha/coordinate strategy;
-- whether Qwen pre-RoPE retrieval agrees with GPT-2 signals;
-- whether GQA/MQA head mapping creates head-specific behavior;
-- whether compressed dims `16` and `32` remain competitive;
-- whether `tridiagonal_sign` shows any new advantage.
+| sketch | dim | alpha | coordinates | avg block score correlation |
+| --- | ---: | ---: | --- | ---: |
+| `bidiagonal_sign_subsample` | 32 | 0.00 | `stride` | about `0.5969` |
+| `bidiagonal_sign_subsample` | 32 | 0.25 | `stride` | about `0.5830` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `uniform` | about `0.5162` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `stride` | about `0.4862` |
 
-Caveat: Qwen rows are currently pre-RoPE projected Q/K retrieval results, not
-post-RoPE vLLM runtime attention behavior.
+The top rows reached average top-k recall, recall@2x, and recall@4x of `1.0`.
+Qwen agrees with GPT-2 that `stride` is useful at dim `32`, but it favors lower
+alpha values (`0.0` or `0.25`). Higher alpha values and the `low` coordinate
+strategy were weaker in this partial run.
+
+Caveat: these are pre-RoPE projected Q/K retrieval results, not post-RoPE vLLM
+runtime attention behavior.
 
 ## Practical Interpretation
 
@@ -117,8 +131,13 @@ Current interpretation:
 - SRHT remains a high-recall but slow reference.
 - `bidiagonal_sign_subsample` is the most promising structured sign-mixing
   variant so far.
+- `stride` is the most consistent coordinate strategy across the partial GPT-2
+  and Qwen results.
+- Alpha appears model-dependent: GPT-2 favored `0.5`, while Qwen favored `0.0`
+  or `0.25`.
 - `tridiagonal_sign` should be frozen unless later sweeps reveal a clear
   advantage.
+- The `low` coordinate strategy should be deprioritized.
 - Full-dimensional rows are reference/correctness rows, not compression
   evidence.
 - None of the Phase 6 results prove runtime memory reduction.
@@ -128,8 +147,9 @@ Current interpretation:
 Keep for next offline tests:
 
 - `bidiagonal_sign_subsample`
-- best alpha/coordinate strategy from Phase 6.2, once Qwen/GPT-2 sweep summaries
-  identify one clearly
+- sketch dim `32`
+- `stride` coordinate selection
+- alpha `0.25` and `0.5`
 - CountSketch as baseline
 - Random Projection as baseline
 
@@ -142,6 +162,7 @@ Freeze unless new evidence appears:
 
 - `tridiagonal_sign`
 - unoptimized `bidiagonal_sign`
+- `low` coordinate selection
 
 This pruning keeps the research surface manageable while preserving enough
 baselines to make future claims credible.
@@ -155,7 +176,10 @@ Phase 6 proves:
 - `bidiagonal_sign_subsample` can match `bidiagonal_sign` retrieval with better
   offline timing;
 - the benchmark tooling can sweep alpha and coordinate strategy parameters;
-- the modern-model Qwen workflow is prepared for RunPod execution.
+- partial GPT-2 and pre-RoPE Qwen sweeps can be executed and summarized
+  reproducibly;
+- dim `32` with `stride` is a useful cross-model candidate for further offline
+  testing.
 
 ## What Is Not Proven
 

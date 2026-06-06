@@ -105,6 +105,48 @@ It sorts by:
 2. average strict block top-k recall descending;
 3. average block score correlation descending.
 
+## RunPod Partial GPT-2 Results
+
+The structured sweep was run on a RunPod PyTorch development pod using the
+repository source overlay. The observed vLLM version was `0.22.1`; Kivo-only
+tests and syntax compilation passed in that environment.
+
+Partial large-sweep artifacts:
+
+- input:
+  `outputs/kivo_vd/runs/phase6_2_structured_param_sweep/structured_param_sweep.jsonl`
+- summary:
+  `outputs/kivo_vd/runs/phase6_2_structured_param_sweep/structured_param_summary_partial.md`
+- input rows: `5,814`
+- grouped summary rows: `91`
+
+Among rows where average strict top-k recall, recall@2x, and recall@4x all
+reached `1.0`, block score correlation distinguished the leading settings:
+
+| sketch | dim | alpha | coordinates | avg block score correlation |
+| --- | ---: | ---: | --- | ---: |
+| `bidiagonal_sign_subsample` | 48 | 0.25 | `uniform` | about `0.6994` |
+| `bidiagonal_sign_subsample` | 32 | 0.50 | `stride` | about `0.6765` |
+| `bidiagonal_sign_subsample` | 48 | 0.00 | `uniform` | about `0.6729` |
+
+The focused GPT-2 sweep produced `1,440` input rows and `45` grouped summary
+rows. It reached a similar conclusion: dim `32` with `stride` was a strong
+balanced setting, while dim `24` and dim `48` with `uniform` also produced good
+offline retrieval signals.
+
+GPT-2 has head dimension `64`. Dim `48` retains `75%` of the original vector,
+so it is less interesting as a compression-oriented setting even when its
+correlation is highest. The current balanced GPT-2 candidate is therefore:
+
+```text
+bidiagonal_sign_subsample, sketch_dim=32, alpha=0.5, coordinates=stride
+```
+
+This is a parameter-selection signal from a partial offline sweep, not evidence
+of runtime memory reduction. Recall saturation also means that the ranking
+between these settings depends heavily on score correlation and should not be
+treated as definitive.
+
 ## Existing Script Knobs
 
 Single synthetic/HF and torch benchmark scripts also accept:

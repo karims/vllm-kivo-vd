@@ -25,8 +25,11 @@ Recommended reading order:
 - Runtime dry-run is validated on Linux/NVIDIA for a GPT-2 run.
 - Offline sketch baselines are established for CountSketch, Random Projection,
   and SRHT.
-- Structured sketches have been explored; `bidiagonal_sign_subsample` is the
-  most promising sign-mixing variant so far, but not a proven runtime winner.
+- Phase 6 offline structured exploration is complete. The strongest current
+  research candidate is `bidiagonal_sign_subsample` at dim `32` with `stride`;
+  alpha `0.25` and `0.5` remain the next settings to compare.
+- Structured results are offline retrieval evidence, not a proven runtime
+  winner, active-routing result, or measured memory reduction.
 - Next recommended work is memory accounting, not active routing.
 
 ## vLLM KV Runtime Map And Integration Plan
