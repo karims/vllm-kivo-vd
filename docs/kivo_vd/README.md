@@ -85,6 +85,13 @@ Recommended reading order:
 Phase 7 closes with a conservative decision gate before Phase 8 overhead
 experiments. Passing the gate does not authorize active routing.
 
+## Phase 8 Runtime Memory Experiments
+
+- [Phase 8.0: Compact Sketch-Buffer Overhead](phase8_0_sketch_buffer_overhead.md)
+
+Phase 8.0 measures additional sketch-buffer memory only. It does not replace
+full KV, change attention, or enable active routing.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
