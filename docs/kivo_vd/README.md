@@ -145,6 +145,16 @@ tensors outside vLLM.
 No measured runtime memory reduction, active routing, latency improvement, or
 quality preservation has been demonstrated. Full KV remains allocated.
 
+## Phase 10 Standalone Selected Attention
+
+- [Phase 10.0: Selected-Attention Equivalence](phase10_0_selected_attention_equivalence.md)
+
+Phase 10.0 starts the correctness path authorized by the Phase 9 gate. It
+compares full versus selected attention on synthetic PyTorch Q/K/V tensors
+outside vLLM. Oracle top-k selection is included only as an upper-bound
+diagnostic. This phase does not use real vLLM KV, mutate block tables, change
+attention kernels, enable active routing, or prove real model quality.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
