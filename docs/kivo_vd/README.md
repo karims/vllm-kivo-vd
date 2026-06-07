@@ -114,12 +114,15 @@ buffer overhead is additive and is not a memory-saving result by itself.
 
 - [Phase 9.0: Selected-KV Materialization](phase9_0_selected_kv_materialization.md)
 - [Phase 9.1: Materialization Comparison](phase9_1_selected_kv_materialization_comparison.md)
+- [Phase 9.2: Materialization Pipeline](phase9_2_selected_kv_materialization_pipeline.md)
 
 Phase 9.0 gathers synthetic selected KV blocks into temporary tensors outside
 attention. It does not access real vLLM KV, replace full KV, or enable active
 routing.
 Phase 9.1 compares that microbenchmark with theoretical Phase 7 skipped-KV
 opportunity and optional Phase 8 sketch-buffer overhead.
+Phase 9.2 reproduces both steps with one command and preserves the synthetic,
+outside-attention, no-routing boundary.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
