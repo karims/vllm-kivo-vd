@@ -75,6 +75,29 @@ Before running the gate, regenerate Phase 7 with
 events. A clean readiness result requires
 `preview_only_event_count: 0`.
 
+## RunPod Readiness Result
+
+The full-ID L40S evidence bundle passed the gate:
+
+| field | result |
+| --- | --- |
+| Phase 10 ready | `true` |
+| Materialization classification | `promising` |
+| Full-ID event count | `32` |
+| Preview-only event count | `0` |
+| Warnings | none |
+| Synthetic KV | `true` |
+| Outside attention path | `true` |
+| Full KV still allocated | `true` |
+| Active routing | `false` |
+| Measured runtime reduction | `false` |
+| Quality measured | `false` |
+
+The allowed scope is limited to standalone selected-KV torch
+reference-attention experiments on synthetic tensors outside vLLM. Passing
+this gate does not authorize real vLLM selected attention, block-table or
+slot-mapping changes, real KV deallocation, or active routing.
+
 ## Allowed Phase 10 Scope
 
 A passing gate authorizes only:
@@ -102,3 +125,7 @@ preservation.
 
 Phase 9 closes with this conservative gate. Passing it changes only the
 allowed standalone research experiment, not vLLM runtime behavior.
+
+The validated full-ID result completes Phase 9. No measured runtime memory
+reduction, latency improvement, or quality preservation has been
+demonstrated.

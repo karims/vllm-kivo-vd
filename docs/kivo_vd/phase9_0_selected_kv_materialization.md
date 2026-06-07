@@ -62,6 +62,61 @@ and additionally contain:
 Default events contain `full_block_ids_exported: false` and do not include the
 full arrays.
 
+## RunPod Full-ID Validation
+
+The complete-ID path was validated on an NVIDIA L40S using driver
+`580.126.09`, CUDA `13.0`, torch `2.11.0+cu130`, and vLLM `0.22.1` with the
+repository source overlay. The GPT-2 run used a 632-token prompt, generated 32
+tokens, and used:
+
+- maximum model length: `768`;
+- maximum batched tokens: `768`;
+- maximum sequences: `1`;
+- layers: `12`;
+- KV heads: `12`;
+- head dimension: `64`;
+- block size: `16`;
+- dtype bytes: `2`.
+
+The Phase 7 analyzer found 97 events, including 32 routing decisions. All 32
+routing events exported complete selected, recent, and skipped block-ID
+arrays:
+
+- average selected blocks: `16.0`;
+- average recent blocks: `8.0`;
+- average skipped blocks: `24.9375`;
+- candidate budget: `16`;
+- recent window: `8`;
+- `full_block_ids_exported_count`: `32`;
+- `preview_only_routing_event_count`: `0`;
+- `all_routing_events_have_full_block_ids`: `true`;
+- warnings: none.
+
+Phase 9.0 processed all 32 events and materialized all 16 selected blocks per
+event on average:
+
+| metric | result |
+| --- | ---: |
+| Average requested selected blocks | `16.0` |
+| Average materialized selected blocks | `16.0` |
+| Average selected KV bytes | `9,437,184` |
+| Total selected KV bytes materialized | `301,989,888` |
+| Average full considered KV bytes | `24,145,920` |
+| Average materialization ratio | `0.390955` |
+| Average copy time | `0.047969 ms` |
+| P50 copy time | `0.041623 ms` |
+| P90 copy time | `0.043966 ms` |
+| Maximum copy time | `0.233020 ms` |
+| Average CUDA allocated delta | `9,437,184 bytes` |
+| Maximum CUDA allocated delta | `9,437,184 bytes` |
+| Average CUDA reserved delta | `655,360 bytes` |
+| Maximum CUDA reserved delta | `20,971,520 bytes` |
+
+This replaces the earlier preview-limited result, which materialized only 8
+of 16 selected blocks and reported an artificially low ratio of about
+`0.195`. The corrected full-ID ratio of about `0.391` is less aggressive but
+remains a promising synthetic materialization signal.
+
 ## Memory Formula
 
 ```text
@@ -177,7 +232,7 @@ results.
 
 ## Next Steps
 
-First validate complete block-ID export or another safe source of full selected
-IDs. Then compare temporary payload and copy cost on CUDA. Any later real-KV
-capture must remain observational and outside attention before considering
-behavior-changing routing.
+Complete block-ID export and synthetic CUDA materialization are validated.
+The next authorized experiment is standalone selected-KV torch reference
+attention on synthetic tensors outside vLLM. Real-KV capture, active routing,
+and behavior-changing attention remain unauthorized.

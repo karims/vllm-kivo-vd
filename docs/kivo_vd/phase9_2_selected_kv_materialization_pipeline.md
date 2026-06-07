@@ -53,13 +53,13 @@ pipeline behavior. CPU copy timing is not a GPU runtime prediction.
 .venv/bin/python \
   scripts/kivo_vd/run_selected_kv_materialization_pipeline.py \
   --events \
-    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting/\
+    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting_full_ids/\
 kivo_dry_run_events.jsonl \
   --event-estimate \
-    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting/\
+    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting_full_ids/\
 kivo_event_memory_estimate.json \
   --sketch-accounting \
-    outputs/kivo_vd/runs/phase8_gpt2_sketch_buffer_accounting/\
+    outputs/kivo_vd/runs/phase8_gpt2_sketch_buffer_accounting_full_ids/\
 event_aware_sketch_buffer_accounting.json \
   --model gpt2 \
   --num-layers 12 \
@@ -69,8 +69,34 @@ event_aware_sketch_buffer_accounting.json \
   --dtype-bytes 2 \
   --device cuda \
   --max-events 32 \
-  --run-name phase9_gpt2_selected_kv_materialization
+  --run-name phase9_gpt2_selected_kv_materialization_full_ids
 ```
+
+## RunPod Full-ID Pipeline Result
+
+The L40S run completed successfully:
+
+- pipeline success: `true`;
+- selected-KV materialization: succeeded;
+- selected-KV materialization comparison: succeeded;
+- events processed: `32`;
+- full-ID events: `32`;
+- preview-only events: `0`;
+- average requested and materialized blocks: `16.0`;
+- average materialization ratio: `0.390955`;
+- average copy time: `0.047969 ms`;
+- warnings: none.
+
+The preceding Phase 8 full-ID accounting pipeline also succeeded for sketch
+measurement, overhead comparison, and event-aware accounting. Its savings
+remain theoretical only. The Phase 9 pipeline preserved:
+
+- `synthetic_kv: true`;
+- `outside_attention_path: true`;
+- `full_kv_still_allocated: true`;
+- `active_routing: false`;
+- `measured_runtime_reduction: false`;
+- `quality_not_measured: true`.
 
 ## Dry-Run Planning
 
@@ -140,7 +166,7 @@ Complete selected block IDs are required before using Phase 9 ratios for Phase
 
 Then point Phase 9.2 at the resulting `kivo_dry_run_events.jsonl`. Full-ID
 events preserve the normal previews and add complete selected, recent, and
-skipped arrays.
+skipped arrays. This workflow was validated successfully on RunPod.
 
 ## Caveats
 

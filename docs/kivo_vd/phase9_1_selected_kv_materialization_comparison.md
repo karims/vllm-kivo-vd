@@ -83,6 +83,37 @@ Phase 9.1 carries that warning forward and will not recommend a strong Phase
 9.2 repeated-run conclusion until complete selected block IDs are available.
 It never treats preview payload as the complete selected set.
 
+## Corrected Full-ID RunPod Comparison
+
+The validated full-ID run exported all selected block IDs for all 32 routing
+events. It therefore replaces the earlier preview-limited comparison.
+
+| comparison metric | result |
+| --- | ---: |
+| Selected versus full considered ratio | `0.390840` |
+| Selected versus skipped ratio | `0.641604` |
+| Cumulative selected versus cumulative skipped ratio | `0.641604` |
+| Rough copy throughput | `196,733,600,614.893097 bytes/s` |
+
+The earlier preview-limited run copied only 8 of 16 requested selected blocks
+and reported a materialization ratio near `0.195`. The corrected run copied
+all 16 selected blocks and measured a ratio near `0.391`. This is still
+promising under the Phase 9 heuristic, but it is materially less aggressive
+than the incomplete preview result.
+
+The optional Phase 8 sketch-buffer context produced:
+
+| sketch dimension | selected + sketch / skipped |
+| --- | ---: |
+| `16` | `0.721805` |
+| `32` | `0.802005` |
+| `64` | `0.962406` |
+
+All listed configurations remain excellent under cumulative accounting.
+However, selected payload plus sketch overhead is substantially larger than
+the earlier sketch-only accounting. These ratios are accounting evidence, not
+realized runtime savings.
+
 ## Recommendation Boundary
 
 When complete IDs yield a low materialization ratio and copy timing is

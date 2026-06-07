@@ -459,6 +459,20 @@ def render_markdown(report: dict[str, Any]) -> str:
     materialization = report["materialization_summary"]
     event = report["event_estimate_summary"]
     metrics = report["comparison_metrics"]
+    preview_only_count = int(
+        materialization.get("preview_only_event_count") or 0
+    )
+    if preview_only_count:
+        export_note = (
+            "Preview-only selected IDs undercount copied payload and block a "
+            "strong Phase 9.2 conclusion until complete IDs are available."
+        )
+    else:
+        export_note = (
+            "Complete selected block IDs were exported; the copied payload "
+            "reflects all selected blocks represented by the materialization "
+            "events in this run."
+        )
     lines = [
         "# Kivo-VD Phase 9.1 Materialization Comparison",
         "",
@@ -534,8 +548,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "opportunities. Copy throughput is a synchronized microbenchmark, "
         "not an end-to-end latency result.",
         "",
-        "Preview-only selected IDs undercount copied payload and block a "
-        "strong Phase 9.2 conclusion until complete IDs are available.",
+        export_note,
         "",
         "## Caveats",
         "",

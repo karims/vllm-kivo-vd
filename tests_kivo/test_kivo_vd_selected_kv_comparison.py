@@ -246,6 +246,25 @@ def test_markdown_contains_required_caveats(tmp_path: Path) -> None:
     assert "No active routing" in markdown
     assert "No measured runtime memory reduction" in markdown
     assert "Quality is not measured" in markdown
+    assert "Complete selected block IDs were exported" in markdown
+    assert "Preview-only selected IDs undercount" not in markdown
+
+
+def test_markdown_keeps_preview_only_warning(tmp_path: Path) -> None:
+    module = _load_module()
+    materialization_path = tmp_path / "materialization.json"
+    event_path = tmp_path / "event.json"
+    _write(materialization_path, _materialization(preview_only=True))
+    _write(event_path, _event_estimate())
+    result = module.build_comparison(
+        materialization_path=materialization_path,
+        event_estimate_path=event_path,
+    )
+
+    markdown = module.render_markdown(result)
+
+    assert "Preview-only selected IDs undercount" in markdown
+    assert "Complete selected block IDs were exported" not in markdown
 
 
 def test_cli_help_includes_expected_args() -> None:

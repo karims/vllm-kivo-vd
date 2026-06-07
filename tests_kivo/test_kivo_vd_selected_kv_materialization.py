@@ -155,6 +155,9 @@ def test_cpu_synthetic_materialization_and_aggregates(
         row["copy_time_ms"] >= 0 for row in report["per_event_rows"]
     )
     assert report["caveats"]["synthetic_kv"] is True
+    markdown = module.render_markdown(report)
+    assert "Complete selected block IDs were exported" in markdown
+    assert "Preview-only events undercount" not in markdown
 
 
 def test_missing_selected_ids_produce_empty_report_warning(
@@ -215,6 +218,31 @@ def test_markdown_contains_required_caveats(tmp_path: Path) -> None:
     assert "Full KV is still allocated" in markdown
     assert "No active routing" in markdown
     assert "No measured runtime memory reduction" in markdown
+
+
+def test_markdown_keeps_preview_only_warning() -> None:
+    module = _load_module()
+    report = {
+        "model_kv_metadata": {},
+        "aggregate": {"preview_only_event_count": 1},
+        "num_events_processed": 1,
+        "per_event_rows": [{
+            "event_id": 1,
+            "requested_selected_block_count": 16,
+            "materialized_selected_block_count": 8,
+            "skipped_block_count": 24,
+            "selected_kv_bytes": 8,
+            "materialization_ratio": 0.2,
+            "copy_time_ms": 0.1,
+            "selected_ids_preview_only": True,
+        }],
+        "warnings": [],
+    }
+
+    markdown = module.render_markdown(report)
+
+    assert "Preview-only events undercount" in markdown
+    assert "Complete selected block IDs were exported" not in markdown
 
 
 def test_cli_help_includes_expected_args() -> None:

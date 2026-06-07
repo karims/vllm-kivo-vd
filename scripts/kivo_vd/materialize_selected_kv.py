@@ -516,6 +516,24 @@ def _append_table(
 def render_markdown(report: dict[str, Any]) -> str:
     metadata = report["model_kv_metadata"]
     aggregate = report["aggregate"]
+    preview_only_count = int(aggregate.get("preview_only_event_count") or 0)
+    events_processed = int(report.get("num_events_processed") or 0)
+    if events_processed <= 0:
+        export_note = (
+            "No selected-KV materialization rows were processed, so block-ID "
+            "export completeness could not be assessed for this run."
+        )
+    elif preview_only_count:
+        export_note = (
+            "Preview-only events undercount temporary payload because the "
+            "runtime export capped block-ID previews. They are marked "
+            "explicitly."
+        )
+    else:
+        export_note = (
+            "Complete selected block IDs were exported; the materialization "
+            "payload reflects all selected blocks in this run."
+        )
     lines = [
         "# Kivo-VD Phase 9.0 Selected-KV Materialization",
         "",
@@ -572,8 +590,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "materialization ratio compares materialized preview/full selected "
         "IDs with the event's selected-plus-skipped count when available.",
         "",
-        "Preview-only events undercount temporary payload because the current "
-        "runtime export caps block-ID previews. They are marked explicitly.",
+        export_note,
         "",
         "## Caveats",
         "",

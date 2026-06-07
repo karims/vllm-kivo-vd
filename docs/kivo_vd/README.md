@@ -130,6 +130,21 @@ Complete selected block IDs are now available through explicit
 `--export-full-block-ids` opt-in. Preview-only exports remain the default and
 cannot pass the Phase 10 readiness gate.
 
+### Phase 9 Final Result
+
+Phase 9 is complete. The RunPod L40S validation exported complete selected
+block IDs for all 32 routing events, materialized all 16 requested selected
+blocks per event on average, and passed the Phase 9 readiness gate with
+`phase10_ready: true` and no warnings.
+
+The corrected full-ID materialization ratio was about `0.391`, replacing the
+artificially optimistic preview-only ratio near `0.195`. The authorized next
+step is limited to standalone selected-attention experiments on synthetic
+tensors outside vLLM.
+
+No measured runtime memory reduction, active routing, latency improvement, or
+quality preservation has been demonstrated. Full KV remains allocated.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
