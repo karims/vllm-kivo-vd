@@ -74,6 +74,7 @@ Recommended reading order:
 - [Phase 7.0: Runtime Memory Baseline](phase7_0_runtime_memory_baseline.md)
 - [Phase 7.1: Dry-Run Event Memory Estimator](phase7_1_dry_run_event_memory_estimator.md)
 - [Phase 7.2: Memory Baseline Vs Estimate](phase7_2_memory_baseline_vs_estimate.md)
+- [Phase 7.3: Memory Accounting Pipeline](phase7_3_memory_accounting_pipeline.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
