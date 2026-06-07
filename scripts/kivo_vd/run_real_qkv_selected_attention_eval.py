@@ -11,6 +11,16 @@ from typing import Any
 
 import torch
 
+BASE_SELECTION_POLICIES = {"recent", "first", "random", "oracle_topk"}
+SKETCH_SELECTION_POLICIES = {
+    "count_sketch",
+    "random_projection",
+    "bidiagonal_sign_subsample",
+}
+QK_SELECTION_POLICIES = {"query_key_block_score", *SKETCH_SELECTION_POLICIES}
+SELECTION_POLICIES = BASE_SELECTION_POLICIES | QK_SELECTION_POLICIES
+BLOCK_SCORE_REDUCTIONS = {"max", "mean", "logsumexp"}
+
 
 def default_prompt() -> str:
     filler = (
@@ -40,8 +50,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate-budget-blocks", type=int, default=16)
     parser.add_argument(
         "--selection-policy",
-        choices=["recent", "first", "random", "oracle_topk"],
+        choices=sorted(SELECTION_POLICIES),
         default="recent",
+    )
+    parser.add_argument("--sketch-dim", type=int, default=32)
+    parser.add_argument(
+        "--block-score-reduction",
+        choices=sorted(BLOCK_SCORE_REDUCTIONS),
+        default="max",
     )
     parser.add_argument("--selected-blocks")
     parser.add_argument("--max-length", type=int, default=768)
@@ -295,6 +311,284 @@ def select_block_ids(
     raise ValueError(f"unsupported selection policy: {policy}")
 
 
+def selector_metadata(
+    *,
+    policy: str,
+    sketch_dim: int | None,
+    block_score_reduction: str,
+) -> dict[str, Any]:
+    uses_attention_probs = policy == "oracle_topk"
+    uses_qk_scores = policy in QK_SELECTION_POLICIES
+    deployable = policy != "oracle_topk"
+    return {
+        "sketch_dim": sketch_dim if policy in SKETCH_SELECTION_POLICIES else None,
+        "block_score_reduction": block_score_reduction,
+        "selector_uses_attention_probs": uses_attention_probs,
+        "selector_uses_qk_scores": uses_qk_scores,
+        "selector_is_deployable_approximation": deployable,
+        "selector_is_experimental": policy == "bidiagonal_sign_subsample",
+    }
+
+
+def reduce_token_scores(
+    scores: torch.Tensor,
+    reduction: str,
+) -> torch.Tensor:
+    if reduction == "max":
+        return scores.max(dim=-1).values.mean()
+    if reduction == "mean":
+        return scores.mean()
+    if reduction == "logsumexp":
+        return torch.logsumexp(scores.float(), dim=-1).mean()
+    raise ValueError(f"unsupported block score reduction: {reduction}")
+
+
+def query_key_block_scores(
+    query: torch.Tensor,
+    keys: torch.Tensor,
+    block_size: int,
+    reduction: str,
+) -> torch.Tensor:
+    if query.ndim != 4 or keys.ndim != 4:
+        raise ValueError("Q/K tensors must have shape [batch, heads, tokens, dim]")
+    if query.shape[:2] != keys.shape[:2]:
+        raise ValueError("Q/K batch and head dimensions must match")
+    if query.shape[-1] != keys.shape[-1]:
+        raise ValueError("Q/K head dimensions must match")
+    last_query = query[:, :, -1, :].float()
+    keys_float = keys.float()
+    num_blocks = num_blocks_for_tokens(keys.shape[2], block_size)
+    block_scores = []
+    scale = math.sqrt(keys.shape[-1])
+    for block_id in range(num_blocks):
+        start = block_id * block_size
+        end = min(start + block_size, keys.shape[2])
+        scores = torch.einsum(
+            "bhd,bhtd->bht",
+            last_query,
+            keys_float[:, :, start:end, :],
+        ) / scale
+        block_scores.append(reduce_token_scores(scores, reduction))
+    return torch.stack(block_scores)
+
+
+def mean_keys_by_block(keys: torch.Tensor, block_size: int) -> torch.Tensor:
+    if keys.ndim != 4:
+        raise ValueError("K tensor must have shape [batch, heads, tokens, dim]")
+    num_blocks = num_blocks_for_tokens(keys.shape[2], block_size)
+    block_means = []
+    for block_id in range(num_blocks):
+        start = block_id * block_size
+        end = min(start + block_size, keys.shape[2])
+        block_means.append(keys[:, :, start:end, :].float().mean(dim=2))
+    return torch.stack(block_means, dim=2)
+
+
+def _cpu_generator(seed: int) -> torch.Generator:
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    return generator
+
+
+def _count_sketch(
+    vectors: torch.Tensor,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    if sketch_dim <= 0:
+        raise ValueError("--sketch-dim must be positive")
+    input_dim = vectors.shape[-1]
+    generator = _cpu_generator(seed)
+    buckets = torch.randint(
+        sketch_dim,
+        (input_dim,),
+        generator=generator,
+        device="cpu",
+    ).to(vectors.device)
+    signs = (
+        torch.randint(
+            2,
+            (input_dim,),
+            generator=generator,
+            device="cpu",
+        ).to(vectors.device, dtype=vectors.dtype)
+        * 2
+        - 1
+    )
+    output = vectors.new_zeros(*vectors.shape[:-1], sketch_dim)
+    index = buckets.expand(*vectors.shape[:-1], input_dim)
+    output.scatter_add_(-1, index, vectors * signs)
+    return output / math.sqrt(input_dim)
+
+
+def _random_projection(
+    vectors: torch.Tensor,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    if sketch_dim <= 0:
+        raise ValueError("--sketch-dim must be positive")
+    input_dim = vectors.shape[-1]
+    generator = _cpu_generator(seed)
+    projection = torch.randn(
+        input_dim,
+        sketch_dim,
+        generator=generator,
+        device="cpu",
+        dtype=torch.float32,
+    ).to(vectors.device, dtype=vectors.dtype)
+    projection = projection / math.sqrt(sketch_dim)
+    return torch.matmul(vectors, projection)
+
+
+def _bidiagonal_sign_subsample(
+    vectors: torch.Tensor,
+    sketch_dim: int,
+    seed: int,
+    alpha: float = 0.5,
+) -> torch.Tensor:
+    if sketch_dim <= 0:
+        raise ValueError("--sketch-dim must be positive")
+    input_dim = vectors.shape[-1]
+    if sketch_dim > input_dim:
+        raise ValueError(
+            "bidiagonal_sign_subsample requires sketch_dim <= input_dim"
+        )
+    generator = _cpu_generator(seed)
+    signs = (
+        torch.randint(
+            2,
+            (input_dim,),
+            generator=generator,
+            device="cpu",
+        ).to(vectors.device, dtype=vectors.dtype)
+        * 2
+        - 1
+    )
+    coords = torch.randperm(
+        input_dim,
+        generator=generator,
+        device="cpu",
+    )[:sketch_dim].sort().values.to(vectors.device)
+    signed = vectors * signs
+    shifted = torch.zeros_like(signed)
+    shifted[..., 1:] = signed[..., :-1]
+    mixed = signed + alpha * shifted
+    return mixed.index_select(-1, coords) * math.sqrt(input_dim / sketch_dim)
+
+
+def sketch_vectors(
+    vectors: torch.Tensor,
+    *,
+    policy: str,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    if policy == "count_sketch":
+        return _count_sketch(vectors, sketch_dim, seed)
+    if policy == "random_projection":
+        return _random_projection(vectors, sketch_dim, seed)
+    if policy == "bidiagonal_sign_subsample":
+        return _bidiagonal_sign_subsample(vectors, sketch_dim, seed)
+    raise ValueError(f"unsupported sketch policy: {policy}")
+
+
+def sketch_block_scores(
+    *,
+    policy: str,
+    query: torch.Tensor,
+    keys: torch.Tensor,
+    block_size: int,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    if policy not in SKETCH_SELECTION_POLICIES:
+        raise ValueError(f"unsupported sketch policy: {policy}")
+    query_vectors = query[:, :, -1, :].float()
+    block_vectors = mean_keys_by_block(keys, block_size)
+    query_sketch = sketch_vectors(
+        query_vectors,
+        policy=policy,
+        sketch_dim=sketch_dim,
+        seed=seed,
+    )
+    block_sketches = sketch_vectors(
+        block_vectors,
+        policy=policy,
+        sketch_dim=sketch_dim,
+        seed=seed,
+    )
+    return (block_sketches * query_sketch.unsqueeze(2)).sum(dim=-1).mean(
+        dim=(0, 1)
+    )
+
+
+def select_scored_block_ids(
+    scores: torch.Tensor,
+    candidate_budget_blocks: int,
+) -> list[int]:
+    if candidate_budget_blocks <= 0:
+        raise ValueError("--candidate-budget-blocks must be positive")
+    if scores.ndim != 1:
+        raise ValueError("block scores must be one-dimensional")
+    budget = min(candidate_budget_blocks, int(scores.shape[0]))
+    return sorted(torch.topk(scores, k=budget).indices.tolist())
+
+
+def select_block_ids_for_policy(
+    *,
+    policy: str,
+    num_blocks: int,
+    candidate_budget_blocks: int,
+    seed: int,
+    masses: torch.Tensor | None = None,
+    query: torch.Tensor | None = None,
+    keys: torch.Tensor | None = None,
+    block_size: int | None = None,
+    sketch_dim: int | None = None,
+    block_score_reduction: str = "max",
+) -> tuple[list[int], dict[str, Any]]:
+    metadata = selector_metadata(
+        policy=policy,
+        sketch_dim=sketch_dim,
+        block_score_reduction=block_score_reduction,
+    )
+    if policy in BASE_SELECTION_POLICIES:
+        return (
+            select_block_ids(
+                policy=policy,
+                num_blocks=num_blocks,
+                candidate_budget_blocks=candidate_budget_blocks,
+                seed=seed,
+                masses=masses,
+            ),
+            metadata,
+        )
+    if query is None or keys is None or block_size is None:
+        raise ValueError(f"{policy} requires Q/K tensors and block size")
+    if policy == "query_key_block_score":
+        scores = query_key_block_scores(
+            query=query,
+            keys=keys,
+            block_size=block_size,
+            reduction=block_score_reduction,
+        )
+    elif policy in SKETCH_SELECTION_POLICIES:
+        if sketch_dim is None:
+            raise ValueError(f"{policy} requires --sketch-dim")
+        scores = sketch_block_scores(
+            policy=policy,
+            query=query,
+            keys=keys,
+            block_size=block_size,
+            sketch_dim=sketch_dim,
+            seed=seed,
+        )
+    else:
+        raise ValueError(f"unsupported selection policy: {policy}")
+    return select_scored_block_ids(scores, candidate_budget_blocks), metadata
+
+
 def captured_attention_mass(
     masses: torch.Tensor,
     selected_block_ids: list[int],
@@ -404,13 +698,26 @@ def evaluate_prompt(
     if explicit is not None:
         selected_ids = explicit
         selection_source = "explicit"
+        selection_metadata = {
+            "sketch_dim": None,
+            "block_score_reduction": args.block_score_reduction,
+            "selector_uses_attention_probs": False,
+            "selector_uses_qk_scores": False,
+            "selector_is_deployable_approximation": False,
+            "selector_is_experimental": False,
+        }
     else:
-        selected_ids = select_block_ids(
+        selected_ids, selection_metadata = select_block_ids_for_policy(
             policy=args.selection_policy,
             num_blocks=num_blocks,
             candidate_budget_blocks=args.candidate_budget_blocks,
             seed=args.seed + prompt_index,
             masses=masses,
+            query=query,
+            keys=keys,
+            block_size=args.block_size,
+            sketch_dim=args.sketch_dim,
+            block_score_reduction=args.block_score_reduction,
         )
         selection_source = args.selection_policy
     selected_keys = gather_selected_blocks(
@@ -443,6 +750,7 @@ def evaluate_prompt(
         "block_count": num_blocks,
         "block_size": args.block_size,
         "selection_source": selection_source,
+        **selection_metadata,
         "selected_block_ids": selected_ids,
         "selected_block_count": len(selected_ids),
         "selected_token_count": selected_token_count,
@@ -483,12 +791,18 @@ def validate_args(args: argparse.Namespace) -> None:
         "--block-size": args.block_size,
         "--candidate-budget-blocks": args.candidate_budget_blocks,
         "--max-length": args.max_length,
+        "--sketch-dim": args.sketch_dim,
     }
     for name, value in positive_values.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive")
     if args.layer_idx < 0:
         raise ValueError("--layer-idx must be non-negative")
+    if args.selection_policy == "bidiagonal_sign_subsample":
+        # The exact head dimension is model-dependent and validated again at
+        # scoring time; this catches only the basic CLI shape.
+        if args.sketch_dim <= 0:
+            raise ValueError("--sketch-dim must be positive")
 
 
 def build_report(
@@ -541,6 +855,17 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "block_size": args.block_size,
             "candidate_budget_blocks": args.candidate_budget_blocks,
             "selection_policy": args.selection_policy,
+            "sketch_dim": (
+                args.sketch_dim
+                if args.selection_policy in SKETCH_SELECTION_POLICIES
+                else None
+            ),
+            "block_score_reduction": args.block_score_reduction,
+            **selector_metadata(
+                policy=args.selection_policy,
+                sketch_dim=args.sketch_dim,
+                block_score_reduction=args.block_score_reduction,
+            ),
             "explicit_selected_blocks": args.selected_blocks,
             "max_length": args.max_length,
             "dtype": args.dtype,
@@ -643,6 +968,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         "Strong oracle results with weak heuristic policies would instead "
         "point to candidate selection as the limiting problem.",
         "",
+        "`query_key_block_score` and sketch selectors use real projected Q/K "
+        "tensors, but they do not use full attention probabilities. They are "
+        "standalone selector diagnostics, not vLLM routing changes.",
+        "",
         "These output-vector comparisons are not generation or logits "
         "quality measurements and do not establish end-to-end model behavior.",
         "",
@@ -681,8 +1010,19 @@ def main(argv: list[str] | None = None) -> int:
                     **report["aggregate"],
                     "model": args.model,
                     "selection_policy": args.selection_policy,
+                    "sketch_dim": (
+                        args.sketch_dim
+                        if args.selection_policy in SKETCH_SELECTION_POLICIES
+                        else None
+                    ),
+                    "block_score_reduction": args.block_score_reduction,
                     "output_json": args.output_json,
                     "output_md": args.output_md,
+                    **selector_metadata(
+                        policy=args.selection_policy,
+                        sketch_dim=args.sketch_dim,
+                        block_score_reduction=args.block_score_reduction,
+                    ),
                     "real_model_qkv": True,
                     "outside_vllm": True,
                     "no_generation_quality": True,

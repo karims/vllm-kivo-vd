@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any
 
 
-ALLOWED_POLICIES = {"recent", "first", "random", "oracle_topk"}
+BASE_POLICIES = {"recent", "first", "random", "oracle_topk"}
+SKETCH_POLICIES = {
+    "count_sketch",
+    "random_projection",
+    "bidiagonal_sign_subsample",
+}
+QK_POLICIES = {"query_key_block_score", *SKETCH_POLICIES}
+ALLOWED_POLICIES = BASE_POLICIES | QK_POLICIES
 FAILURE_THRESHOLDS = {
     "average_cosine_similarity_below": 0.95,
     "min_cosine_similarity_below": 0.90,
@@ -65,6 +72,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--policies",
         default="recent,random,oracle_topk",
+    )
+    parser.add_argument("--sketch-dims", default="32")
+    parser.add_argument(
+        "--block-score-reduction",
+        choices=["max", "mean", "logsumexp"],
+        default="max",
     )
     parser.add_argument("--max-length", type=int, default=768)
     parser.add_argument(
@@ -166,23 +179,32 @@ def build_combinations(
     budgets: list[int],
     block_sizes: list[int],
     policies: list[str],
+    sketch_dims: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     if any(value <= 0 for value in budgets):
         raise ValueError("budgets must be positive")
     if any(value <= 0 for value in block_sizes):
         raise ValueError("block sizes must be positive")
-    return [
-        {
-            "layer_index": layer,
-            "candidate_budget_blocks": budget,
-            "block_size": block_size,
-            "policy": policy,
-        }
-        for layer in layers
-        for budget in budgets
-        for block_size in block_sizes
-        for policy in policies
-    ]
+    if sketch_dims is None:
+        sketch_dims = [32]
+    if any(value <= 0 for value in sketch_dims):
+        raise ValueError("sketch dims must be positive")
+    combinations = []
+    for layer in layers:
+        for budget in budgets:
+            for block_size in block_sizes:
+                for policy in policies:
+                    dims: list[int | None]
+                    dims = sketch_dims if policy in SKETCH_POLICIES else [None]
+                    for sketch_dim in dims:
+                        combinations.append({
+                            "layer_index": layer,
+                            "candidate_budget_blocks": budget,
+                            "block_size": block_size,
+                            "policy": policy,
+                            "sketch_dim": sketch_dim,
+                        })
+    return combinations
 
 
 def _load_evaluator() -> Any:
@@ -252,6 +274,47 @@ def group_averages(
     return sorted(result, key=lambda row: str(row[group_field]))
 
 
+def group_averages_multi(
+    rows: list[dict[str, Any]],
+    group_fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("status") == "succeeded":
+            grouped[tuple(row.get(field) for field in group_fields)].append(
+                row
+            )
+    result = []
+    for group_values, group_rows in grouped.items():
+        summary = {
+            field: value
+            for field, value in zip(group_fields, group_values)
+        }
+        summary.update({
+            "count": len(group_rows),
+            "average_cosine_similarity": _average(
+                group_rows, "average_cosine_similarity"
+            ),
+            "min_cosine_similarity": min(
+                row["min_cosine_similarity"] for row in group_rows
+            ),
+            "average_relative_l2_error": _average(
+                group_rows, "average_relative_l2_error"
+            ),
+            "max_relative_l2_error": max(
+                row["max_relative_l2_error"] for row in group_rows
+            ),
+            "average_attention_mass_captured": _average(
+                group_rows, "average_attention_mass_captured"
+            ),
+        })
+        result.append(summary)
+    return sorted(
+        result,
+        key=lambda row: tuple(str(row.get(field)) for field in group_fields),
+    )
+
+
 def calculate_oracle_gaps(
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -279,6 +342,7 @@ def calculate_oracle_gaps(
             continue
         gaps.append({
             "policy": row["policy"],
+            "sketch_dim": row.get("sketch_dim"),
             "layer_index": row["layer_index"],
             "candidate_budget_blocks": row["candidate_budget_blocks"],
             "block_size": row["block_size"],
@@ -309,6 +373,10 @@ def calculate_oracle_gaps(
 def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     successful = [row for row in rows if row.get("status") == "succeeded"]
     failed = [row for row in rows if row.get("status") == "failed"]
+    per_policy_sketch_dim = group_averages_multi(
+        successful,
+        ("policy", "sketch_dim"),
+    )
     summary: dict[str, Any] = {
         "num_runs": len(rows),
         "num_succeeded": len(successful),
@@ -318,6 +386,16 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "per_layer": group_averages(successful, "layer_index"),
         "per_budget": group_averages(
             successful, "candidate_budget_blocks"
+        ),
+        "per_policy_sketch_dim": per_policy_sketch_dim,
+        "per_policy_sketch_dim_layer_budget": group_averages_multi(
+            successful,
+            (
+                "policy",
+                "sketch_dim",
+                "layer_index",
+                "candidate_budget_blocks",
+            ),
         ),
         "oracle_gaps": calculate_oracle_gaps(successful),
     }
@@ -329,8 +407,14 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "best_by_average_relative_l2": None,
             "worst_by_max_relative_l2": None,
             "best_by_attention_mass": None,
+            "best_deployable_selector": None,
         })
         return summary
+    deployable = [
+        row
+        for row in per_policy_sketch_dim
+        if row["policy"] != "oracle_topk"
+    ]
     summary.update({
         "best_by_average_cosine": max(
             successful, key=lambda row: row["average_cosine_similarity"]
@@ -351,6 +435,17 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             successful,
             key=lambda row: row["average_attention_mass_captured"],
         ),
+        "best_deployable_selector": (
+            sorted(
+                deployable,
+                key=lambda row: (
+                    -row["average_cosine_similarity"],
+                    row["max_relative_l2_error"],
+                ),
+            )[0]
+            if deployable
+            else None
+        ),
     })
     return summary
 
@@ -363,6 +458,18 @@ def _row_from_report(
     prompt_rows = report["per_prompt"]
     row = {
         **combination,
+        "block_score_reduction": report["config"].get(
+            "block_score_reduction"
+        ),
+        "selector_uses_attention_probs": report["config"].get(
+            "selector_uses_attention_probs"
+        ),
+        "selector_uses_qk_scores": report["config"].get(
+            "selector_uses_qk_scores"
+        ),
+        "selector_is_deployable_approximation": report["config"].get(
+            "selector_is_deployable_approximation"
+        ),
         "status": "succeeded",
         "warning": None,
         "num_prompts": aggregate["num_prompts"],
@@ -444,6 +551,7 @@ def _evaluate_combination(
     prompts: list[str],
     cache: dict[tuple[int, int], dict[str, Any]],
     seed: int,
+    block_score_reduction: str = "max",
 ) -> dict[str, Any]:
     prompt_rows = []
     layer = combination["layer_index"]
@@ -458,12 +566,17 @@ def _evaluate_combination(
             tensors["values"],
         )
         masses = evaluator.block_attention_mass(probabilities, block_size)
-        selected_ids = evaluator.select_block_ids(
+        selected_ids, selector_info = evaluator.select_block_ids_for_policy(
             policy=policy,
             num_blocks=int(masses.shape[0]),
             candidate_budget_blocks=budget,
             seed=seed + prompt_index,
             masses=masses,
+            query=tensors["query"],
+            keys=tensors["keys"],
+            block_size=block_size,
+            sketch_dim=combination.get("sketch_dim"),
+            block_score_reduction=block_score_reduction,
         )
         selected_keys = evaluator.gather_selected_blocks(
             tensors["keys"], selected_ids, block_size
@@ -488,12 +601,19 @@ def _evaluate_combination(
             "selected_token_ratio": (
                 int(selected_keys.shape[2]) / token_length
             ),
+            **selector_info,
         })
     return evaluator.build_report(
         config={
             **combination,
             "selection_policy": policy,
             "seed": seed,
+            "block_score_reduction": block_score_reduction,
+            **evaluator.selector_metadata(
+                policy=policy,
+                sketch_dim=combination.get("sketch_dim"),
+                block_score_reduction=block_score_reduction,
+            ),
         },
         rows=prompt_rows,
     )
@@ -579,6 +699,58 @@ def render_markdown(
                 for row in summary[key]
             ],
         )
+    lines.extend(["", "## Policy, Sketch Dimension, Layer, And Budget", ""])
+    _append_table(
+        lines,
+        [
+            "policy",
+            "sketch dim",
+            "layer",
+            "budget",
+            "count",
+            "avg cosine",
+            "max rel L2",
+            "avg mass",
+        ],
+        [
+            [
+                row["policy"],
+                row["sketch_dim"],
+                row["layer_index"],
+                row["candidate_budget_blocks"],
+                row["count"],
+                row["average_cosine_similarity"],
+                row["max_relative_l2_error"],
+                row["average_attention_mass_captured"],
+            ]
+            for row in summary["per_policy_sketch_dim_layer_budget"]
+        ],
+    )
+    lines.extend(["", "## Best Deployable Selector", ""])
+    best_deployable = summary["best_deployable_selector"]
+    _append_table(
+        lines,
+        ["policy", "sketch dim", "count", "avg cosine", "max rel L2"],
+        [[
+            best_deployable["policy"] if best_deployable else None,
+            best_deployable.get("sketch_dim") if best_deployable else None,
+            (
+                best_deployable["count"]
+                if best_deployable
+                else None
+            ),
+            (
+                best_deployable["average_cosine_similarity"]
+                if best_deployable
+                else None
+            ),
+            (
+                best_deployable["max_relative_l2_error"]
+                if best_deployable
+                else None
+            ),
+        ]],
+    )
     lines.extend(["", "## Worst Cases", ""])
     worst_rows = [
         ("worst average cosine", summary["worst_by_average_cosine"]),
@@ -605,6 +777,7 @@ def render_markdown(
         lines,
         [
             "policy",
+            "sketch dim",
             "layer",
             "budget",
             "block",
@@ -615,6 +788,7 @@ def render_markdown(
         [
             [
                 row["policy"],
+                row.get("sketch_dim"),
                 row["layer_index"],
                 row["candidate_budget_blocks"],
                 row["block_size"],
@@ -634,12 +808,17 @@ def render_markdown(
         "selection as the bottleneck. Oracle failures at low budgets indicate "
         "that selected attention itself may be risky at those budgets.",
         "",
+        "The best deployable selector excludes `oracle_topk` and is ranked "
+        "first by average cosine similarity, then by maximum relative L2 "
+        "error. This is a diagnostic ranking, not a production recommendation.",
+        "",
         "Failure flags are research heuristics, not model-quality thresholds.",
         "",
         "## Caveats",
         "",
         "- Q/K/V projections come from a real GPT-2-style model.",
         "- Evaluation runs outside vLLM.",
+        "- Sketch selectors use projected Q/K but not attention probabilities.",
         "- No logits or generation quality is measured.",
         "- No active routing is implemented.",
         "- No measured runtime memory reduction is claimed.",
@@ -647,9 +826,10 @@ def render_markdown(
         "",
         "## Recommended Next Step",
         "",
-        "If oracle remains strong, Phase 10.3 should evaluate sketch-based "
-        "selectors on the same real Q/K/V evidence before any vLLM attention "
-        "integration.",
+        "Compare deployable selector configurations against oracle across "
+        "layers and budgets. Strong standalone results should still be "
+        "followed by logits and generation-quality evaluation before any "
+        "vLLM attention integration.",
     ])
     return "\n".join(lines) + "\n"
 
@@ -696,6 +876,9 @@ def summary_aliases(summary: dict[str, Any]) -> dict[str, Any]:
         "best_by_average_cosine": best,
         "worst_by_max_relative_l2": worst_l2,
         "worst_by_min_cosine": summary.get("worst_by_min_cosine"),
+        "best_deployable_selector": summary.get(
+            "best_deployable_selector"
+        ),
     }
 
 
@@ -731,10 +914,11 @@ def main(argv: list[str] | None = None) -> int:
         layers = _parse_int_csv(args.layers)
         budgets = _parse_int_csv(args.budgets)
         block_sizes = _parse_int_csv(args.block_sizes)
+        sketch_dims = _parse_int_csv(args.sketch_dims)
         policies = parse_policies(args.policies)
         prompts = read_prompts(args.prompts_file)
         combinations = build_combinations(
-            layers, budgets, block_sizes, policies
+            layers, budgets, block_sizes, policies, sketch_dims
         )
         output_dir = resolve_output_dir(args.output_dir, args.run_name)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -749,6 +933,8 @@ def main(argv: list[str] | None = None) -> int:
             "budgets": budgets,
             "block_sizes": block_sizes,
             "policies": policies,
+            "sketch_dims": sketch_dims,
+            "block_score_reduction": args.block_score_reduction,
             "max_length": args.max_length,
             "dtype": args.dtype,
             "device": args.device,
@@ -813,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
                     prompts=prompts,
                     cache=cache,
                     seed=args.seed,
+                    block_score_reduction=args.block_score_reduction,
                 )
                 rows.append(_row_from_report(combination, report))
             except Exception as exc:

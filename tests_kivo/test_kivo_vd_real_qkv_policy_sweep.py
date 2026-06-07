@@ -37,12 +37,14 @@ def _row(
     relative_l2: float,
     max_relative_l2: float,
     mass: float,
+    sketch_dim: int | None = None,
 ) -> dict:
     return {
         "policy": policy,
         "layer_index": layer,
         "candidate_budget_blocks": budget,
         "block_size": 16,
+        "sketch_dim": sketch_dim,
         "status": "succeeded",
         "num_prompts": 2,
         "average_cosine_similarity": cosine,
@@ -62,8 +64,16 @@ def test_parses_comma_separated_sweep_values() -> None:
     assert module._parse_int_csv("0,5,11") == [0, 5, 11]
     assert module._parse_int_csv("4,8,16") == [4, 8, 16]
     assert module.parse_policies(
-        "recent,random,oracle_topk"
-    ) == ["recent", "random", "oracle_topk"]
+        "recent,query_key_block_score,count_sketch,random_projection,"
+        "bidiagonal_sign_subsample,oracle_topk"
+    ) == [
+        "recent",
+        "query_key_block_score",
+        "count_sketch",
+        "random_projection",
+        "bidiagonal_sign_subsample",
+        "oracle_topk",
+    ]
 
 
 def test_builds_all_sweep_combinations() -> None:
@@ -92,6 +102,30 @@ def test_builds_all_sweep_combinations() -> None:
         for block_size in (8, 16)
         for policy in ("recent", "oracle_topk")
     }
+
+
+def test_sketch_dims_expand_only_sketch_policies() -> None:
+    module = _load_module()
+
+    combinations = module.build_combinations(
+        layers=[0],
+        budgets=[4],
+        block_sizes=[16],
+        policies=["recent", "count_sketch", "random_projection"],
+        sketch_dims=[16, 32],
+    )
+
+    assert len(combinations) == 5
+    assert [
+        row["sketch_dim"]
+        for row in combinations
+        if row["policy"] == "recent"
+    ] == [None]
+    assert {
+        row["sketch_dim"]
+        for row in combinations
+        if row["policy"] == "count_sketch"
+    } == {16, 32}
 
 
 def test_failure_flags_use_research_thresholds() -> None:
@@ -153,6 +187,40 @@ def test_summary_and_oracle_gap_calculation() -> None:
     assert gap["cosine_gap"] == pytest.approx(0.19)
     assert gap["relative_l2_gap"] == pytest.approx(0.45)
     assert gap["attention_mass_gap"] == pytest.approx(0.35)
+
+
+def test_sketch_oracle_gap_and_best_deployable_selector() -> None:
+    module = _load_module()
+    oracle = _row(
+        policy="oracle_topk",
+        layer=0,
+        budget=4,
+        cosine=0.99,
+        min_cosine=0.98,
+        relative_l2=0.05,
+        max_relative_l2=0.10,
+        mass=0.95,
+    )
+    sketch = _row(
+        policy="count_sketch",
+        layer=0,
+        budget=4,
+        cosine=0.94,
+        min_cosine=0.90,
+        relative_l2=0.15,
+        max_relative_l2=0.25,
+        mass=0.85,
+        sketch_dim=32,
+    )
+
+    summary = module.summarize_rows([oracle, sketch])
+
+    gap = summary["oracle_gaps"][0]
+    assert gap["policy"] == "count_sketch"
+    assert gap["sketch_dim"] == 32
+    assert gap["cosine_gap"] == pytest.approx(0.05)
+    assert summary["best_deployable_selector"]["policy"] == "count_sketch"
+    assert summary["best_deployable_selector"]["policy"] != "oracle_topk"
 
 
 def test_summary_payload_has_nested_and_top_level_aliases() -> None:
@@ -316,6 +384,8 @@ def test_cli_help_includes_expected_args() -> None:
         "--budgets",
         "--block-sizes",
         "--policies",
+        "--sketch-dims",
+        "--block-score-reduction",
         "--max-length",
         "--dtype",
         "--device",

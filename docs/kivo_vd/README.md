@@ -150,6 +150,7 @@ quality preservation has been demonstrated. Full KV remains allocated.
 - [Phase 10.0: Selected-Attention Equivalence](phase10_0_selected_attention_equivalence.md)
 - [Phase 10.1: Real-QKV Selected-Attention Eval](phase10_1_real_qkv_selected_attention_eval.md)
 - [Phase 10.2: Real-QKV Policy Sweep](phase10_2_real_qkv_policy_sweep.md)
+- [Phase 10.3: Sketch-Based Real-QKV Selectors](phase10_3_sketch_based_real_qkv_selectors.md)
 
 Phase 10.0 starts the correctness path authorized by the Phase 9 gate. It
 compares full versus selected attention on synthetic PyTorch Q/K/V tensors
@@ -180,6 +181,14 @@ attention can be strong with oracle blocks while heuristic selection fails.
 Candidate selection is now the bottleneck. There is still no vLLM integration,
 logits or generation-quality result, active routing, latency claim, or
 measured memory reduction.
+
+Phase 10.3 adds direct Q/K block scoring and deterministic CountSketch, random
+projection, and experimental bidiagonal sign-subsample selectors. These
+selectors operate on real GPT-2 projected Q/K tensors without using full
+attention probabilities. The sweep compares them with oracle top-k and ranks
+the best non-oracle selector, but it remains standalone and does not establish
+logits, generation quality, active routing, latency, or runtime memory
+reduction.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

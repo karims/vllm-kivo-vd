@@ -67,6 +67,89 @@ def test_oracle_selects_highest_mass_blocks() -> None:
     )
 
 
+def test_query_key_block_score_selects_expected_block() -> None:
+    module = _load_module()
+    query = torch.zeros(1, 1, 4, 4)
+    query[:, :, -1, 0] = 1.0
+    keys = torch.zeros(1, 1, 4, 4)
+    keys[:, :, 2:, 0] = 5.0
+
+    scores = module.query_key_block_scores(
+        query,
+        keys,
+        block_size=2,
+        reduction="max",
+    )
+    selected, metadata = module.select_block_ids_for_policy(
+        policy="query_key_block_score",
+        num_blocks=2,
+        candidate_budget_blocks=1,
+        seed=0,
+        query=query,
+        keys=keys,
+        block_size=2,
+        block_score_reduction="max",
+    )
+
+    assert scores.shape == (2,)
+    assert selected == [1]
+    assert metadata["selector_uses_attention_probs"] is False
+    assert metadata["selector_uses_qk_scores"] is True
+
+
+@pytest.mark.parametrize("policy", ["count_sketch", "random_projection"])
+def test_sketch_block_scores_are_deterministic(policy: str) -> None:
+    module = _load_module()
+    query = torch.randn(1, 2, 5, 8)
+    keys = torch.randn(1, 2, 5, 8)
+
+    first = module.sketch_block_scores(
+        policy=policy,
+        query=query,
+        keys=keys,
+        block_size=2,
+        sketch_dim=4,
+        seed=17,
+    )
+    second = module.sketch_block_scores(
+        policy=policy,
+        query=query,
+        keys=keys,
+        block_size=2,
+        sketch_dim=4,
+        seed=17,
+    )
+
+    assert first.shape == (3,)
+    assert torch.equal(first, second)
+
+
+def test_bidiagonal_sign_subsample_scores_are_stable() -> None:
+    module = _load_module()
+    query = torch.randn(1, 2, 5, 8)
+    keys = torch.randn(1, 2, 5, 8)
+
+    first = module.sketch_block_scores(
+        policy="bidiagonal_sign_subsample",
+        query=query,
+        keys=keys,
+        block_size=2,
+        sketch_dim=4,
+        seed=3,
+    )
+    second = module.sketch_block_scores(
+        policy="bidiagonal_sign_subsample",
+        query=query,
+        keys=keys,
+        block_size=2,
+        sketch_dim=4,
+        seed=3,
+    )
+
+    assert first.shape == (3,)
+    assert torch.equal(first, second)
+
+
 def test_selected_attention_output_shape_with_partial_block() -> None:
     module = _load_module()
     query = torch.randn(1, 2, 5, 4)
@@ -155,6 +238,23 @@ def test_report_has_stable_json_schema() -> None:
         assert field in report["aggregate"]
 
 
+def test_cli_parses_sketch_selector_options() -> None:
+    module = _load_module()
+
+    args = module._parse_args([
+        "--selection-policy",
+        "count_sketch",
+        "--sketch-dim",
+        "16",
+        "--block-score-reduction",
+        "mean",
+    ])
+
+    assert args.selection_policy == "count_sketch"
+    assert args.sketch_dim == 16
+    assert args.block_score_reduction == "mean"
+
+
 def test_markdown_contains_required_caveats() -> None:
     module = _load_module()
     report = {
@@ -212,6 +312,8 @@ def test_cli_help_includes_expected_args() -> None:
         "--block-size",
         "--candidate-budget-blocks",
         "--selection-policy",
+        "--sketch-dim",
+        "--block-score-reduction",
         "--selected-blocks",
         "--max-length",
         "--dtype",
