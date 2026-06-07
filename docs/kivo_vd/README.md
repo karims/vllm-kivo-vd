@@ -75,6 +75,10 @@ Recommended reading order:
 - [Phase 7.1: Dry-Run Event Memory Estimator](phase7_1_dry_run_event_memory_estimator.md)
 - [Phase 7.2: Memory Baseline Vs Estimate](phase7_2_memory_baseline_vs_estimate.md)
 - [Phase 7.3: Memory Accounting Pipeline](phase7_3_memory_accounting_pipeline.md)
+- [Phase 7.4: Memory Decision Gate](phase7_4_memory_decision_gate.md)
+
+Phase 7 closes with a conservative decision gate before Phase 8 overhead
+experiments. Passing the gate does not authorize active routing.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
