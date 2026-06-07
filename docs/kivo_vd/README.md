@@ -72,6 +72,7 @@ Recommended reading order:
 ## Phase 7 Memory Accounting
 
 - [Phase 7.0: Runtime Memory Baseline](phase7_0_runtime_memory_baseline.md)
+- [Phase 7.1: Dry-Run Event Memory Estimator](phase7_1_dry_run_event_memory_estimator.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
