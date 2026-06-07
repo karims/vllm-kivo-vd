@@ -670,6 +670,61 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
+def summary_aliases(summary: dict[str, Any]) -> dict[str, Any]:
+    best = summary.get("best_by_average_cosine")
+    worst_l2 = summary.get("worst_by_max_relative_l2")
+    return {
+        "num_runs": summary["num_runs"],
+        "num_succeeded": summary["num_succeeded"],
+        "num_failed": summary["num_failed"],
+        "best_policy_by_average_cosine": (
+            best.get("policy") if isinstance(best, dict) else None
+        ),
+        "worst_policy_layer_budget": (
+            {
+                key: worst_l2.get(key)
+                for key in (
+                    "policy",
+                    "layer_index",
+                    "candidate_budget_blocks",
+                    "block_size",
+                )
+            }
+            if isinstance(worst_l2, dict)
+            else None
+        ),
+        "best_by_average_cosine": best,
+        "worst_by_max_relative_l2": worst_l2,
+        "worst_by_min_cosine": summary.get("worst_by_min_cosine"),
+    }
+
+
+def build_summary_payload(
+    *,
+    config: dict[str, Any],
+    started_at: str,
+    ended_at: str,
+    success: bool,
+    dry_run: bool,
+    summary: dict[str, Any],
+    outputs: dict[str, str],
+    caveats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "config": config,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "success": success,
+        "dry_run": dry_run,
+        "summary": summary,
+        "outputs": outputs,
+        **summary_aliases(summary),
+    }
+    if caveats is not None:
+        payload["caveats"] = caveats
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv)
@@ -712,19 +767,19 @@ def main(argv: list[str] | None = None) -> int:
                 for combination in combinations
             ]
             summary = summarize_rows(rows)
-            payload = {
-                "config": config,
-                "started_at": started_at,
-                "ended_at": _iso_now(),
-                "success": True,
-                "dry_run": True,
-                "summary": summary,
-                "outputs": {
+            payload = build_summary_payload(
+                config=config,
+                started_at=started_at,
+                ended_at=_iso_now(),
+                success=True,
+                dry_run=True,
+                summary=summary,
+                outputs={
                     "runs_jsonl": str(runs_path),
                     "summary_json": str(summary_path),
                     "summary_markdown": str(markdown_path),
                 },
-            }
+            )
             _write_jsonl(runs_path, rows)
             _write_json(summary_path, payload)
             markdown_path.write_text(
@@ -771,26 +826,27 @@ def main(argv: list[str] | None = None) -> int:
                     break
         summary = summarize_rows(rows)
         success = summary["num_failed"] == 0
-        payload = {
-            "config": config,
-            "started_at": started_at,
-            "ended_at": _iso_now(),
-            "success": success,
-            "dry_run": False,
-            "summary": summary,
-            "outputs": {
+        caveats = {
+            "real_model_qkv": True,
+            "outside_vllm": True,
+            "no_logits_or_generation_quality": True,
+            "active_routing": False,
+            "measured_runtime_reduction": False,
+        }
+        payload = build_summary_payload(
+            config=config,
+            started_at=started_at,
+            ended_at=_iso_now(),
+            success=success,
+            dry_run=False,
+            summary=summary,
+            outputs={
                 "runs_jsonl": str(runs_path),
                 "summary_json": str(summary_path),
                 "summary_markdown": str(markdown_path),
             },
-            "caveats": {
-                "real_model_qkv": True,
-                "outside_vllm": True,
-                "no_logits_or_generation_quality": True,
-                "active_routing": False,
-                "measured_runtime_reduction": False,
-            },
-        }
+            caveats=caveats,
+        )
         _write_jsonl(runs_path, rows)
         _write_json(summary_path, payload)
         markdown_path.write_text(
@@ -798,32 +854,9 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         compact = {
-            "num_runs": summary["num_runs"],
-            "num_succeeded": summary["num_succeeded"],
-            "num_failed": summary["num_failed"],
-            "best_policy_by_average_cosine": (
-                summary["best_by_average_cosine"]["policy"]
-                if summary["best_by_average_cosine"]
-                else None
-            ),
-            "worst_policy_layer_budget": (
-                {
-                    key: summary["worst_by_max_relative_l2"][key]
-                    for key in (
-                        "policy",
-                        "layer_index",
-                        "candidate_budget_blocks",
-                        "block_size",
-                    )
-                }
-                if summary["worst_by_max_relative_l2"]
-                else None
-            ),
+            **summary_aliases(summary),
             "outputs": payload["outputs"],
-            "outside_vllm": True,
-            "no_logits_or_generation_quality": True,
-            "active_routing": False,
-            "measured_runtime_reduction": False,
+            **caveats,
         }
         print(json.dumps(compact, separators=(",", ":")))
         return 0 if success else 1

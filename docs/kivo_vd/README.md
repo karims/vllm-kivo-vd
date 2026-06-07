@@ -173,6 +173,14 @@ budgets, block sizes, and prompts. It reports oracle gaps and research failure
 flags so candidate selection can be evaluated before any vLLM attention
 integration.
 
+The Phase 10.2 A6000 sweep completed 60 GPT-2 real-Q/K/V runs with no
+failures. Oracle top-k was strongest overall and improved smoothly with
+budget. Recent and random were unreliable; layer 5 showed that selected
+attention can be strong with oracle blocks while heuristic selection fails.
+Candidate selection is now the bottleneck. There is still no vLLM integration,
+logits or generation-quality result, active routing, latency claim, or
+measured memory reduction.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)

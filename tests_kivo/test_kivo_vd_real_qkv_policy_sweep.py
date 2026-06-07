@@ -155,6 +155,62 @@ def test_summary_and_oracle_gap_calculation() -> None:
     assert gap["attention_mass_gap"] == pytest.approx(0.35)
 
 
+def test_summary_payload_has_nested_and_top_level_aliases() -> None:
+    module = _load_module()
+    oracle = _row(
+        policy="oracle_topk",
+        layer=5,
+        budget=4,
+        cosine=0.99,
+        min_cosine=0.98,
+        relative_l2=0.05,
+        max_relative_l2=0.10,
+        mass=0.95,
+    )
+    recent = _row(
+        policy="recent",
+        layer=5,
+        budget=4,
+        cosine=0.80,
+        min_cosine=0.70,
+        relative_l2=0.50,
+        max_relative_l2=0.80,
+        mass=0.60,
+    )
+    summary = module.summarize_rows([oracle, recent])
+
+    payload = module.build_summary_payload(
+        config={"model": "gpt2"},
+        started_at="start",
+        ended_at="end",
+        success=True,
+        dry_run=False,
+        summary=summary,
+        outputs={"summary_json": "summary.json"},
+    )
+
+    assert payload["summary"] == summary
+    assert payload["num_runs"] == 2
+    assert payload["num_succeeded"] == 2
+    assert payload["num_failed"] == 0
+    assert payload["best_policy_by_average_cosine"] == "oracle_topk"
+    assert payload["worst_policy_layer_budget"] == {
+        "policy": "recent",
+        "layer_index": 5,
+        "candidate_budget_blocks": 4,
+        "block_size": 16,
+    }
+    assert payload["best_by_average_cosine"] == (
+        summary["best_by_average_cosine"]
+    )
+    assert payload["worst_by_max_relative_l2"] == (
+        summary["worst_by_max_relative_l2"]
+    )
+    assert payload["worst_by_min_cosine"] == (
+        summary["worst_by_min_cosine"]
+    )
+
+
 def test_dry_run_writes_planned_runs_without_model_download(
     tmp_path: Path,
 ) -> None:
@@ -197,6 +253,14 @@ def test_dry_run_writes_planned_runs_without_model_download(
 
     assert payload["dry_run"] is True
     assert payload["summary"]["num_runs"] == 4
+    assert payload["num_runs"] == 4
+    assert payload["num_succeeded"] == 0
+    assert payload["num_failed"] == 0
+    assert payload["best_policy_by_average_cosine"] is None
+    saved_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert saved_summary["summary"]["num_runs"] == 4
+    assert saved_summary["num_runs"] == 4
+    assert "best_by_average_cosine" in saved_summary
     assert len(rows) == 4
     assert all(row["status"] == "planned" for row in rows)
     assert summary_path.exists()
