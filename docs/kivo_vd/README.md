@@ -30,6 +30,8 @@ Recommended reading order:
   alpha `0.25` and `0.5` remain the next settings to compare.
 - Structured results are offline retrieval evidence, not a proven runtime
   winner, active-routing result, or measured memory reduction.
+- Phase 7.0 adds runtime memory baseline measurement without changing KV
+  allocation or attention behavior.
 - Next recommended work is memory accounting, not active routing.
 
 ## vLLM KV Runtime Map And Integration Plan
@@ -66,6 +68,10 @@ Recommended reading order:
 - [Phase 6.2: Structured Parameter Sweep](phase6_2_structured_parameter_sweep.md)
 - [Phase 6.3: Modern Model Structured Check](phase6_3_modern_model_structured_check.md)
 - [Phase 6.4: Structured Sketch Summary](phase6_4_structured_sketch_summary.md)
+
+## Phase 7 Memory Accounting
+
+- [Phase 7.0: Runtime Memory Baseline](phase7_0_runtime_memory_baseline.md)
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
