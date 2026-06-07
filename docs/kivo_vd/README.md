@@ -110,6 +110,14 @@ materialization experiment. A passing gate does not authorize active routing.
 The validated gate passed for temporary gather/copy measurement only. Phase 8
 buffer overhead is additive and is not a memory-saving result by itself.
 
+## Phase 9 Selected-KV Measurement
+
+- [Phase 9.0: Selected-KV Materialization](phase9_0_selected_kv_materialization.md)
+
+Phase 9.0 gathers synthetic selected KV blocks into temporary tensors outside
+attention. It does not access real vLLM KV, replace full KV, or enable active
+routing.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
