@@ -23,7 +23,11 @@ from vllm.v1.core.kivo_vd_sketch_backend import (
 )
 
 
-def _mk_sketch(request_id: str, block_id: int, logical_block_idx: int) -> KivoVDBlockSketch:
+def _mk_sketch(
+    request_id: str,
+    block_id: int,
+    logical_block_idx: int,
+) -> KivoVDBlockSketch:
     return KivoVDBlockSketch(
         request_id=request_id,
         block_id=block_id,
@@ -36,7 +40,10 @@ def _mk_sketch(request_id: str, block_id: int, logical_block_idx: int) -> KivoVD
 
 
 def test_backend_factory_creates_expected_backends() -> None:
-    assert isinstance(make_sketch_backend(KivoVDSketchType.COUNT_SKETCH), CountSketchBackend)
+    assert isinstance(
+        make_sketch_backend(KivoVDSketchType.COUNT_SKETCH),
+        CountSketchBackend,
+    )
     assert isinstance(
         make_sketch_backend(KivoVDSketchType.RANDOM_PROJECTION),
         RandomProjectionBackend,
@@ -163,6 +170,47 @@ def test_observer_dry_run_select_candidates() -> None:
     assert events[-1]["skipped_block_count"] == 1
     assert events[-1]["candidate_budget_blocks"] == 1
     assert events[-1]["source"] == "unit"
+    assert events[-1]["full_block_ids_exported"] is False
+    assert "selected_block_ids_full" not in events[-1]
+
+
+def test_observer_dry_run_can_export_full_block_ids() -> None:
+    index = KivoVDSketchIndex()
+    index.add_or_update_block_sketch(_mk_sketch("full", 1, 0))
+    index.add_or_update_block_sketch(_mk_sketch("full", 2, 1))
+    observer = KivoVDObserver(
+        enabled=True,
+        sketch_index=index,
+        candidate_selector=KivoVDCandidateSelector(),
+        export_full_block_ids=True,
+    )
+
+    decision = observer.dry_run_select_candidates("full", source="unit")
+
+    assert decision is not None
+    event = observer.get_recent_events()[-1]
+    assert event["full_block_ids_exported"] is True
+    assert event["selected_block_ids_full"] == decision.selected_block_ids
+    assert event["recent_block_ids_full"] == decision.recent_block_ids
+    assert event["skipped_block_ids_full"] == decision.skipped_block_ids
+    assert event["selected_block_preview"] == decision.selected_block_ids[:8]
+
+
+def test_observer_full_block_ids_can_be_enabled_by_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KIVO_EXPORT_FULL_BLOCK_IDS", "1")
+
+    observer = KivoVDObserver(
+        enabled=True,
+        sketch_index=KivoVDSketchIndex(),
+        candidate_selector=KivoVDCandidateSelector(),
+    )
+
+    observer.dry_run_select_candidates("missing", source="env")
+    event = observer.get_recent_events()[-1]
+    assert event["full_block_ids_exported"] is True
+    assert event["selected_block_ids_full"] == []
 
 
 def test_observer_dry_run_empty_request_records_event() -> None:

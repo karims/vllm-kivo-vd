@@ -39,6 +39,7 @@ def _args(**overrides):
         "head_dim": 64,
         "block_size": 16,
         "dtype_bytes": 2,
+        "export_full_block_ids": True,
         "run_name": "test-run",
         "output_dir": None,
         "dry_run": True,
@@ -75,6 +76,7 @@ def test_pipeline_help_includes_expected_args() -> None:
         "--head-dim",
         "--block-size",
         "--dtype-bytes",
+        "--export-full-block-ids",
         "--run-name",
         "--output-dir",
         "--dry-run",
@@ -116,10 +118,12 @@ def test_stage_commands_pass_runtime_and_kv_metadata(tmp_path: Path) -> None:
     assert "0.05" in baseline_command
     assert "--max-model-len" in baseline_command
     assert "--enable-kivo-vd" not in baseline_command
+    assert "--export-full-block-ids" not in baseline_command
 
     kivo_command = stages[1]["command"]
     assert "--enable-kivo-vd" in kivo_command
     assert "--event-output" in kivo_command
+    assert "--export-full-block-ids" in kivo_command
 
     estimate_command = stages[2]["command"]
     assert estimate_command[estimate_command.index("--num-layers") + 1] == "12"
@@ -200,3 +204,4 @@ def test_initial_summary_schema_contains_outputs(tmp_path: Path) -> None:
     )
     assert summary["savings_are_theoretical_only"] is True
     assert summary["measured_runtime_reduction"] is False
+    assert summary["parameters"]["export_full_block_ids"] is True

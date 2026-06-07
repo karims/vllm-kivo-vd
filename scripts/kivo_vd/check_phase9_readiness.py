@@ -153,10 +153,17 @@ def _materialization_checks(
     selected = _number(aggregate.get("average_selected_blocks"))
     copy_ms = _number(aggregate.get("average_copy_time_ms"))
     ratio = _number(aggregate.get("average_materialization_ratio"))
-    preview_count = sum(
+    preview_count_from_rows = sum(
         isinstance(row, dict)
         and row.get("selected_ids_preview_only") is True
         for row in rows
+    )
+    preview_count = int(
+        _number(aggregate.get("preview_only_event_count"))
+        or preview_count_from_rows
+    )
+    full_id_count = int(
+        _number(aggregate.get("full_block_ids_exported_count")) or 0
     )
     missing_ids = any(
         "lacks selected block id" in str(warning).lower()
@@ -189,6 +196,7 @@ def _materialization_checks(
             ratio is not None and ratio < 1.0
         ),
         "preview_only_event_count": preview_count,
+        "full_block_ids_exported_count": full_id_count,
         "missing_selected_ids_warning": missing_ids,
     }
 
@@ -335,6 +343,7 @@ def build_readiness_report(
         materialization_checks["copy_time_observed"],
         materialization_checks["materialization_ratio_below_one"],
         not materialization_checks["missing_selected_ids_warning"],
+        materialization_checks["preview_only_event_count"] == 0,
         all(caveat_checks.values()),
     ])
     ratio = materialization_checks["average_materialization_ratio"]

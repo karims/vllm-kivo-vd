@@ -117,6 +117,31 @@ Preview-only event exports undercount copied payload. Phase 9.1 carries this
 warning forward and does not recommend a strong repeated-run conclusion until
 complete selected block IDs are available.
 
+Complete selected block IDs are required before using Phase 9 ratios for Phase
+10 planning. Regenerate the Phase 7 event artifact with:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_memory_accounting_pipeline.py \
+  --model gpt2 \
+  --prompt "$LONG_PROMPT" \
+  --max-tokens 32 \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 768 \
+  --max-num-batched-tokens 768 \
+  --max-num-seqs 1 \
+  --num-layers 12 \
+  --num-kv-heads 12 \
+  --head-dim 64 \
+  --block-size 16 \
+  --dtype-bytes 2 \
+  --export-full-block-ids \
+  --run-name phase7_gpt2_medium_memory_accounting_full_ids
+```
+
+Then point Phase 9.2 at the resulting `kivo_dry_run_events.jsonl`. Full-ID
+events preserve the normal previews and add complete selected, recent, and
+skipped arrays.
+
 ## Caveats
 
 - KV tensors are synthetic.

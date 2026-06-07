@@ -33,6 +33,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=32)
     parser.add_argument("--enable-kivo-vd", action="store_true")
     parser.add_argument(
+        "--export-full-block-ids",
+        action="store_true",
+        help=(
+            "Opt in to complete block-ID arrays in Kivo routing events. "
+            "Only applies to Kivo-enabled runs."
+        ),
+    )
+    parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
         default=0.05,
@@ -251,6 +259,8 @@ def main() -> int:
         args = _parse_args()
         if args.force_inproc_engine_core:
             os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+        if args.export_full_block_ids:
+            os.environ["KIVO_EXPORT_FULL_BLOCK_IDS"] = "1"
 
         import torch
 
@@ -336,6 +346,7 @@ def main() -> int:
             "dtype": args.dtype,
             "device": args.device,
             "seed": args.seed,
+            "export_full_block_ids": bool(args.export_full_block_ids),
         }
         runtime = {
             "vllm_version": vllm_version,
@@ -367,6 +378,9 @@ def main() -> int:
             "peak_deltas": result["peak_deltas"],
             "event_output": event_output,
             "num_events_exported": num_events_exported,
+            "full_block_ids_export_requested": bool(
+                args.export_full_block_ids
+            ),
         }
         print(json.dumps(summary, separators=(",", ":")))
         return 0

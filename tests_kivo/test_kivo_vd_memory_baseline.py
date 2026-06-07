@@ -84,6 +84,7 @@ def test_memory_baseline_help_includes_runtime_args() -> None:
         "--max-num-batched-tokens",
         "--max-num-seqs",
         "--output",
+        "--export-full-block-ids",
     ):
         assert flag in proc.stdout
 
@@ -145,3 +146,4 @@ def test_llm_kwargs_use_conservative_defaults() -> None:
     assert kwargs["max_model_len"] == 256
     assert kwargs["max_num_batched_tokens"] == 256
     assert kwargs["max_num_seqs"] == 1
+    assert args.export_full_block_ids is False

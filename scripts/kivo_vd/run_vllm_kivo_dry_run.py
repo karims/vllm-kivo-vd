@@ -29,6 +29,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--enable-kivo-vd", action="store_true")
     parser.add_argument(
+        "--export-full-block-ids",
+        action="store_true",
+        help=(
+            "Opt in to complete selected/recent/skipped block-ID arrays in "
+            "Kivo routing events."
+        ),
+    )
+    parser.add_argument(
         "--event-output",
         default="outputs/kivo_vd/vllm_kivo_dry_run_events.jsonl",
     )
@@ -220,6 +228,8 @@ def main() -> int:
         args = _parse_args()
         if args.force_inproc_engine_core:
             os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+        if args.export_full_block_ids:
+            os.environ["KIVO_EXPORT_FULL_BLOCK_IDS"] = "1"
 
         baseline = None
         if args.compare_baseline:
@@ -271,6 +281,9 @@ def main() -> int:
             "outputs_match": outputs_match,
             "event_output": event_output if args.enable_kivo_vd else None,
             "num_events_exported": kivo["num_events_exported"],
+            "full_block_ids_export_requested": bool(
+                args.export_full_block_ids
+            ),
             "observer_counters": kivo["observer_counters"],
             "observer_note": kivo["observer_note"],
             "dry_run_only": True,

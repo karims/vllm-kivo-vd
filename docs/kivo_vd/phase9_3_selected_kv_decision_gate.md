@@ -33,7 +33,8 @@ The gate requires:
   no-measured-reduction, and quality-unmeasured caveats.
 
 Preview-only block IDs remain a warning because they undercount the complete
-candidate payload. They do not authorize real routing or a memory claim.
+candidate payload. The gate now fails closed when any materialization row is
+preview-only. Complete IDs are required before Phase 10 planning.
 
 ## Materialization Ratio Heuristics
 
@@ -68,6 +69,11 @@ event_aware_sketch_buffer_accounting.json \
 
 The helper can infer Phase 7 and Phase 8 paths recorded in
 `pipeline_summary.json` when explicit flags are omitted.
+
+Before running the gate, regenerate Phase 7 with
+`--export-full-block-ids`, then rerun the Phase 9.2 pipeline against those
+events. A clean readiness result requires
+`preview_only_event_count: 0`.
 
 ## Allowed Phase 10 Scope
 

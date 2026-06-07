@@ -42,6 +42,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--head-dim", type=int)
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--dtype-bytes", type=int, default=2)
+    parser.add_argument("--export-full-block-ids", action="store_true")
     parser.add_argument("--run-name")
     parser.add_argument(
         "--output-dir",
@@ -118,6 +119,8 @@ def _memory_command(
     ]
     if enable_kivo:
         command.append("--enable-kivo-vd")
+        if args.export_full_block_ids:
+            command.append("--export-full-block-ids")
         if event_output is not None:
             command.extend(["--event-output", event_output])
     return command
@@ -291,6 +294,7 @@ def build_initial_summary(
             "head_dim": args.head_dim,
             "block_size": args.block_size,
             "dtype_bytes": args.dtype_bytes,
+            "export_full_block_ids": bool(args.export_full_block_ids),
         },
         "output_files": paths,
         "stages": [],

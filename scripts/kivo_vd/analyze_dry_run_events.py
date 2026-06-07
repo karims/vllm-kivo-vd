@@ -108,6 +108,12 @@ def analyze_events(input_path: str | Path) -> dict[str, Any]:
         for event in routing_events
         if event.get("recent_window_blocks") is not None
     }
+    full_id_events = [
+        event
+        for event in routing_events
+        if event.get("full_block_ids_exported") is True
+        or event.get("selected_block_ids_full") is not None
+    ]
 
     return {
         "input": str(input_path),
@@ -120,6 +126,13 @@ def analyze_events(input_path: str | Path) -> dict[str, Any]:
         "avg_skipped_block_count": _mean(skipped_counts),
         "candidate_budget_blocks": _unique_sorted(candidate_budgets),
         "recent_window_blocks": _unique_sorted(recent_windows),
+        "full_block_ids_exported_count": len(full_id_events),
+        "preview_only_routing_event_count": (
+            len(routing_events) - len(full_id_events)
+        ),
+        "all_routing_events_have_full_block_ids": (
+            bool(routing_events) and len(full_id_events) == len(routing_events)
+        ),
         "selected_block_preview": [
             event.get("selected_block_preview")
             for event in routing_events[:5]

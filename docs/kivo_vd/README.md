@@ -126,6 +126,9 @@ Phase 9.2 reproduces both steps with one command and preserves the synthetic,
 outside-attention, no-routing boundary.
 Phase 9 closes with a conservative gate before standalone Phase 10
 reference-attention experiments. Passing does not authorize real vLLM routing.
+Complete selected block IDs are now available through explicit
+`--export-full-block-ids` opt-in. Preview-only exports remain the default and
+cannot pass the Phase 10 readiness gate.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

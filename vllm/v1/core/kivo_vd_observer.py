@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import json
+import os
 import time
 from collections import deque
 from collections.abc import Sequence
@@ -20,6 +21,11 @@ from vllm.v1.core.kivo_vd_candidate_selector import (
 )
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.getenv(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class KivoVDObserver:
     """Phase 0 Kivo-VD observer hook points (no-op implementation)."""
 
@@ -31,6 +37,7 @@ class KivoVDObserver:
         candidate_selector: KivoVDCandidateSelector | None = None,
         event_export_path: str | None = None,
         export_event_limit: int = 10_000,
+        export_full_block_ids: bool | None = None,
     ) -> None:
         self.enabled = enabled
         self.max_events = max_events
@@ -38,6 +45,11 @@ class KivoVDObserver:
         self.candidate_selector = candidate_selector
         self.event_export_path = event_export_path
         self.export_event_limit = export_event_limit
+        self.export_full_block_ids = (
+            _env_flag_enabled("KIVO_EXPORT_FULL_BLOCK_IDS")
+            if export_full_block_ids is None
+            else export_full_block_ids
+        )
         self.num_before_allocate_calls = 0
         self.num_after_allocate_calls = 0
         self.num_free_request_calls = 0
@@ -162,6 +174,15 @@ class KivoVDObserver:
             sketch_index=self.sketch_index,
         )
         selector_config = self.candidate_selector.config
+        event_metadata: dict[str, Any] = {
+            "full_block_ids_exported": self.export_full_block_ids,
+        }
+        if self.export_full_block_ids:
+            event_metadata.update({
+                "selected_block_ids_full": decision.selected_block_ids,
+                "recent_block_ids_full": decision.recent_block_ids,
+                "skipped_block_ids_full": decision.skipped_block_ids,
+            })
         self._record_event(
             "dry_run_routing_decision",
             request_id=request_id,
@@ -175,6 +196,7 @@ class KivoVDObserver:
             skipped_block_preview=decision.skipped_block_ids[:8],
             source=source,
             reason=decision.reason,
+            **event_metadata,
         )
         return decision
 

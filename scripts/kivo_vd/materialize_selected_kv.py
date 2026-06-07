@@ -155,7 +155,9 @@ def extract_selected_blocks(
     event: dict[str, Any],
 ) -> tuple[list[int], int | None, bool, str | None]:
     requested_count = _optional_int(event.get("selected_block_count"))
-    selected_ids = _block_ids(event.get("selected_block_ids"))
+    selected_ids = _block_ids(event.get("selected_block_ids_full"))
+    if selected_ids is None:
+        selected_ids = _block_ids(event.get("selected_block_ids"))
     preview_only = False
     warning = None
     if selected_ids is None:
@@ -274,6 +276,11 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     selected = [
         float(row["materialized_selected_block_count"]) for row in rows
     ]
+    requested = [
+        float(row["requested_selected_block_count"])
+        for row in rows
+        if row["requested_selected_block_count"] is not None
+    ]
     selected_bytes = [float(row["selected_kv_bytes"]) for row in rows]
     copy_times = [float(row["copy_time_ms"]) for row in rows]
     ratios = [
@@ -283,6 +290,8 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     return {
         "average_selected_blocks": _mean(selected),
+        "average_requested_selected_blocks": _mean(requested),
+        "average_materialized_selected_blocks": _mean(selected),
         "average_selected_kv_bytes": _mean(selected_bytes),
         "average_copy_time_ms": _mean(copy_times),
         "p50_copy_time_ms": _percentile(copy_times, 50),
@@ -290,6 +299,12 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "max_copy_time_ms": max(copy_times) if copy_times else None,
         "average_materialization_ratio": _mean(ratios),
         "total_selected_kv_bytes_materialized": int(sum(selected_bytes)),
+        "full_block_ids_exported_count": sum(
+            row["full_block_ids_exported"] is True for row in rows
+        ),
+        "preview_only_event_count": sum(
+            row["selected_ids_preview_only"] is True for row in rows
+        ),
     }
 
 
@@ -401,6 +416,10 @@ def materialize_selected_kv(
                 "request_id": event.get("request_id"),
                 "source": event.get("source"),
                 "selected_block_ids": selected_ids,
+                "full_block_ids_exported": (
+                    event.get("full_block_ids_exported") is True
+                    or event.get("selected_block_ids_full") is not None
+                ),
                 "selected_ids_preview_only": preview_only,
                 "requested_selected_block_count": requested_count,
                 "materialized_selected_block_count": materialized_count,

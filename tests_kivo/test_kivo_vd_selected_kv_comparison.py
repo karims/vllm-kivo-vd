@@ -46,6 +46,10 @@ def _materialization(preview_only: bool = False) -> dict:
             "p90_copy_time_ms": 2.5,
             "max_copy_time_ms": 2.5,
             "average_materialization_ratio": 0.25,
+            "full_block_ids_exported_count": (
+                0 if preview_only else 2
+            ),
+            "preview_only_event_count": 2 if preview_only else 0,
         },
         "per_event_rows": [
             {
@@ -124,6 +128,9 @@ def test_parses_materialization_and_event_estimate(
 
     assert result["materialization_summary"][
         "num_events_processed"
+    ] == 2
+    assert result["materialization_summary"][
+        "full_block_ids_exported_count"
     ] == 2
     assert result["event_estimate_summary"]["bytes_per_block"] == 100
     assert result["event_estimate_summary"][

@@ -70,6 +70,19 @@ def test_extracts_full_ids_and_marks_preview_fallback() -> None:
     assert "preview-only" in preview[3]
 
 
+def test_prefers_explicit_full_block_ids() -> None:
+    module = _load_module()
+
+    result = module.extract_selected_blocks({
+        "selected_block_count": 4,
+        "selected_block_ids_full": [4, 3, 2, 1],
+        "selected_block_preview": [4, 3],
+        "full_block_ids_exported": True,
+    })
+
+    assert result == ([4, 3, 2, 1], 4, False, None)
+
+
 def test_bytes_per_block_formula() -> None:
     module = _load_module()
 
@@ -98,7 +111,8 @@ def test_cpu_synthetic_materialization_and_aggregates(
                 "event_id": 1,
                 "request_id": "r1",
                 "selected_block_count": 2,
-                "selected_block_ids": [1, 3],
+                "selected_block_ids_full": [1, 3],
+                "full_block_ids_exported": True,
                 "skipped_block_count": 2,
             },
             {
@@ -106,7 +120,8 @@ def test_cpu_synthetic_materialization_and_aggregates(
                 "event_id": 2,
                 "request_id": "r1",
                 "selected_block_count": 1,
-                "selected_block_ids": [0],
+                "selected_block_ids_full": [0],
+                "full_block_ids_exported": True,
                 "skipped_block_count": 3,
             },
         ],
@@ -133,6 +148,9 @@ def test_cpu_synthetic_materialization_and_aggregates(
     assert report["aggregate"][
         "total_selected_kv_bytes_materialized"
     ] == 192
+    assert report["aggregate"]["full_block_ids_exported_count"] == 2
+    assert report["aggregate"]["preview_only_event_count"] == 0
+    assert not any("preview-only" in item for item in report["warnings"])
     assert all(
         row["copy_time_ms"] >= 0 for row in report["per_event_rows"]
     )

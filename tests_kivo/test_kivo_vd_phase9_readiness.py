@@ -32,6 +32,7 @@ def _artifact_bundle(
     pipeline_success: bool = True,
     selected_blocks: float = 4,
     ratio: float = 0.40,
+    preview_only: bool = False,
 ) -> tuple[Path, Path, Path]:
     materialization = tmp_path / "selected_kv_materialization.json"
     materialization_md = tmp_path / "selected_kv_materialization.md"
@@ -57,10 +58,14 @@ def _artifact_bundle(
                 "average_selected_blocks": selected_blocks,
                 "average_copy_time_ms": 0.25,
                 "average_materialization_ratio": ratio,
+                "full_block_ids_exported_count": (
+                    0 if preview_only else 2
+                ),
+                "preview_only_event_count": 2 if preview_only else 0,
             },
             "per_event_rows": [
-                {"selected_ids_preview_only": False},
-                {"selected_ids_preview_only": False},
+                {"selected_ids_preview_only": preview_only},
+                {"selected_ids_preview_only": preview_only},
             ],
             "warnings": [],
             "caveats": {
@@ -178,6 +183,23 @@ def test_zero_selected_blocks_blocks_phase10(tmp_path: Path) -> None:
 
     assert report["phase10_ready"] is False
     assert report["checks"]["selected_blocks_nonzero"] is False
+
+
+def test_preview_only_rows_block_phase10(tmp_path: Path) -> None:
+    module = _load_module()
+    pipeline, materialization, comparison = _artifact_bundle(
+        tmp_path, preview_only=True
+    )
+
+    report = module.build_readiness_report(
+        pipeline_summary_path=pipeline,
+        materialization_path=materialization,
+        comparison_path=comparison,
+    )
+
+    assert report["phase10_ready"] is False
+    assert report["checks"]["preview_only_event_count"] == 2
+    assert any("preview-only" in item for item in report["warnings"])
 
 
 def test_safety_claims_remain_false_or_unmeasured(

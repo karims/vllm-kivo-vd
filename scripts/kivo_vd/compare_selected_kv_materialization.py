@@ -109,9 +109,17 @@ def _materialization_summary(
         )
         is not None
     ]
-    preview_rows = sum(
+    preview_rows_from_output = sum(
         row.get("selected_ids_preview_only") is True
         for row in valid_rows
+    )
+    preview_rows = int(
+        _optional_number(aggregate.get("preview_only_event_count"))
+        or preview_rows_from_output
+    )
+    full_id_rows = int(
+        _optional_number(aggregate.get("full_block_ids_exported_count"))
+        or 0
     )
     if preview_rows:
         warnings.append(
@@ -149,6 +157,7 @@ def _materialization_summary(
             max(reserved_deltas) if reserved_deltas else None
         ),
         "preview_only_event_count": preview_rows,
+        "full_block_ids_exported_count": full_id_rows,
         "per_event_rows_truncated": materialization.get(
             "per_event_rows_truncated"
         ),

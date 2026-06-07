@@ -45,6 +45,8 @@ def test_analyzer_summarizes_synthetic_events(tmp_path: Path) -> None:
                 "candidate_budget_blocks": 8,
                 "recent_window_blocks": 4,
                 "selected_block_preview": [1, 2, 3],
+                "selected_block_ids_full": [1, 2, 3, 4, 5, 6],
+                "full_block_ids_exported": True,
             },
             {
                 "event_type": "free_request",
@@ -64,6 +66,9 @@ def test_analyzer_summarizes_synthetic_events(tmp_path: Path) -> None:
     assert summary["avg_skipped_block_count"] == 1
     assert summary["candidate_budget_blocks"] == [8]
     assert summary["recent_window_blocks"] == [4]
+    assert summary["full_block_ids_exported_count"] == 1
+    assert summary["preview_only_routing_event_count"] == 0
+    assert summary["all_routing_events_have_full_block_ids"] is True
     assert summary["request_ids_seen"] == ["r1"]
     assert "waiting" in summary["sources_seen"]
     assert not summary["warnings"]

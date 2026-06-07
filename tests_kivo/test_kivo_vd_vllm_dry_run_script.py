@@ -36,6 +36,7 @@ def test_vllm_kivo_dry_run_help_smoke() -> None:
     assert "--max-model-len" in out
     assert "--max-num-batched-tokens" in out
     assert "--max-num-seqs" in out
+    assert "--export-full-block-ids" in out
 
 
 def test_vllm_kivo_dry_run_runtime_limits_are_parsed() -> None:
@@ -50,12 +51,14 @@ def test_vllm_kivo_dry_run_runtime_limits_are_parsed() -> None:
         "192",
         "--max-num-seqs",
         "2",
+        "--export-full-block-ids",
     ])
 
     assert args.gpu_memory_utilization == 0.07
     assert args.max_model_len == 256
     assert args.max_num_batched_tokens == 192
     assert args.max_num_seqs == 2
+    assert args.export_full_block_ids is True
 
 
 def test_vllm_kivo_dry_run_runtime_limits_are_llm_kwargs() -> None:

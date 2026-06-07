@@ -41,6 +41,10 @@ From the repository root in the prepared Linux/NVIDIA environment:
 The conservative runtime limits favor validation over throughput. Explicit KV
 metadata keeps the theoretical byte calculation auditable.
 
+Add `--export-full-block-ids` when the resulting events will feed Phase 9
+materialization. The flag applies only to the Kivo dry-run measurement stage;
+the baseline stage remains unchanged. Preview-only export remains the default.
+
 ## RunPod Medium-Context Validation
 
 The full pipeline completed successfully on the RunPod GPU runtime with the

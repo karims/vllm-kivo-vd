@@ -40,6 +40,28 @@ reports:
 It does not invent missing physical block IDs. Preview-only results therefore
 underestimate the temporary payload for that routing decision.
 
+Complete selected block IDs are required before using Phase 9 materialization
+ratios for Phase 10 planning. Preview-only exports remain useful for debugging
+but undercount payload.
+
+Opt in during the Kivo runtime event run with:
+
+```bash
+--export-full-block-ids
+```
+
+The flag sets `KIVO_EXPORT_FULL_BLOCK_IDS=1` before engine construction. The
+environment variable can also be set directly. Enabled events retain previews
+and additionally contain:
+
+- `selected_block_ids_full`
+- `recent_block_ids_full`
+- `skipped_block_ids_full`
+- `full_block_ids_exported: true`
+
+Default events contain `full_block_ids_exported: false` and do not include the
+full arrays.
+
 ## Memory Formula
 
 ```text
@@ -86,10 +108,30 @@ timing. CPU timings are not GPU runtime predictions.
 
 ## Run On RunPod CUDA
 
+First regenerate the Phase 7 events with complete IDs:
+
+```bash
+.venv/bin/python scripts/kivo_vd/run_memory_accounting_pipeline.py \
+  --model gpt2 \
+  --prompt "$LONG_PROMPT" \
+  --max-tokens 32 \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 768 \
+  --max-num-batched-tokens 768 \
+  --max-num-seqs 1 \
+  --num-layers 12 \
+  --num-kv-heads 12 \
+  --head-dim 64 \
+  --block-size 16 \
+  --dtype-bytes 2 \
+  --export-full-block-ids \
+  --run-name phase7_gpt2_medium_memory_accounting_full_ids
+```
+
 ```bash
 .venv/bin/python scripts/kivo_vd/materialize_selected_kv.py \
   --events \
-    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting/\
+    outputs/kivo_vd/runs/phase7_gpt2_medium_memory_accounting_full_ids/\
 kivo_dry_run_events.jsonl \
   --model gpt2 \
   --num-layers 12 \
@@ -117,6 +159,8 @@ there are no usable IDs.
   temporary tensors.
 - Materialization ratio compares the copied payload with selected-plus-skipped
   KV bytes when skipped counts are available.
+- `full_block_ids_exported_count` and `preview_only_event_count` identify
+  whether aggregate ratios use complete candidate sets.
 
 These are microbenchmark measurements, not end-to-end latency or memory-saving
 results.
