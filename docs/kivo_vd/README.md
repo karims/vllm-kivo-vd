@@ -89,10 +89,12 @@ experiments. Passing the gate does not authorize active routing.
 
 - [Phase 8.0: Compact Sketch-Buffer Overhead](phase8_0_sketch_buffer_overhead.md)
 - [Phase 8.1: Sketch Overhead Vs Savings](phase8_1_sketch_overhead_vs_savings.md)
+- [Phase 8.2: Event-Aware Buffer Accounting](phase8_2_event_aware_sketch_buffer_accounting.md)
 
 Phase 8.0 measures additional sketch-buffer memory only. It does not replace
 full KV, change attention, or enable active routing. Phase 8.1 compares that
 overhead with theoretical skipped-KV bytes without claiming realized savings.
+Phase 8.2 separates pool, per-event, cumulative, and break-even accounting.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
