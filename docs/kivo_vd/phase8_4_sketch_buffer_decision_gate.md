@@ -79,6 +79,59 @@ Start with:
 Do not start with SRHT. Treat dim `64` as reference-only unless later evidence
 changes the tradeoff.
 
+## RunPod Readiness Result
+
+The gate was run against the successful
+`phase8_gpt2_sketch_buffer_accounting` artifacts:
+
+```bash
+RUN_DIR=outputs/kivo_vd/runs/phase8_gpt2_sketch_buffer_accounting
+.venv/bin/python scripts/kivo_vd/check_phase8_readiness.py \
+  --pipeline-summary "$RUN_DIR/pipeline_summary.json" \
+  --event-aware-accounting \
+    "$RUN_DIR/event_aware_sketch_buffer_accounting.json" \
+  --overhead-vs-savings \
+    "$RUN_DIR/sketch_overhead_vs_savings.json" \
+  --sketch-overhead "$RUN_DIR/sketch_buffer_overhead.json" \
+  --output-json "$RUN_DIR/phase8_readiness.json" \
+  --output-md "$RUN_DIR/phase8_readiness.md"
+```
+
+Result:
+
+| field | value |
+| --- | --- |
+| Phase 9 ready | `true` |
+| best eligible sketch | `bidiagonal_sign_subsample` |
+| sketch dim | `16` |
+| cumulative overhead ratio | `0.2506%` |
+| cumulative classification | `excellent` |
+| break-even events | `1` |
+| break-even classification | `immediate` |
+| break-even skipped blocks | `2` |
+| warnings | none |
+| theoretical only | `true` |
+| measured runtime reduction | `false` |
+| active routing | `false` |
+| full KV still allocated | `true` |
+
+The broader accounting context was:
+
+| dim | cumulative overhead | Phase 7 theoretical reduction |
+| ---: | ---: | ---: |
+| `16` | `0.2506%` | `60.9045%` |
+| `32` | `0.5013%` | `60.9045%` |
+| `64` | `1.0025%` | `60.9045%` |
+
+The gate selected `bidiagonal_sign_subsample` dim `16` as one eligible row.
+That is not a sketch-quality conclusion. At a fixed dimension, all three
+tested sketch families use the same Phase 8 buffer shape and byte count.
+Phase 9 should begin with CountSketch or Random Projection as simple baselines
+before testing `bidiagonal_sign_subsample`.
+
+Phase 8 is complete. `phase9_ready: true` authorizes only temporary
+selected-KV gather/copy and overhead measurement outside attention.
+
 ## Allowed Phase 9 Scope
 
 A passing gate authorizes only:
@@ -102,3 +155,7 @@ measured runtime KV memory reduction or active attention routing.
 
 Phase 9 must preserve that boundary until temporary selected-KV
 materialization has been measured independently of attention.
+
+The Phase 8 buffer result is not itself a memory-saving result. The sketch
+buffers are additional overhead, full KV remains allocated, and attention
+continues to consume the full KV cache.

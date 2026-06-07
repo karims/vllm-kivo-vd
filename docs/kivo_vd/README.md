@@ -19,6 +19,8 @@ Recommended reading order:
 | Dry-run event export | 97 lifecycle/routing events exported and analyzed |
 | Offline active-KV policy estimate | conservative estimate about `17.7%` active-KV reduction at about `99.8%` exact-top-block recall |
 | Phase 7 medium-context estimate | `60.9045%` theoretical active-KV reduction across 32 routing events |
+| Phase 8 cumulative buffer overhead | dim 16: `0.2506%`; dim 32: `0.5013%`; dim 64: `1.0025%` |
+| Phase 8 readiness | complete; `phase9_ready: true` for temporary selected-KV materialization only |
 | Baseline vs Kivo measured memory | identical CUDA measurements in the validated dry-run |
 | Runtime memory reduction | not measured or claimed yet |
 
@@ -36,8 +38,12 @@ Recommended reading order:
   produced a `0.609045` theoretical active-KV reduction estimate.
 - Baseline and Kivo dry-run CUDA memory measurements were identical, as
   expected because allocation and attention behavior remain unchanged.
-- Phase 8.0 is authorized only for compact sketch-buffer overhead measurement
-  on GPT-2. No active routing has been implemented.
+- Phase 8 is complete. Its RunPod accounting found compact cumulative buffer
+  overhead relative to the Phase 7 theoretical skipped-KV opportunity.
+- The Phase 8 gate reports `phase9_ready: true`, authorizing only selected-KV
+  gather/copy into temporary measurement buffers outside attention.
+- No measured runtime memory reduction or active routing has been demonstrated.
+  Full KV remains allocated and used by attention.
 
 ## vLLM KV Runtime Map And Integration Plan
 
@@ -101,6 +107,8 @@ Phase 8.3 reproduces the complete overhead workflow with one command while
 preserving explicit theoretical-only and no-active-routing caveats.
 Phase 8 closes with a decision gate before any Phase 9 selected-KV
 materialization experiment. A passing gate does not authorize active routing.
+The validated gate passed for temporary gather/copy measurement only. Phase 8
+buffer overhead is additive and is not a memory-saving result by itself.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

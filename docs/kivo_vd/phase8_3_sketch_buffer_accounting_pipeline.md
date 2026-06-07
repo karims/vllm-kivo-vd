@@ -68,6 +68,71 @@ memory_comparison.json \
   --run-name phase8_gpt2_sketch_buffer_accounting
 ```
 
+## RunPod Validation Result
+
+The command above completed successfully on RunPod after regenerating the
+Phase 7 medium-context GPT-2 artifacts.
+
+Phase 7 input context:
+
+| field | value |
+| --- | ---: |
+| prompt tokens | `632` |
+| generated tokens | `32` |
+| routing events | `32` |
+| bytes per KV block | `589,824` |
+| average selected blocks | `16.0` |
+| average skipped blocks | `24.9375` |
+| average skipped KV bytes | `14,708,736` |
+| cumulative skipped KV bytes | `470,679,552` |
+| theoretical active-KV reduction | `60.9045%` |
+
+All Phase 8.3 stages succeeded:
+
+- `sketch_buffer_overhead_measurement`
+- `overhead_vs_savings_comparison`
+- `event_aware_sketch_buffer_accounting`
+
+The pipeline preserved:
+
+- `savings_are_theoretical_only: true`
+- `measured_runtime_reduction: false`
+- `active_routing: false`
+
+### Global Pool Accounting
+
+The modeled full KV pool was `150,994,944` bytes.
+
+| sketch dim | sketch bytes | ratio versus full KV pool |
+| ---: | ---: | ---: |
+| `16` | `1,179,648` | `0.7812%` |
+| `32` | `2,359,296` | `1.5625%` |
+| `64` | `4,718,592` | `3.1250%` |
+
+### Per-Event And Cumulative Accounting
+
+| dim | overhead / average skipped KV | overhead / cumulative skipped KV |
+| ---: | ---: | ---: |
+| `16` | `8.0201%` | `0.2506%` |
+| `32` | `16.0401%` | `0.5013%` |
+| `64` | `32.0802%` | `1.0025%` |
+
+All three dimensions were classified `excellent` under cumulative accounting.
+Their break-even event count was `1`, classified `immediate`. Break-even
+skipped-block counts were `2`, `4`, and `8` for dims `16`, `32`, and `64`.
+
+The cumulative net theoretical bytes were:
+
+| dim | net theoretical bytes |
+| ---: | ---: |
+| `16` | `469,499,904` |
+| `32` | `468,320,256` |
+| `64` | `465,960,960` |
+
+CountSketch, Random Projection, and `bidiagonal_sign_subsample` have identical
+buffer sizes at the same dimension in this phase. This experiment measures
+buffer shape and payload, not sketch retrieval quality.
+
 ## Dry-Run Planning
 
 Dry-run mode creates the run directory and summary without executing torch or
@@ -113,6 +178,10 @@ adds cumulative and break-even views.
 A favorable ratio only says that the modeled sketch payload is small relative
 to a theoretical skipped-KV opportunity. It does not mean vLLM released GPU
 memory.
+
+The RunPod result therefore validates compact-buffer accounting, not a
+memory-saving runtime. The sketch buffers remain additional allocations while
+the complete KV cache remains allocated and used by attention.
 
 ## Caveats
 
