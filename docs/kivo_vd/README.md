@@ -148,12 +148,17 @@ quality preservation has been demonstrated. Full KV remains allocated.
 ## Phase 10 Standalone Selected Attention
 
 - [Phase 10.0: Selected-Attention Equivalence](phase10_0_selected_attention_equivalence.md)
+- [Phase 10.1: Real-QKV Selected-Attention Eval](phase10_1_real_qkv_selected_attention_eval.md)
 
 Phase 10.0 starts the correctness path authorized by the Phase 9 gate. It
 compares full versus selected attention on synthetic PyTorch Q/K/V tensors
 outside vLLM. Oracle top-k selection is included only as an upper-bound
 diagnostic. This phase does not use real vLLM KV, mutate block tables, change
 attention kernels, enable active routing, or prove real model quality.
+
+Phase 10.1 extracts real GPT-2 Q/K/V projections and compares full versus
+selected attention output outside vLLM. It is still not generation quality,
+logits evaluation, active routing, or measured runtime memory reduction.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
