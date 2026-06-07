@@ -160,6 +160,13 @@ Phase 10.1 extracts real GPT-2 Q/K/V projections and compares full versus
 selected attention output outside vLLM. It is still not generation quality,
 logits evaluation, active routing, or measured runtime memory reduction.
 
+The RunPod RTX A6000 evaluation found a strong oracle-top-k upper bound across
+GPT-2 layers 0, 5, and 11 with a four-block budget. Recent-only selection
+failed badly at layer 5 (`0.763696` average cosine and `0.935313` average
+relative L2 error), while oracle top-k remained strong. Candidate selection is
+therefore the next bottleneck. No logits, generation quality, vLLM attention
+changes, active routing, or measured memory reduction have been evaluated.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)

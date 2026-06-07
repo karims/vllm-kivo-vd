@@ -491,6 +491,31 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--layer-idx must be non-negative")
 
 
+def build_report(
+    *,
+    config: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    aggregate = aggregate_rows(rows)
+    return {
+        "config": config,
+        "aggregate": aggregate,
+        "per_prompt": rows,
+        # Retain the original Phase 10.1 names for existing readers.
+        "aggregate_metrics": aggregate,
+        "per_prompt_rows": rows,
+        "caveats": {
+            "real_model_qkv": True,
+            "outside_vllm": True,
+            "outside_attention_kernel": True,
+            "no_generation_quality": True,
+            "no_logits_eval": True,
+            "active_routing": False,
+            "measured_runtime_reduction": False,
+        },
+    }
+
+
 def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     validate_args(args)
     torch.manual_seed(args.seed)
@@ -509,8 +534,8 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         )
         for index, prompt in enumerate(prompts)
     ]
-    return {
-        "config": {
+    return build_report(
+        config={
             "model": args.model,
             "layer_index": args.layer_idx,
             "block_size": args.block_size,
@@ -524,18 +549,8 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             "query_position": "last",
             "qkv_space": "gpt2_projection_after_ln_1",
         },
-        "per_prompt_rows": rows,
-        "aggregate_metrics": aggregate_rows(rows),
-        "caveats": {
-            "real_model_qkv": True,
-            "outside_vllm": True,
-            "outside_attention_kernel": True,
-            "no_generation_quality": True,
-            "no_logits_eval": True,
-            "active_routing": False,
-            "measured_runtime_reduction": False,
-        },
-    }
+        rows=rows,
+    )
 
 
 def _format(value: Any) -> str:
@@ -560,6 +575,10 @@ def _append_table(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    aggregate = report.get("aggregate", report.get("aggregate_metrics"))
+    per_prompt = report.get("per_prompt", report.get("per_prompt_rows"))
+    if not isinstance(aggregate, dict) or not isinstance(per_prompt, list):
+        raise ValueError("report lacks aggregate or per_prompt results")
     lines = [
         "# Kivo-VD Phase 10.1 Real-QKV Selected-Attention Evaluation",
         "",
@@ -580,7 +599,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         ["metric", "value"],
         [
             [key, value]
-            for key, value in report["aggregate_metrics"].items()
+            for key, value in aggregate.items()
         ],
     )
     lines.extend(["", "## Per-Prompt Results", ""])
@@ -611,7 +630,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 row["mean_absolute_error"],
                 row["max_absolute_error"],
             ]
-            for row in report["per_prompt_rows"]
+            for row in per_prompt
         ],
     )
     lines.extend([
@@ -659,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 {
-                    **report["aggregate_metrics"],
+                    **report["aggregate"],
                     "model": args.model,
                     "selection_policy": args.selection_policy,
                     "output_json": args.output_json,

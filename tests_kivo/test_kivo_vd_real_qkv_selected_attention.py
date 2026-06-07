@@ -126,6 +126,35 @@ def test_aggregate_metrics() -> None:
     assert aggregate["max_relative_l2_error"] == 0.4
 
 
+def test_report_has_stable_json_schema() -> None:
+    module = _load_module()
+    rows = [
+        {
+            "cosine_similarity": 0.9,
+            "relative_l2_error": 0.2,
+            "attention_mass_captured": 0.8,
+        }
+    ]
+
+    report = module.build_report(
+        config={"model": "gpt2"},
+        rows=rows,
+    )
+
+    assert report["config"] == {"model": "gpt2"}
+    assert report["per_prompt"] == rows
+    assert report["per_prompt_rows"] == rows
+    assert report["aggregate"] == report["aggregate_metrics"]
+    for field in (
+        "average_cosine_similarity",
+        "average_relative_l2_error",
+        "average_attention_mass_captured",
+        "min_cosine_similarity",
+        "max_relative_l2_error",
+    ):
+        assert field in report["aggregate"]
+
+
 def test_markdown_contains_required_caveats() -> None:
     module = _load_module()
     report = {
@@ -133,11 +162,11 @@ def test_markdown_contains_required_caveats() -> None:
             "model": "gpt2",
             "selection_policy": "oracle_topk",
         },
-        "aggregate_metrics": {
+        "aggregate": {
             "num_prompts": 1,
             "average_cosine_similarity": 0.9,
         },
-        "per_prompt_rows": [{
+        "per_prompt": [{
             "prompt_index": 0,
             "token_length": 32,
             "block_count": 2,

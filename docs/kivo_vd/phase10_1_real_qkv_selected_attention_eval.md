@@ -71,6 +71,80 @@ Aggregate metrics include the number of prompts, average cosine similarity,
 average relative L2 error, average attention mass captured, minimum cosine
 similarity, and maximum relative L2 error.
 
+The JSON schema uses stable `config`, `aggregate`, and `per_prompt` objects.
+The original `aggregate_metrics` and `per_prompt_rows` names remain as
+compatibility aliases for early Phase 10.1 artifacts.
+
+## RunPod Validation
+
+Phase 10.1 was validated with standalone HuggingFace/PyTorch execution on:
+
+- GPU: NVIDIA RTX A6000;
+- Python: `3.12.3`;
+- torch: `2.8.0+cu128`;
+- torch CUDA: `12.8`;
+- CUDA available: `true`;
+- model: `gpt2`;
+- vLLM overlay: not used.
+
+No vLLM runtime behavior was involved or changed.
+
+### Single-Prompt Result
+
+The initial layer-0 run used 402 tokens, block size 16, 26 total blocks, and a
+16-block candidate budget.
+
+| policy | selected ratio | attention mass | cosine | relative L2 | mean abs | max abs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Recent | `0.615385` | `0.930932` | `0.994852` | `0.106698` | `0.005229` | `0.242405` |
+| Oracle top-k | `0.615385` | `0.941169` | `0.999240` | `0.040638` | `0.003098` | `0.057238` |
+
+Both policies were strong for this one layer-0 prompt. Oracle top-k produced
+the better output match, as expected from its use of full attention mass.
+
+### Four-Prompt Stress Test
+
+The stress test used four longer prompts, block size 16, a four-block
+candidate budget, layers 0, 5, and 11, and recent, random, and oracle-top-k
+policies.
+
+| policy | layer | avg cosine | avg relative L2 | avg mass | min cosine | max relative L2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Recent | `0` | `0.991743` | `0.110081` | `0.886173` | `0.977193` | `0.225905` |
+| Recent | `5` | `0.763696` | `0.935313` | `0.544249` | `0.611168` | `1.419566` |
+| Recent | `11` | `0.973831` | `0.264353` | `0.661592` | `0.950873` | `0.411150` |
+| Random | `0` | `0.989903` | `0.109097` | `0.832380` | `0.968259` | `0.253555` |
+| Random | `5` | `0.995226` | `0.081291` | `0.963442` | `0.988862` | `0.148835` |
+| Random | `11` | `0.986174` | `0.139911` | `0.832908` | `0.971246` | `0.239230` |
+| Oracle top-k | `0` | `0.992119` | `0.107568` | `0.887626` | `0.979631` | `0.210406` |
+| Oracle top-k | `5` | `0.997689` | `0.058560` | `0.975808` | `0.995771` | `0.091875` |
+| Oracle top-k | `11` | `0.995155` | `0.081527` | `0.905193` | `0.988072` | `0.155385` |
+
+## Result Interpretation
+
+This is the first real-model Q/K/V correctness signal for Kivo-VD.
+
+Oracle top-k remained strong across all tested layers with only four selected
+blocks. That result suggests selected-KV attention is not immediately invalid
+on the tested real GPT-2 Q/K/V tensors.
+
+Recent-only selection was not reliable. Layer 5 was the clear failure:
+
+- average cosine similarity: `0.763696`;
+- average relative L2 error: `0.935313`;
+- average attention mass captured: `0.544249`;
+- worst relative L2 error: `1.419566`.
+
+The contrast between recent and oracle at layer 5 indicates that candidate
+selection policy, rather than the selected-attention calculation itself, is
+the immediate research bottleneck. Random selection also performed strongly
+at layer 5, but four prompts are far too few to interpret that as a robust
+policy result.
+
+These measurements compare attention output vectors only. They do not measure
+logits, generated text, benchmark accuracy, end-to-end latency, or runtime
+memory reduction.
+
 ## Recent Policy Example
 
 ```bash
@@ -146,8 +220,10 @@ benchmark answers.
 
 ## Next Steps
 
-If oracle top-k selected attention is close to full attention across prompts
-and layers, the next standalone step is to compare candidate policies and
-possibly add modern-model Q/K/V extraction. If oracle top-k is weak, Kivo-VD
-should revisit candidate budgets or the selected-attention approximation
-before any vLLM-adjacent prototype.
+Phase 10.2 should be a policy sweep/evaluator over real Q/K/V tensors. It
+should compare recent, random, oracle top-k, explicit, and later sketch-based
+selectors across layers, budgets, and prompts before any vLLM attention
+integration.
+
+Modern-model Q/K/V extraction and logits or generation-quality evaluation
+remain later standalone steps. Active vLLM routing is not authorized.
