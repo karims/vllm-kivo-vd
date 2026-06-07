@@ -149,6 +149,7 @@ quality preservation has been demonstrated. Full KV remains allocated.
 
 - [Phase 10.0: Selected-Attention Equivalence](phase10_0_selected_attention_equivalence.md)
 - [Phase 10.1: Real-QKV Selected-Attention Eval](phase10_1_real_qkv_selected_attention_eval.md)
+- [Phase 10.2: Real-QKV Policy Sweep](phase10_2_real_qkv_policy_sweep.md)
 
 Phase 10.0 starts the correctness path authorized by the Phase 9 gate. It
 compares full versus selected attention on synthetic PyTorch Q/K/V tensors
@@ -166,6 +167,11 @@ failed badly at layer 5 (`0.763696` average cosine and `0.935313` average
 relative L2 error), while oracle top-k remained strong. Candidate selection is
 therefore the next bottleneck. No logits, generation quality, vLLM attention
 changes, active routing, or measured memory reduction have been evaluated.
+
+Phase 10.2 provides a reusable sweep across policies, layers, candidate
+budgets, block sizes, and prompts. It reports oracle gaps and research failure
+flags so candidate selection can be evaluated before any vLLM attention
+integration.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
