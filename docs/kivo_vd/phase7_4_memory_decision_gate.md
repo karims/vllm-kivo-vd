@@ -71,6 +71,54 @@ The helper reports artifact presence, pipeline and output checks, theoretical
 reduction classification, warnings, and a recommended next step. Missing
 optional artifacts become warnings rather than crashes.
 
+## RunPod Decision-Gate Result
+
+The GPT-2 medium-context RunPod pipeline passed the Phase 7 gate:
+
+| gate field | result |
+| --- | --- |
+| pipeline success | `true` |
+| all four stages succeeded | `true` |
+| prompt tokens | `632` |
+| routing events estimated | `32` |
+| average selected blocks | `16.0` |
+| average skipped blocks | `24.9375` |
+| theoretical reduction | `0.609045` |
+| classification | `above_40_percent_strong_research_signal` |
+| measured runtime reduction | `false` |
+| Phase 8.0 ready | `true` |
+
+Baseline and Kivo dry-run CUDA measurements were identical. Kivo-minus-baseline
+initialization, generation, peak allocated, and peak reserved differences were
+all `0`; no peak drop was observed. This is expected because the dry-run path
+does not change KV allocation or attention.
+
+The theoretical estimate was:
+
+- `589,824` bytes per KV block;
+- `9,437,184` average active KV bytes;
+- `14,708,736` average skipped KV bytes;
+- `0.609045` average estimated reduction ratio.
+
+This is a strong theoretical active-KV research signal, not measured runtime
+memory reduction. The gate recommendation is:
+
+> Proceed only to Phase 8.0 compact sketch-buffer allocation and overhead
+> measurement on GPT-2. Do not enable active routing.
+
+## Phase 7 Completion
+
+Phase 7 is complete. It established:
+
+- reproducible measured CUDA baselines;
+- identical measured baseline and Kivo dry-run memory in the validated run;
+- theoretical event-based active-KV accounting;
+- a measured-versus-theoretical comparison;
+- a conservative decision gate.
+
+Phase 8.0 is authorized only for compact sketch-buffer overhead measurement.
+No active routing has been implemented or authorized.
+
 ## Recommended First Phase 8 Target
 
 Start with `gpt2`, where Linux/NVIDIA dry-run validation is stable. Use a
@@ -101,4 +149,5 @@ overhead. It should not route attention.
 
 Kivo-VD currently has validated dry-run runtime instrumentation and theoretical
 active-KV memory accounting. It has not yet demonstrated measured runtime KV
-memory reduction.
+memory reduction. Phase 7 is complete, and Phase 8.0 is limited to measuring
+compact sketch-buffer overhead on GPT-2 without active routing.

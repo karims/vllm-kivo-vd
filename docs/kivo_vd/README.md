@@ -18,6 +18,8 @@ Recommended reading order:
 | Real vLLM GPU dry-run | `gpt2` RunPod validation passed with matching greedy output |
 | Dry-run event export | 97 lifecycle/routing events exported and analyzed |
 | Offline active-KV policy estimate | conservative estimate about `17.7%` active-KV reduction at about `99.8%` exact-top-block recall |
+| Phase 7 medium-context estimate | `60.9045%` theoretical active-KV reduction across 32 routing events |
+| Baseline vs Kivo measured memory | identical CUDA measurements in the validated dry-run |
 | Runtime memory reduction | not measured or claimed yet |
 
 ## Current Research Status
@@ -30,9 +32,12 @@ Recommended reading order:
   alpha `0.25` and `0.5` remain the next settings to compare.
 - Structured results are offline retrieval evidence, not a proven runtime
   winner, active-routing result, or measured memory reduction.
-- Phase 7.0 adds runtime memory baseline measurement without changing KV
-  allocation or attention behavior.
-- Next recommended work is memory accounting, not active routing.
+- Phase 7 is complete. A 632-token GPT-2 RunPod pipeline passed all stages and
+  produced a `0.609045` theoretical active-KV reduction estimate.
+- Baseline and Kivo dry-run CUDA memory measurements were identical, as
+  expected because allocation and attention behavior remain unchanged.
+- Phase 8.0 is authorized only for compact sketch-buffer overhead measurement
+  on GPT-2. No active routing has been implemented.
 
 ## vLLM KV Runtime Map And Integration Plan
 
