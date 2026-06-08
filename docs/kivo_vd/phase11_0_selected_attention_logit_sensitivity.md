@@ -116,3 +116,16 @@ and budget sweeps remain necessary.
 If Phase 11.0 remains stable across practical budgets, the next experiment
 should sweep layers and budgets before moving to controlled generation-level
 comparisons. vLLM attention integration remains out of scope.
+
+## RunPod Result
+
+The initial GPT-2 RunPod check tested layers `0,5,8,11`, budget `16`, block
+size `16`, five prompts, and both `query_key_block_score` and `oracle_topk`.
+
+Top-1 next-token match was `1.0` for every layer and policy. Top-5 overlap was
+`5.0` throughout, while top-10 overlap was generally `10.0` and was `9.8` for
+both policies at layer 11. Logit cosine similarity was effectively `1.0`, and
+KL divergence remained very low.
+
+This is a logits-level green signal for broader offline testing. It is not a
+generation-quality result and does not authorize vLLM integration.

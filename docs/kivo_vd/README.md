@@ -206,12 +206,20 @@ generation-quality preservation claim exists yet.
 ## Phase 11 Standalone Quality Sensitivity
 
 - [Phase 11.0: Selected-Attention Logit Sensitivity](phase11_0_selected_attention_logit_sensitivity.md)
+- [Phase 11.1: Logit-Sensitivity Sweep](phase11_1_logit_sensitivity_sweep.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
 model computation, and compares next-token logits with the unmodified model.
 It is not full generation-quality evaluation, does not use real vLLM KV, and
 does not authorize vLLM attention integration or active routing.
+
+The Phase 11.0 RunPod check preserved the top-1 next-token prediction across
+layers `0,5,8,11` for both `query_key_block_score` and oracle top-k at budget
+`16`, with very small KL divergence. Phase 11.1 expands that signal into a
+reproducible practical-budget sweep with oracle gaps and a conservative
+generation-test recommendation. This remains outside vLLM and is not a claim
+of generation-quality preservation.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
