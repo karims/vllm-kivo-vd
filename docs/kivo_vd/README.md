@@ -241,9 +241,17 @@ middle/later layers budget `8` or `16`, and no vLLM integration yet.
 Phase 11.3 applies selected-attention patches to multiple GPT-2 layers during
 the same standalone greedy generation run. The conservative progression is
 layers `5,8` first, then `5,8,11`, then the adaptive map
-`0:12,5:8,8:8,11:8`. This remains an offline quality probe and does not
+`0:12,5:8,8:8,11:12`. This remains an offline quality probe and does not
 authorize vLLM integration, active routing, memory-reduction claims, or
 latency claims.
+
+The RunPod results refined the adaptive map to `0:12,5:8,8:8,11:12`.
+Layers `5,8` passed at budget 8. Adding layer 11 at budget 8 caused
+`query_key_block_score` to diverge while oracle remained clean; raising layer
+11 to budget 12 fixed the failure. The full adaptive map passed 32-token greedy
+generation for both query-key and oracle selection with a selected-block ratio
+near `0.39-0.40`. That ratio is theoretical standalone evidence, not measured
+runtime memory reduction. No vLLM integration is authorized.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
