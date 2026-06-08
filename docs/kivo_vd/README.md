@@ -212,6 +212,7 @@ generation-quality preservation claim exists yet.
 - [Phase 11.4: Adaptive Multi-Layer Generation Sweep](phase11_4_adaptive_multilayer_generation_sweep.md)
 - [Phase 11.5: Long-Context Adaptive Generation Sweep](phase11_5_long_context_adaptive_generation_sweep.md)
 - [Phase 11.6: Ratio-Scaled Long-Context Sweep](phase11_6_ratio_scaled_long_context_sweep.md)
+- [Phase 11.7: Longer-Context Model Probe](phase11_7_long_context_model_probe.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -300,6 +301,13 @@ reduction `0.472274`. The safest passing config was safer at target 960 with
 map `0:41,5:32,8:32,11:41`, selected ratio `0.626644`, and theoretical
 estimated reduction `0.373356`. These results remain outside vLLM and do not
 show measured runtime memory reduction.
+
+Phase 11.7 adds a capability-first probe for small 2K+ context HuggingFace
+models. It inspects model/tokenizer metadata and reports whether a reviewed
+selected-attention adapter exists. GPT-2 remains supported; GPTNeoX/Pythia and
+OPT are probe-only until architecture-specific adapters handle their
+projection, positional, normalization, and residual semantics correctly.
+This phase does not authorize vLLM integration.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
