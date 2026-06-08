@@ -315,6 +315,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12 Shadow Event Contract](phase12_shadow_event_schema.json)
 - [Phase 12.1: Shadow Event Builder](phase12_1_shadow_event_builder.md)
 - [Phase 12.2: Passive Shadow Observer](phase12_2_shadow_observer.md)
+- [Phase 12.3: vLLM Shadow Hook Scaffold](phase12_3_vllm_shadow_hook_scaffold.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -330,6 +331,9 @@ ordering separately and remain fully standalone from vLLM runtime code.
 
 Phase 12.2 adds a disabled-by-default passive observer scaffold and synthetic
 observer smoke runner. No automatic vLLM hook or behavior change is included.
+
+Phase 12.3 adds an environment-configurable manual hook API. It remains
+disabled by default, fail-closed, and unwired from all vLLM runtime paths.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
