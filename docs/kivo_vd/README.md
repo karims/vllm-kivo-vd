@@ -313,6 +313,7 @@ This phase does not authorize vLLM integration.
 
 - [Phase 12.0: vLLM Shadow Integration Design](phase12_0_vllm_shadow_integration_design.md)
 - [Phase 12 Shadow Event Contract](phase12_shadow_event_schema.json)
+- [Phase 12.1: Shadow Event Builder](phase12_1_shadow_event_builder.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -321,6 +322,10 @@ valid example trace are included. No vLLM runtime behavior, scheduler, block
 table, attention metadata, KV allocation, or kernel path changes in Phase
 12.0. Active integration is deferred to Phase 13 and requires a later
 readiness gate.
+
+Phase 12.1 adds a reusable standard-library event builder and deterministic
+synthetic generator. Its validator-compatible events preserve score and gather
+ordering separately and remain fully standalone from vLLM runtime code.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
