@@ -220,6 +220,10 @@ def build_phase12_shadow_event(
     scores: Sequence[float] | None = None,
     sequence_id: str | None = None,
     step_idx: int | None = None,
+    min_budget: int = 1,
+    max_budget: int | None = None,
+    preview_only: bool = False,
+    caveats: Sequence[str] | None = None,
 ) -> Phase12ShadowEvent:
     """Build a fail-closed, serializable shadow event."""
 
@@ -268,8 +272,8 @@ def build_phase12_shadow_event(
     )
     policy_data = ratio_policy.to_dict(layer_idx)
     policy_data.update({
-        "min_budget": 1,
-        "max_budget": None,
+        "min_budget": min_budget,
+        "max_budget": max_budget,
         "rounding": "ceil",
     })
     return Phase12ShadowEvent(
@@ -297,10 +301,11 @@ def build_phase12_shadow_event(
         selector_policy=selector_policy,
         selector_scores_summary=summarize_scores(scores or ()),
         ordering_valid=selection.ordering_valid,
-        caveats=[
+        preview_only=preview_only,
+        caveats=list(caveats or (
             "synthetic shadow event only",
             "full KV remains allocated",
             "attention output is unchanged",
             "no measured runtime memory reduction",
-        ],
+        )),
     )
