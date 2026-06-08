@@ -146,6 +146,156 @@ The best deployable tradeoff excludes oracle and ranks passing query-key rows
 by estimated active-block reduction descending, then KL ascending. The safest
 passing configuration excludes oracle and ranks by KL ascending.
 
+## RunPod Results
+
+### Fast Result
+
+The fast RunPod run used target length `768`, two synthetic prompts, and
+`max_new_tokens=16`.
+
+Derived maps:
+
+| ratio policy | actual tokens | blocks | derived map | selected ratio | estimated reduction |
+| --- | --- | --- | --- | --- | --- |
+| `balanced` | `~734` | `46` | `0:28,5:21,8:21,11:28` | `0.523401` | `0.476599` |
+| `safer` | `~734` | `46` | `0:33,5:26,8:26,11:33` | `0.630218` | `0.369782` |
+
+Oracle top-k passed for both ratio policies with exact match `1.0`, token
+match `1.0`, and edit distance `0.0`.
+
+Query-key block scoring failed for `balanced`:
+
+| metric | value |
+| --- | --- |
+| exact sequence match | `0.5` |
+| token match | `0.5` |
+| normalized edit distance | `0.5` |
+| average KL | `7.979269` |
+
+Query-key block scoring passed for `safer`:
+
+| metric | value |
+| --- | --- |
+| exact sequence match | `1.0` |
+| token match | `1.0` |
+| prefix match length | `16.0` |
+| normalized edit distance | `0.0` |
+| average KL | `0.001453` |
+| per-step top-1 match | `1.0` |
+| selected ratio | `0.630218` |
+| estimated reduction | `0.369782` |
+
+Interpretation: ratio-scaled map generation works, but query-key selection
+needs more margin than oracle. At about 734 prompt tokens, `safer` passed and
+`balanced` was not reliable.
+
+### Full Result
+
+The full RunPod run used target lengths `768,960`, two synthetic prompts per
+length, ratio policies `aggressive`, `balanced`, and `safer`, and
+`max_new_tokens=16,32`.
+
+Derived maps:
+
+| target | actual tokens | blocks | ratio policy | derived map |
+| --- | --- | --- | --- | --- |
+| `768` | `~734` | `46` | `aggressive` | `0:23,5:19,8:19,11:23` |
+| `768` | `~734` | `46` | `balanced` | `0:28,5:21,8:21,11:28` |
+| `768` | `~734` | `46` | `safer` | `0:33,5:26,8:26,11:33` |
+| `960` | `~917` | `58` | `aggressive` | `0:29,5:24,8:24,11:29` |
+| `960` | `~917` | `58` | `balanced` | `0:35,5:27,8:27,11:35` |
+| `960` | `~917` | `58` | `safer` | `0:41,5:32,8:32,11:41` |
+
+The full run completed `24` runs with no script failures. It reported
+`phase11_7_ready=true` and `phase12_ready=false`.
+
+Per-ratio-policy summary:
+
+| ratio policy | exact | token match | edit | KL | selected ratio | estimated reduction |
+| --- | --- | --- | --- | --- | --- | --- |
+| `aggressive` | `0.75` | `0.75` | `0.210938` | `3.953345` | `0.449662` | `0.550338` |
+| `balanced` | `0.875` | `0.875` | `0.105469` | `2.049755` | `0.525318` | `0.474682` |
+| `safer` | `1.0` | `1.0` | `0.0` | `0.000488` | `0.625461` | `0.374539` |
+
+Oracle top-k passed all ratio policies with exact match `1.0`, token match
+`1.0`, edit distance `0.0`, and average KL around `0.000248`.
+
+Query-key block scoring had failures in the aggressive policy and in the
+balanced target-768 cases. Balanced passed at target 960 for both 16 and 32
+new tokens. For target 960 with `max_new_tokens=32`, balanced produced:
+
+| metric | value |
+| --- | --- |
+| derived map | `0:35,5:27,8:27,11:35` |
+| exact sequence match | `1.0` |
+| token match | `1.0` |
+| normalized edit distance | `0.0` |
+| average KL | `0.001344` |
+| selected ratio | `0.527726` |
+| estimated reduction | `0.472274` |
+
+### Best Tradeoff And Safest Config
+
+The best deployable tradeoff found in this run was:
+
+| field | value |
+| --- | --- |
+| ratio policy | `balanced` |
+| target | `960` |
+| derived map | `0:35,5:27,8:27,11:35` |
+| max new tokens | `32` |
+| exact/token match | `1.0 / 1.0` |
+| average KL | `0.001344` |
+| selected ratio | `0.527726` |
+| estimated reduction | `0.472274` |
+
+The safest passing deployable config by KL was:
+
+| field | value |
+| --- | --- |
+| ratio policy | `safer` |
+| target | `960` |
+| derived map | `0:41,5:32,8:32,11:41` |
+| max new tokens | `16` |
+| average KL | `0.000408` |
+| selected ratio | `0.626644` |
+| estimated reduction | `0.373356` |
+
+### Interpretation
+
+Ratio-scaled budgets are better than fixed maps for these long-context GPT-2
+probes. The results support budget selection as a function of layer, context
+block count, and risk tolerance.
+
+`aggressive` is too risky for query-key selection. `balanced` can be viable,
+but it was not universally safe because it failed at target 768. `safer`
+currently looks like the reliable GPT-2 default. Oracle passing where
+query-key fails indicates selector-margin risk rather than selected-attention
+impossibility.
+
+## Readiness Helper
+
+Use the readiness helper to summarize Phase 11.6 artifacts:
+
+```bash
+.venv/bin/python \
+  scripts/kivo_vd/check_phase11_ratio_scaled_readiness.py \
+  --inputs \
+  outputs/kivo_vd/runs/phase11_6_gpt2_ratio_scaled_full/ratio_scaled_generation_summary.json
+```
+
+The helper reports `phase11_7_ready`, keeps `phase12_ready=false`, separates
+the best quality/savings tradeoff from the safest passing config, and emits
+warnings for aggressive failures, balanced target-768 failures, and
+oracle/query-key margin gaps.
+
+## Recommended Next Phase
+
+Phase 11.7 should either test a longer-context small model or improve selector
+margin. GPT-2 is near its context limit; further enterprise-relevant testing
+requires 2K-8K+ context. vLLM integration remains out of scope until
+longer-context offline evidence exists.
+
 ## Caveats
 
 - Evaluation runs outside vLLM.

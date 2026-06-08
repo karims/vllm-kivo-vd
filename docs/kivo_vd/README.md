@@ -291,6 +291,16 @@ balanced, and safer layer-specific ratios while preserving the standalone,
 outside-vLLM boundary. Passing Phase 11.6 rows can suggest Phase 11.7 broader
 coverage, but Phase 12 remains unauthorized.
 
+The Phase 11.6 RunPod sweep found that aggressive query-key ratios failed,
+balanced query-key ratios passed at target 960 but failed at target 768, and
+the safer ratio policy passed across the tested lengths. The best tested
+quality/savings tradeoff was balanced at target 960 with map
+`0:35,5:27,8:27,11:35`, selected ratio `0.527726`, and theoretical estimated
+reduction `0.472274`. The safest passing config was safer at target 960 with
+map `0:41,5:32,8:32,11:41`, selected ratio `0.626644`, and theoretical
+estimated reduction `0.373356`. These results remain outside vLLM and do not
+show measured runtime memory reduction.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
