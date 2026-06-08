@@ -203,6 +203,16 @@ vLLM using `query_key_block_score` and practical budgets. No vLLM integration,
 active routing, latency result, measured runtime memory reduction, or
 generation-quality preservation claim exists yet.
 
+## Phase 11 Standalone Quality Sensitivity
+
+- [Phase 11.0: Selected-Attention Logit Sensitivity](phase11_0_selected_attention_logit_sensitivity.md)
+
+Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
+one GPT-2 layer's last-token attention contribution, continues the remaining
+model computation, and compares next-token logits with the unmodified model.
+It is not full generation-quality evaluation, does not use real vLLM KV, and
+does not authorize vLLM attention integration or active routing.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
