@@ -1,0 +1,52 @@
+{
+  "description": "Schema-like example for Kivo-VD Phase 12 shadow events.",
+  "event_type": "kivo_vd_shadow_selection",
+  "version": "12.0",
+  "request_id": "request-123",
+  "sequence_id": "sequence-0",
+  "layer_idx": 5,
+  "step_idx": 17,
+  "context_token_count": 917,
+  "block_size": 16,
+  "total_context_blocks": 58,
+  "ratio_policy": {
+    "name": "balanced",
+    "layer_ratio": 0.45,
+    "min_budget": 8,
+    "max_budget": null,
+    "rounding": "ceil"
+  },
+  "candidate_budget_blocks": 27,
+  "selected_block_ids_by_score": [
+    31,
+    5,
+    18,
+    2
+  ],
+  "selected_block_ids_for_gather": [
+    2,
+    5,
+    18,
+    31
+  ],
+  "selected_block_count": 4,
+  "selected_ratio": 0.06896551724137931,
+  "estimated_active_block_reduction_ratio": 0.9310344827586207,
+  "selector_policy": "query_key_block_score",
+  "selector_scores_summary": {
+    "minimum": -0.3,
+    "maximum": 1.7,
+    "mean": 0.21
+  },
+  "ordering_valid": true,
+  "causal_valid": true,
+  "preview_only": false,
+  "shadow_only": true,
+  "active_routing": false,
+  "measured_runtime_reduction": false,
+  "caveats": [
+    "shadow event only",
+    "full KV remains allocated",
+    "attention output is unchanged"
+  ]
+}

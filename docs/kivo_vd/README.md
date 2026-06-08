@@ -309,6 +309,19 @@ OPT are probe-only until architecture-specific adapters handle their
 projection, positional, normalization, and residual semantics correctly.
 This phase does not authorize vLLM integration.
 
+## Phase 12 vLLM Shadow Integration
+
+- [Phase 12.0: vLLM Shadow Integration Design](phase12_0_vllm_shadow_integration_design.md)
+- [Phase 12 Shadow Event Contract](phase12_shadow_event_schema.json)
+
+Phase 12 starts a shadow-only vLLM integration design. The event contract
+separates score-ranked block IDs from sequence-ordered gather IDs and requires
+ordering, causal, and no-active-routing invariants. A standalone validator and
+valid example trace are included. No vLLM runtime behavior, scheduler, block
+table, attention metadata, KV allocation, or kernel path changes in Phase
+12.0. Active integration is deferred to Phase 13 and requires a later
+readiness gate.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
