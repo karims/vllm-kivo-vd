@@ -261,19 +261,28 @@ failure flags, oracle gaps, worst cases, and the best non-oracle
 configuration. The sweep remains outside vLLM and deliberately keeps
 `phase12_ready` false.
 
-The Phase 11.4 RunPod sweeps preserved exact greedy GPT-2 continuations for
-the adaptive map `0:12,5:8,8:8,11:12` across five default prompts and twelve
-extended prompts, with generation lengths up to 64 tokens. The selected-block
-ratio varied from about `0.394` on the default set to about `0.74` on the
-extended set, demonstrating that the theoretical opportunity is strongly
-context dependent. These are standalone quality and block-ratio observations,
-not measured runtime memory savings.
+The Phase 11.4 RunPod sweeps exactly matched baseline greedy GPT-2
+continuations for the adaptive map `0:12,5:8,8:8,11:12` across five default
+prompts and twelve extended prompts, with generation lengths up to 64 tokens.
+The selected-block ratio varied from about `0.394` on the default set to about
+`0.74` on the extended set, demonstrating that the theoretical opportunity is
+strongly context dependent. These are standalone quality and block-ratio
+observations, not measured runtime memory savings.
 
 Phase 11.5 extends the same standalone evaluator to controlled 768- and
 896-token contexts. It records actual tokenizer lengths, quality metrics,
 selected-block ratios, and their theoretical complements. Phase 12 remains
 unauthorized; a clean result supports more prompt coverage or a larger model,
 not vLLM integration.
+
+The Phase 11.5 RunPod results showed that the short-context map
+`0:12,5:8,8:8,11:12` fails at long context for both query-key and oracle
+selection. The context-scaled map `0:32,5:24,8:24,11:32` passed at about 734
+and 917 prompt tokens. Near GPT-2's context limit it matched the baseline in
+the tested greedy continuations with a selected ratio of about `0.4807`, whose
+complement is a `51.9%` theoretical active-block reduction estimate. This is
+not measured runtime memory reduction, and no vLLM integration or active
+routing exists.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
