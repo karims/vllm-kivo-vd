@@ -146,3 +146,82 @@ short prompts and therefore less informative for savings.
 If both query-key and oracle runs remain stable across layers and practical
 budgets, Phase 11.3 may test longer prompts or multi-layer patches outside
 vLLM. Runtime integration remains out of scope.
+
+## RunPod Results
+
+Phase 11.2 was run on GPT-2 with standalone HuggingFace/PyTorch. vLLM overlay
+was not used and no vLLM runtime behavior changed. The experiment used greedy
+decoding, five built-in prompts, block size `16`, and single-layer
+last-token attention patching at every decode step.
+
+### Budget 16 Layer Sweep
+
+Budget `16` was clean across layers `0`, `5`, `8`, and `11` for both
+`query_key_block_score` and `oracle_topk` over `16` generated tokens.
+
+| policy | layer | exact match | token match | prefix | edit distance | avg KL | step top-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `query_key_block_score` | `0` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000337` | `1.0` |
+| `query_key_block_score` | `5` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000039` | `1.0` |
+| `query_key_block_score` | `8` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000224` | `1.0` |
+| `query_key_block_score` | `11` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000238` | `1.0` |
+| `oracle_topk` | `0` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000068` | `1.0` |
+| `oracle_topk` | `5` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000021` | `1.0` |
+| `oracle_topk` | `8` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000041` | `1.0` |
+| `oracle_topk` | `11` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000227` | `1.0` |
+
+### Budget 8 Layer Sweep
+
+Budget `8` was clean for layers `5`, `8`, and `11`, but layer `0` diverged
+for both `query_key_block_score` and `oracle_topk`.
+
+| policy | layer | exact match | token match | prefix | edit distance | avg KL | step top-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `query_key_block_score` | `0` | `0.8` | `0.9` | `14.2` | `0.05` | `0.490914` | `0.9` |
+| `oracle_topk` | `0` | `0.8` | `0.9` | `14.2` | `0.05` | `0.483265` | `0.9` |
+| `query_key_block_score` | `5` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000306` | `1.0` |
+| `oracle_topk` | `5` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000197` | `1.0` |
+| `query_key_block_score` | `8` | `1.0` | `1.0` | `16.0` | `0.0` | `0.001043` | `1.0` |
+| `oracle_topk` | `8` | `1.0` | `1.0` | `16.0` | `0.0` | `0.000260` | `1.0` |
+| `query_key_block_score` | `11` | `1.0` | `1.0` | `16.0` | `0.0` | `0.001838` | `1.0` |
+| `oracle_topk` | `11` | `1.0` | `1.0` | `16.0` | `0.0` | `0.001636` | `1.0` |
+
+Because `oracle_topk` also diverged at layer `0` with budget `8`, this is a
+budget/risk signal rather than merely a selector-quality failure.
+
+### Layer 0 Budget 12 Recovery
+
+A targeted layer-0 budget-12 run over `32` generated tokens recovered cleanly.
+
+| policy | exact match | token match | prefix | edit distance | avg KL | step top-1 | selected ratio |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `query_key_block_score` | `1.0` | `1.0` | `32.0` | `0.0` | `0.001209` | `1.0` | `0.472919` |
+| `oracle_topk` | `1.0` | `1.0` | `32.0` | `0.0` | `0.000226` | `1.0` | `0.472919` |
+
+## Adaptive-Budget Interpretation
+
+The Phase 11.2 evidence supports a layer-aware budget policy for the next
+offline experiment:
+
+- layer `0`: use budget `12` or `16`, with `16` as the safer default;
+- layers `5`, `8`, and `11`: budget `8` may be acceptable, but budget `16`
+  remains the conservative baseline;
+- use fallback to a larger budget when uncertainty is high.
+
+The recommended next phase is:
+
+> Phase 11.3 should test multi-layer generation patching outside vLLM using
+> adaptive layer-aware budgets, starting conservatively: layer 0 budget 12 or
+> 16, layers 5/8/11 budget 8 or 16. No vLLM integration yet.
+
+## Readiness Helper
+
+```bash
+.venv/bin/python scripts/kivo_vd/check_phase11_generation_readiness.py \
+  --inputs outputs/kivo_vd/runs/phase11_2_*.json \
+  --output-json outputs/kivo_vd/phase11_generation_readiness.json \
+  --output-md outputs/kivo_vd/phase11_generation_readiness.md
+```
+
+The helper reads one or more Phase 11.2 JSON files and reports clean
+layer/budget pairs, divergent results, and an adaptive budget map.

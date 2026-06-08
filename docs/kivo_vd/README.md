@@ -229,6 +229,14 @@ teacher-forced context modes are supported. This remains outside vLLM and
 does not prove production generation quality, runtime memory reduction, or
 latency improvement.
 
+The Phase 11.2 RunPod sweep found budget `16` clean across tested single
+layers `0`, `5`, `8`, and `11` for both `query_key_block_score` and
+`oracle_topk`. Budget `8` was clean for layers `5`, `8`, and `11`, but layer
+`0` diverged for both query-key and oracle selection. A targeted layer-0
+budget-12 run recovered cleanly over 32 generated tokens. The current
+recommendation is adaptive and layer-aware: layer 0 budget `12` or `16`,
+middle/later layers budget `8` or `16`, and no vLLM integration yet.
+
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
 - [Phase 3.0: Runtime Dry-Run](phase3_0_runtime_dry_run.md)
