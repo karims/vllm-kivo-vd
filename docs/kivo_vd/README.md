@@ -209,6 +209,7 @@ generation-quality preservation claim exists yet.
 - [Phase 11.1: Logit-Sensitivity Sweep](phase11_1_logit_sensitivity_sweep.md)
 - [Phase 11.2: Selected-Attention Generation Eval](phase11_2_selected_attention_generation_eval.md)
 - [Phase 11.3: Multi-Layer Generation Eval](phase11_3_multilayer_generation_eval.md)
+- [Phase 11.4: Adaptive Multi-Layer Generation Sweep](phase11_4_adaptive_multilayer_generation_sweep.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -252,6 +253,12 @@ Layers `5,8` passed at budget 8. Adding layer 11 at budget 8 caused
 generation for both query-key and oracle selection with a selected-block ratio
 near `0.39-0.40`. That ratio is theoretical standalone evidence, not measured
 runtime memory reduction. No vLLM integration is authorized.
+
+Phase 11.4 turns the adaptive map into a reproducible matrix across policies,
+generation lengths, prompt sets, and optional safer maps. It reports strict
+failure flags, oracle gaps, worst cases, and the best non-oracle
+configuration. The sweep remains outside vLLM and deliberately keeps
+`phase12_ready` false.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
