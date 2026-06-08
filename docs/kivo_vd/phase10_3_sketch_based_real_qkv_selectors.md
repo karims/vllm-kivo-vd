@@ -78,7 +78,7 @@ Full RunPod sweep:
 python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --model gpt2 \
   --layers 0,3,5,8,11 \
-  --budgets 4,8,16 \
+  --budgets 8,16,32,64 \
   --block-sizes 16 \
   --policies recent,random,oracle_topk,query_key_block_score,count_sketch,random_projection,bidiagonal_sign_subsample \
   --sketch-dims 16,32,64 \
@@ -92,7 +92,7 @@ Faster sweep:
 python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --model gpt2 \
   --layers 0,5,11 \
-  --budgets 4,8 \
+  --budgets 8,16 \
   --block-sizes 16 \
   --policies oracle_topk,query_key_block_score,count_sketch,random_projection,bidiagonal_sign_subsample \
   --sketch-dims 16,32 \
@@ -110,6 +110,36 @@ python scripts/kivo_vd/run_real_qkv_selected_attention_eval.py \
   --candidate-budget-blocks 8 \
   --device cuda
 ```
+
+Stress testing at budgets `2` or `4` may still be useful for failure analysis,
+but those budgets should not be presented as practical enterprise defaults.
+
+## RunPod Result
+
+The full Phase 10.3 GPT-2 sweep completed `195` standalone
+HuggingFace/PyTorch real-Q/K/V runs with no failures. It covered layers
+`0,3,5,8,11`, budgets `4,8,16`, block size `16`, seven selector policies, and
+sketch dimensions `16,32,64`.
+
+| policy | avg cosine | min cosine | avg relative L2 | max relative L2 | avg attention mass |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `oracle_topk` | `0.987684` | `0.950780` | `0.132672` | `0.320883` | `0.914064` |
+| `query_key_block_score` | `0.986247` | `0.944010` | `0.145825` | `0.336095` | `0.902847` |
+| `count_sketch` | `0.957279` | `0.502508` | `0.318132` | `1.887915` | `0.782310` |
+| `bidiagonal_sign_subsample` | `0.944366` | `0.454973` | `0.376663` | `2.094204` | `0.757161` |
+| `random_projection` | `0.941393` | `0.454973` | `0.366456` | `2.094204` | `0.767317` |
+| `recent` | `0.822501` | `0.454973` | `0.908913` | `2.088797` | `0.493023` |
+| `random` | `0.618329` | `0.194487` | `1.196096` | `2.546401` | `0.179596` |
+
+`query_key_block_score` was the best deployable selector and nearly matched
+the oracle aggregate. CountSketch, random projection, and the structured
+bidiagonal selector were promising on average but retained catastrophic
+worst cases, especially at small budgets. They need improvement before any
+runtime-use discussion.
+
+The result supports adaptive, safe reduction rather than maximum compression.
+Future practical sweeps should focus on budgets `8,16,32,64`; budgets `2` and
+`4` remain failure-oriented stress tests.
 
 ## Claims Boundary
 

@@ -151,6 +151,7 @@ quality preservation has been demonstrated. Full KV remains allocated.
 - [Phase 10.1: Real-QKV Selected-Attention Eval](phase10_1_real_qkv_selected_attention_eval.md)
 - [Phase 10.2: Real-QKV Policy Sweep](phase10_2_real_qkv_policy_sweep.md)
 - [Phase 10.3: Sketch-Based Real-QKV Selectors](phase10_3_sketch_based_real_qkv_selectors.md)
+- [Phase 10.4: Practical-Budget Decision Gate](phase10_4_practical_budget_decision_gate.md)
 
 Phase 10.0 starts the correctness path authorized by the Phase 9 gate. It
 compares full versus selected attention on synthetic PyTorch Q/K/V tensors
@@ -189,6 +190,18 @@ attention probabilities. The sweep compares them with oracle top-k and ranks
 the best non-oracle selector, but it remains standalone and does not establish
 logits, generation quality, active routing, latency, or runtime memory
 reduction.
+
+Phase 10.4 closes the selector-evidence stage with a practical-budget gate.
+Selected attention is viable when block selection is good, and
+`query_key_block_score` is the current best deployable baseline. Sketch
+selectors are not yet safe enough as-is because their small-budget worst cases
+remain severe. Budgets `2` and `4` are stress tests; practical work should
+focus on `8,16,32,64`.
+
+The allowed Phase 11 scope is logits and generation-quality evaluation outside
+vLLM using `query_key_block_score` and practical budgets. No vLLM integration,
+active routing, latency result, measured runtime memory reduction, or
+generation-quality preservation claim exists yet.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

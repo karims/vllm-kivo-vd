@@ -77,7 +77,7 @@ top-level convenience aliases:
 .venv/bin/python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --model gpt2 \
   --layers 0,5,11 \
-  --budgets 4,8,16 \
+  --budgets 8,16,32,64 \
   --block-sizes 16 \
   --policies recent,random,oracle_topk \
   --device cuda \
@@ -90,7 +90,7 @@ top-level convenience aliases:
 .venv/bin/python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --model gpt2 \
   --layers 0,5,11 \
-  --budgets 4,8 \
+  --budgets 8,16 \
   --block-sizes 16 \
   --policies recent,random,oracle_topk \
   --device cuda \
@@ -105,7 +105,7 @@ Use a smaller plan for local development:
 .venv/bin/python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --model gpt2 \
   --layers 0 \
-  --budgets 4 \
+  --budgets 8 \
   --block-sizes 16 \
   --policies recent,oracle_topk \
   --max-length 256 \
@@ -122,10 +122,13 @@ model:
 ```bash
 .venv/bin/python scripts/kivo_vd/run_real_qkv_policy_sweep.py \
   --layers 0,5,11 \
-  --budgets 4,8,16 \
+  --budgets 8,16,32,64 \
   --policies recent,random,oracle_topk \
   --dry-run
 ```
+
+Budgets `2` and `4` are still useful for aggressive stress testing and
+failure analysis, but they are not recommended practical defaults.
 
 ## Oracle Gap
 
