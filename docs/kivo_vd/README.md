@@ -210,6 +210,7 @@ generation-quality preservation claim exists yet.
 - [Phase 11.2: Selected-Attention Generation Eval](phase11_2_selected_attention_generation_eval.md)
 - [Phase 11.3: Multi-Layer Generation Eval](phase11_3_multilayer_generation_eval.md)
 - [Phase 11.4: Adaptive Multi-Layer Generation Sweep](phase11_4_adaptive_multilayer_generation_sweep.md)
+- [Phase 11.5: Long-Context Adaptive Generation Sweep](phase11_5_long_context_adaptive_generation_sweep.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -259,6 +260,20 @@ generation lengths, prompt sets, and optional safer maps. It reports strict
 failure flags, oracle gaps, worst cases, and the best non-oracle
 configuration. The sweep remains outside vLLM and deliberately keeps
 `phase12_ready` false.
+
+The Phase 11.4 RunPod sweeps preserved exact greedy GPT-2 continuations for
+the adaptive map `0:12,5:8,8:8,11:12` across five default prompts and twelve
+extended prompts, with generation lengths up to 64 tokens. The selected-block
+ratio varied from about `0.394` on the default set to about `0.74` on the
+extended set, demonstrating that the theoretical opportunity is strongly
+context dependent. These are standalone quality and block-ratio observations,
+not measured runtime memory savings.
+
+Phase 11.5 extends the same standalone evaluator to controlled 768- and
+896-token contexts. It records actual tokenizer lengths, quality metrics,
+selected-block ratios, and their theoretical complements. Phase 12 remains
+unauthorized; a clean result supports more prompt coverage or a larger model,
+not vLLM integration.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
