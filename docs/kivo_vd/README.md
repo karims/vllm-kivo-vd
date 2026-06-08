@@ -208,6 +208,7 @@ generation-quality preservation claim exists yet.
 - [Phase 11.0: Selected-Attention Logit Sensitivity](phase11_0_selected_attention_logit_sensitivity.md)
 - [Phase 11.1: Logit-Sensitivity Sweep](phase11_1_logit_sensitivity_sweep.md)
 - [Phase 11.2: Selected-Attention Generation Eval](phase11_2_selected_attention_generation_eval.md)
+- [Phase 11.3: Multi-Layer Generation Eval](phase11_3_multilayer_generation_eval.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -236,6 +237,13 @@ layers `0`, `5`, `8`, and `11` for both `query_key_block_score` and
 budget-12 run recovered cleanly over 32 generated tokens. The current
 recommendation is adaptive and layer-aware: layer 0 budget `12` or `16`,
 middle/later layers budget `8` or `16`, and no vLLM integration yet.
+
+Phase 11.3 applies selected-attention patches to multiple GPT-2 layers during
+the same standalone greedy generation run. The conservative progression is
+layers `5,8` first, then `5,8,11`, then the adaptive map
+`0:12,5:8,8:8,11:8`. This remains an offline quality probe and does not
+authorize vLLM integration, active routing, memory-reduction claims, or
+latency claims.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
