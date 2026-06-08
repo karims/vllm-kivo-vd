@@ -211,6 +211,7 @@ generation-quality preservation claim exists yet.
 - [Phase 11.3: Multi-Layer Generation Eval](phase11_3_multilayer_generation_eval.md)
 - [Phase 11.4: Adaptive Multi-Layer Generation Sweep](phase11_4_adaptive_multilayer_generation_sweep.md)
 - [Phase 11.5: Long-Context Adaptive Generation Sweep](phase11_5_long_context_adaptive_generation_sweep.md)
+- [Phase 11.6: Ratio-Scaled Long-Context Sweep](phase11_6_ratio_scaled_long_context_sweep.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -283,6 +284,12 @@ the tested greedy continuations with a selected ratio of about `0.4807`, whose
 complement is a `51.9%` theoretical active-block reduction estimate. This is
 not measured runtime memory reduction, and no vLLM integration or active
 routing exists.
+
+Phase 11.6 replaces manually chosen long-context maps with ratio/context-scaled
+maps derived from estimated context block count. It compares aggressive,
+balanced, and safer layer-specific ratios while preserving the standalone,
+outside-vLLM boundary. Passing Phase 11.6 rows can suggest Phase 11.7 broader
+coverage, but Phase 12 remains unauthorized.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
