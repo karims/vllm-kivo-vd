@@ -207,6 +207,7 @@ generation-quality preservation claim exists yet.
 
 - [Phase 11.0: Selected-Attention Logit Sensitivity](phase11_0_selected_attention_logit_sensitivity.md)
 - [Phase 11.1: Logit-Sensitivity Sweep](phase11_1_logit_sensitivity_sweep.md)
+- [Phase 11.2: Selected-Attention Generation Eval](phase11_2_selected_attention_generation_eval.md)
 
 Phase 11 starts logits-level evaluation outside vLLM. Phase 11.0 patches only
 one GPT-2 layer's last-token attention contribution, continues the remaining
@@ -220,6 +221,13 @@ layers `0,5,8,11` for both `query_key_block_score` and oracle top-k at budget
 reproducible practical-budget sweep with oracle gaps and a conservative
 generation-test recommendation. This remains outside vLLM and is not a claim
 of generation-quality preservation.
+
+Phase 11.2 adds a standalone greedy-generation probe. At every decode step it
+patches one GPT-2 layer's last-token attention contribution and compares the
+resulting continuation with unmodified greedy generation. Free-running and
+teacher-forced context modes are supported. This remains outside vLLM and
+does not prove production generation quality, runtime memory reduction, or
+latency improvement.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

@@ -145,3 +145,17 @@ Phase 11.2 would remain a generation-level offline experiment outside vLLM.
 - No measured runtime memory reduction is claimed.
 - No latency improvement is claimed.
 - Full generation quality has not been measured or proven.
+
+## RunPod Result
+
+The GPT-2 sweep completed `30` runs with no failures across layers
+`0,3,5,8,11`, budgets `8,16,32`, and both `query_key_block_score` and
+`oracle_topk`.
+
+`query_key_block_score` achieved top-1 match rate `1.0`, average KL
+`0.001038`, average logits relative L2 `0.006149`, average top-5 overlap
+`4.946667`, and average top-10 overlap `9.933333`. The report marked
+`phase11_2_ready: true`.
+
+This result authorizes only the standalone Phase 11.2 generation probe. It
+does not authorize vLLM integration.
