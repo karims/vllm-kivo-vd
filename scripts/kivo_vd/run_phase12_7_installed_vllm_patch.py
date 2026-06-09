@@ -19,6 +19,8 @@ BEGIN_MARKER = "# KIVO_PHASE12_7_BEGIN"
 END_MARKER = "# KIVO_PHASE12_7_END"
 ACTIVE_BEGIN_MARKER = "# KIVO_PHASE12_8_9_BEGIN"
 ACTIVE_END_MARKER = "# KIVO_PHASE12_8_9_END"
+BLOCK_TABLE_ACTIVE_BEGIN_MARKER = "# KIVO_PHASE12_10_BEGIN"
+BLOCK_TABLE_ACTIVE_END_MARKER = "# KIVO_PHASE12_10_END"
 MANIFEST_NAME = "phase12_7_patch_manifest.json"
 
 
@@ -56,6 +58,14 @@ TARGETS = (
         "compute_slot_mapping",
         "high",
         "Called in the worker path but returns no metadata object.",
+    ),
+    PatchTarget(
+        "block_table_compute_slot_mapping_active",
+        "v1/worker/block_table.py",
+        "BlockTable",
+        "compute_slot_mapping",
+        "very high",
+        "Guarded lower-level slot-mapping mutation experiment.",
     ),
     PatchTarget(
         "attention_metadata",
@@ -422,6 +432,182 @@ def _kivo_phase12_8_9_apply(hook_name, result):
 # KIVO_PHASE12_8_9_END
 '''
 
+BLOCK_TABLE_ACTIVE_PATCH_HELPER = r'''
+# KIVO_PHASE12_10_BEGIN
+def _kivo_phase12_10_is_int_like(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _kivo_phase12_10_safe_summary(value, depth=0):
+    try:
+        value_type = type(value)
+        type_name = f"{value_type.__module__}.{value_type.__qualname__}"
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return {"type": type_name, "value": value}
+        if depth >= 2:
+            return {"type": type_name}
+        if isinstance(value, dict):
+            keys = []
+            for index, key in enumerate(value):
+                if index >= 24:
+                    break
+                keys.append(str(key))
+            return {"type": type_name, "length": len(value), "keys": keys}
+        if isinstance(value, (list, tuple)):
+            return {
+                "type": type_name,
+                "length": len(value),
+                "items": [
+                    _kivo_phase12_10_safe_summary(item, depth + 1)
+                    for item in value[:8]
+                ],
+            }
+        shape = getattr(value, "shape", None)
+        dtype = getattr(value, "dtype", None)
+        device = getattr(value, "device", None)
+        if shape is not None or dtype is not None or device is not None:
+            summary = {"type": type_name}
+            if shape is not None:
+                try:
+                    summary["shape"] = [int(item) for item in shape]
+                except Exception:
+                    summary["shape"] = str(shape)[:120]
+            if dtype is not None:
+                summary["dtype"] = str(dtype)
+            if device is not None:
+                summary["device"] = str(device)
+            return summary
+        return {"type": type_name}
+    except Exception as exc:
+        return {"summary_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _kivo_phase12_10_is_tensor_like(value):
+    return (
+        getattr(value, "shape", None) is not None
+        or getattr(value, "dtype", None) is not None
+        or getattr(value, "device", None) is not None
+    )
+
+
+def _kivo_phase12_10_is_simple_slot_sequence(value):
+    return isinstance(value, (list, tuple)) and all(
+        _kivo_phase12_10_is_int_like(item) for item in value
+    )
+
+
+def _kivo_phase12_10_write_record(record):
+    import json as _kivo_json
+    import os as _kivo_os
+
+    output_path = _kivo_os.getenv("KIVO_PHASE12_10_OBS_PATH")
+    if not output_path:
+        return
+    parent = _kivo_os.path.dirname(output_path)
+    if parent:
+        _kivo_os.makedirs(parent, exist_ok=True)
+    encoded = (_kivo_json.dumps(record, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    descriptor = _kivo_os.open(
+        output_path,
+        _kivo_os.O_APPEND | _kivo_os.O_CREAT | _kivo_os.O_WRONLY,
+        0o644,
+    )
+    try:
+        _kivo_os.write(descriptor, encoded)
+    finally:
+        _kivo_os.close(descriptor)
+
+
+def _kivo_phase12_10_apply(instance, hook_name, module_file, function_name,
+                           args, kwargs, result):
+    import os as _kivo_os
+    import threading as _kivo_threading
+    import time as _kivo_time
+
+    if _kivo_os.getenv("KIVO_PHASE12_10_ENABLE") != "1":
+        return result
+    active = _kivo_os.getenv("KIVO_PHASE12_10_ACTIVE") == "1"
+    result_summary = _kivo_phase12_10_safe_summary(result)
+    self_attrs = sorted(str(key) for key in getattr(instance, "__dict__", {}))
+    result_type = type(result)
+    type_name = f"{result_type.__module__}.{result_type.__qualname__}"
+    slot_like = (
+        _kivo_phase12_10_is_simple_slot_sequence(result)
+        or "slot" in type_name.lower()
+    )
+    block_like = "block" in type_name.lower()
+    tensor_like = _kivo_phase12_10_is_tensor_like(result)
+    python_mutable = isinstance(result, (list, tuple))
+    record = {
+        "schema_version": "phase12_10_block_table_slot_mapping_v1",
+        "timestamp": _kivo_time.time(),
+        "pid": _kivo_os.getpid(),
+        "thread_id": _kivo_threading.get_ident(),
+        "hook_name": hook_name,
+        "module_file": module_file,
+        "class_name": type(instance).__qualname__,
+        "function_name": function_name,
+        "self_type": (
+            f"{type(instance).__module__}.{type(instance).__qualname__}"
+        ),
+        "self_attrs_summary": self_attrs[:48],
+        "args_summary": [
+            _kivo_phase12_10_safe_summary(item) for item in args[:8]
+        ],
+        "kwargs_keys": sorted(str(key) for key in kwargs)[:32],
+        "result_type": type_name,
+        "result_summary": result_summary,
+        "slot_like_result_found": slot_like,
+        "block_like_result_found": block_like,
+        "tensor_like_result_found": tensor_like,
+        "python_mutable_result_found": python_mutable,
+        "mutation_attempted": active,
+        "mutation_applied": False,
+        "mutation_policy": None,
+        "blocker_reason": None,
+        "runtime_behavior_changed": False,
+        "active_routing": False,
+        "measured_runtime_reduction": False,
+        "caveats": [
+            "installed-wheel observation wrapper",
+            "never mutates tensors in place",
+            "never mutates scheduler state or attention kernels",
+            "returns original result on unsafe structures",
+        ],
+    }
+    if not active:
+        _kivo_phase12_10_write_record(record)
+        return result
+    if tensor_like:
+        record["blocker_reason"] = (
+            "tensor-like slot mapping requires tensor-safe mutation design"
+        )
+        _kivo_phase12_10_write_record(record)
+        return result
+    if result is None:
+        record["blocker_reason"] = "no safe Python-level slot mapping result found"
+        _kivo_phase12_10_write_record(record)
+        return result
+    if _kivo_phase12_10_is_simple_slot_sequence(result) and len(result) > 0:
+        mutated = result[:-1]
+        if isinstance(result, list):
+            mutated = list(mutated)
+        record.update({
+            "mutation_applied": True,
+            "mutation_policy": "drop_last_python_slot_entry",
+            "runtime_behavior_changed": True,
+            "active_routing": True,
+        })
+        _kivo_phase12_10_write_record(record)
+        return mutated
+    record["blocker_reason"] = "no safe Python-level slot mapping result found"
+    _kivo_phase12_10_write_record(record)
+    return result
+# KIVO_PHASE12_10_END
+'''
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -534,6 +720,24 @@ def _wrapper_source(
             f"{indent}        return result\n",
             "\n",
         ]
+    if target.name == "block_table_compute_slot_mapping_active":
+        return [
+            f"{indent}def {method}(self, *args, **kwargs):\n",
+            f"{indent}    result = self.{original_name}(*args, **kwargs)\n",
+            f"{indent}    try:\n",
+            f"{indent}        return _kivo_phase12_10_apply(\n",
+            f"{indent}            self,\n",
+            f"{indent}            {target.name!r},\n",
+            f"{indent}            __file__,\n",
+            f"{indent}            {method!r},\n",
+            f"{indent}            args,\n",
+            f"{indent}            kwargs,\n",
+            f"{indent}            result,\n",
+            f"{indent}        )\n",
+            f"{indent}    except Exception:\n",
+            f"{indent}        return result\n",
+            "\n",
+        ]
     return [
         f"{indent}def {method}(self, *args, **kwargs):\n",
         f"{indent}    result = self.{original_name}(*args, **kwargs)\n",
@@ -560,6 +764,8 @@ def build_patched_source(source: str, target: PatchTarget) -> str:
         END_MARKER,
         ACTIVE_BEGIN_MARKER,
         ACTIVE_END_MARKER,
+        BLOCK_TABLE_ACTIVE_BEGIN_MARKER,
+        BLOCK_TABLE_ACTIVE_END_MARKER,
     )
     if any(marker in source for marker in markers):
         raise ValueError("target file is already patched")
@@ -571,7 +777,11 @@ def build_patched_source(source: str, target: PatchTarget) -> str:
     phase = (
         "phase12_8_9"
         if target.name == "slot_mappings_active_ladder"
-        else "phase12_7"
+        else (
+            "phase12_10"
+            if target.name == "block_table_compute_slot_mapping_active"
+            else "phase12_7"
+        )
     )
     original_name = f"_kivo_{phase}_original_{target.method_name}"
     if re.search(rf"\bdef\s+{re.escape(original_name)}\s*\(", source):
@@ -599,7 +809,11 @@ def build_patched_source(source: str, target: PatchTarget) -> str:
     helper = (
         ACTIVE_PATCH_HELPER
         if target.name == "slot_mappings_active_ladder"
-        else PATCH_HELPER
+        else (
+            BLOCK_TABLE_ACTIVE_PATCH_HELPER
+            if target.name == "block_table_compute_slot_mapping_active"
+            else PATCH_HELPER
+        )
     )
     patched += helper.lstrip("\n")
     ast.parse(patched)
@@ -657,7 +871,11 @@ def install_patch(
     markers = (
         [ACTIVE_BEGIN_MARKER, ACTIVE_END_MARKER]
         if target.name == "slot_mappings_active_ladder"
-        else [BEGIN_MARKER, END_MARKER]
+        else (
+            [BLOCK_TABLE_ACTIVE_BEGIN_MARKER, BLOCK_TABLE_ACTIVE_END_MARKER]
+            if target.name == "block_table_compute_slot_mapping_active"
+            else [BEGIN_MARKER, END_MARKER]
+        )
     )
     manifest = {
         "target": asdict(target),
@@ -736,6 +954,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     active_ladder = bool(
         target and target.get("name") == "slot_mappings_active_ladder"
     )
+    block_table_active = bool(
+        target
+        and target.get("name") == "block_table_compute_slot_mapping_active"
+    )
     lines = [
         "# Kivo-VD Phase 12.7 Installed vLLM Patch",
         "",
@@ -755,11 +977,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         (
             "- The active-ladder target mutates shallow copies only."
             if active_ladder
-            else "- Active mode computes side-channel `would_select_blocks` only."
+            else (
+                "- The block-table target mutates copied Python slot sequences "
+                "only."
+                if block_table_active
+                else (
+                    "- Active mode computes side-channel "
+                    "`would_select_blocks` only."
+                )
+            )
         ),
         (
             "- It never mutates tensors in place or changes kernels."
-            if active_ladder
+            if active_ladder or block_table_active
             else (
                 "- KV tensors, scheduler state, block tables, slots, and "
                 "attention are unchanged."
