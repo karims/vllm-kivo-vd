@@ -322,6 +322,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.6A: Plugin Feasibility Probe](phase12_6a_plugin_feasibility_probe.md)
 - [Phase 12.6A RunPod Validation](phase12_6a_runpod_validation_summary.md)
 - [Phase 12.6B: Plugin Generate Shadow Hook](phase12_6b_plugin_generate_shadow_hook.md)
+- [Phase 12.6C: Internal Hook Discovery](phase12_6c_internal_hook_discovery.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -379,6 +380,13 @@ validator-compatible, preview-only synthetic block-selection events after
 generation and returns the exact original result object. It does not access
 or modify scheduler state, attention, KV cache, block tables, or generated
 outputs. Active routing and measured runtime reduction remain false.
+
+Phase 12.6C adds discovery-only inspection of an installed vLLM wheel. It
+records import availability, signatures, source provenance, and conservative
+risk/usefulness rankings for public, engine, scheduler, model-runner,
+KV-cache, block-table, slot-mapping, metrics, and attention surfaces. It
+installs no internal patch and changes no runtime behavior. High-risk methods
+are inventory targets only, not approved hooks.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

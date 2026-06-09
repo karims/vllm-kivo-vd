@@ -95,6 +95,7 @@ def test_register_writes_marker_from_environment(
     assert payload["loaded"] is True
     assert payload["plugin_name"] == "kivo_shadow"
     assert "active routing is disabled" in payload["caveats"]
+    assert payload["internal_discovery_available"] is True
 
 
 def test_plugin_entry_point_metadata_exists() -> None:

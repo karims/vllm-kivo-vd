@@ -25,3 +25,7 @@ metadata.
 The optional wrapper does not alter prompts, sampling parameters, outputs,
 scheduler state, KV cache, block tables, or attention. Its block IDs are
 deterministic synthetic previews and are never used for routing.
+
+The package also provides `internal_discovery`, a read-only catalog scanner
+for installed-wheel vLLM. It records callable signatures and conservative
+risk/usefulness rankings. It does not install an internal hook.

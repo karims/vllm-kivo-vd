@@ -46,6 +46,7 @@ class KivoShadowPluginState:
     patch_generate_installed: bool = False
     original_generate_qualname: str | None = None
     runtime_warnings: list[str] | None = None
+    internal_discovery_available: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,6 +92,7 @@ def build_plugin_state(
         patch_generate_installed=patch_generate_installed,
         original_generate_qualname=original_generate_qualname,
         runtime_warnings=list(runtime_warnings or []),
+        internal_discovery_available=True,
     )
 
 
