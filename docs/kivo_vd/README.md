@@ -325,6 +325,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.6C: Internal Hook Discovery](phase12_6c_internal_hook_discovery.md)
 - [Phase 12.6D: KV Block-ID Observation](phase12_6d_kv_get_block_ids_observation.md)
 - [Phase 12.7: Installed vLLM Runtime Patch](phase12_7_installed_vllm_runtime_patch.md)
+- [Phase 12.8/12.9: Active Mutation Ladder](phase12_8_9_active_ladder.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -403,6 +404,14 @@ observations. The patch manager refuses repository-local source, backs up and
 checksums the target, inserts a fail-closed observation wrapper, and restores
 the exact original bytes. Guarded active mode computes only a side-channel
 `would_select_blocks` preview and explicitly blocks runtime mutation.
+
+Phase 12.8/12.9 adds the first guarded active escalation against the installed
+wheel. It first removes one key from a shallow-copied attention-metadata
+dictionary, then attempts to shorten one shallow-copied direct Python
+slot/block list only if the metadata stage succeeds. Tensors are never mutated
+in place, exceptions return the original result, and patch restore remains
+mandatory. This is an invariant-discovery experiment, not production selected
+attention or evidence of memory, latency, or quality improvement.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

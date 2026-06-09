@@ -11,13 +11,14 @@ import hashlib
 import importlib
 import json
 import re
-import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 BEGIN_MARKER = "# KIVO_PHASE12_7_BEGIN"
 END_MARKER = "# KIVO_PHASE12_7_END"
+ACTIVE_BEGIN_MARKER = "# KIVO_PHASE12_8_9_BEGIN"
+ACTIVE_END_MARKER = "# KIVO_PHASE12_8_9_END"
 MANIFEST_NAME = "phase12_7_patch_manifest.json"
 
 
@@ -39,6 +40,14 @@ TARGETS = (
         "_get_slot_mappings",
         "high",
         "Preferred observation point for runtime slot-mapping results.",
+    ),
+    PatchTarget(
+        "slot_mappings_active_ladder",
+        "v1/worker/gpu_model_runner.py",
+        "GPUModelRunner",
+        "_get_slot_mappings",
+        "very high",
+        "Guarded shallow-copy mutation ladder for slot-mapping results.",
     ),
     PatchTarget(
         "compute_slot_mapping",
@@ -262,6 +271,157 @@ def _kivo_phase12_7_observe(
 # KIVO_PHASE12_7_END
 '''
 
+ACTIVE_PATCH_HELPER = r'''
+# KIVO_PHASE12_8_9_BEGIN
+_kivo_phase12_8_9_mutation_count = 0
+_kivo_phase12_8_9_last_stage = None
+
+
+def _kivo_phase12_8_9_write_record(record):
+    import json as _kivo_json
+    import os as _kivo_os
+    import time as _kivo_time
+
+    output_path = _kivo_os.getenv("KIVO_PHASE12_8_9_OBS_PATH")
+    if not output_path:
+        return
+    record = {
+        "schema_version": "phase12_8_9_active_ladder_v1",
+        "timestamp": _kivo_time.time(),
+        "measured_runtime_reduction": False,
+        **record,
+    }
+    parent = _kivo_os.path.dirname(output_path)
+    if parent:
+        _kivo_os.makedirs(parent, exist_ok=True)
+    encoded = (_kivo_json.dumps(record, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    descriptor = _kivo_os.open(
+        output_path,
+        _kivo_os.O_APPEND | _kivo_os.O_CREAT | _kivo_os.O_WRONLY,
+        0o644,
+    )
+    try:
+        _kivo_os.write(descriptor, encoded)
+    finally:
+        _kivo_os.close(descriptor)
+
+
+def _kivo_phase12_8_9_apply(hook_name, result):
+    import os as _kivo_os
+
+    global _kivo_phase12_8_9_last_stage
+    global _kivo_phase12_8_9_mutation_count
+    if _kivo_os.getenv("KIVO_PHASE12_8_9_ENABLE") != "1":
+        return result
+    stage = _kivo_os.getenv("KIVO_PHASE12_8_9_STAGE", "baseline")
+    active = _kivo_os.getenv("KIVO_PHASE12_8_9_ACTIVE") == "1"
+    if stage != _kivo_phase12_8_9_last_stage:
+        _kivo_phase12_8_9_mutation_count = 0
+        _kivo_phase12_8_9_last_stage = stage
+    try:
+        max_mutations = max(
+            0, int(_kivo_os.getenv("KIVO_PHASE12_8_9_MAX_MUTATIONS", "1"))
+        )
+    except ValueError:
+        max_mutations = 1
+    record = {
+        "hook_name": hook_name,
+        "mutation_stage": stage,
+        "active_enabled": active,
+        "mutation_attempted": False,
+        "mutation_applied": False,
+        "runtime_behavior_changed": False,
+        "active_routing": False,
+        "removed_key": None,
+        "original_layer_count": None,
+        "mutated_layer_count": None,
+        "selected_slot_key": None,
+        "original_selected_slot_count": None,
+        "mutated_selected_slot_count": None,
+        "blocker_reason": None,
+    }
+    if stage == "baseline" or not active:
+        _kivo_phase12_8_9_write_record(record)
+        return result
+    if _kivo_phase12_8_9_mutation_count >= max_mutations:
+        record["blocker_reason"] = "maximum mutation count reached"
+        _kivo_phase12_8_9_write_record(record)
+        return result
+    record["mutation_attempted"] = True
+    if not isinstance(result, tuple) or len(result) < 2:
+        record["blocker_reason"] = (
+            "_get_slot_mappings result is not a tuple with two items"
+        )
+        _kivo_phase12_8_9_write_record(record)
+        return result
+
+    if stage == "metadata":
+        metadata = result[1]
+        if not isinstance(metadata, dict) or not metadata:
+            record["blocker_reason"] = (
+                "second _get_slot_mappings item is not a non-empty dict"
+            )
+            _kivo_phase12_8_9_write_record(record)
+            return result
+        copied = dict(metadata)
+        removed_key = next(reversed(copied))
+        copied.pop(removed_key)
+        mutated = (result[0], copied, *result[2:])
+        record.update({
+            "mutation_stage": "metadata_drop_one_key",
+            "mutation_applied": True,
+            "runtime_behavior_changed": True,
+            "removed_key": str(removed_key),
+            "original_layer_count": len(metadata),
+            "mutated_layer_count": len(copied),
+        })
+        _kivo_phase12_8_9_mutation_count += 1
+        _kivo_phase12_8_9_write_record(record)
+        return mutated
+
+    if stage == "selected_slot":
+        mappings = result[0]
+        blocker = (
+            "no safe Python-level selected-slot/block structure found in "
+            "_get_slot_mappings result"
+        )
+        if not isinstance(mappings, dict):
+            record["blocker_reason"] = blocker
+            _kivo_phase12_8_9_write_record(record)
+            return result
+        copied = dict(mappings)
+        for key, value in mappings.items():
+            if type(value) not in (list, tuple) or len(value) <= 1:
+                continue
+            copied_value = value[:-1]
+            if type(value) is list:
+                copied_value = list(copied_value)
+            copied[key] = copied_value
+            mutated = (copied, result[1], *result[2:])
+            record.update({
+                "mutation_stage": "selected_slot_drop_one",
+                "mutation_applied": True,
+                "runtime_behavior_changed": True,
+                "active_routing": True,
+                "selected_slot_key": str(key),
+                "original_selected_slot_count": len(value),
+                "mutated_selected_slot_count": len(copied_value),
+            })
+            _kivo_phase12_8_9_mutation_count += 1
+            _kivo_phase12_8_9_write_record(record)
+            return mutated
+        record["blocker_reason"] = blocker
+        _kivo_phase12_8_9_write_record(record)
+        return result
+
+    record["blocker_reason"] = f"unsupported mutation stage: {stage}"
+    _kivo_phase12_8_9_write_record(record)
+    return result
+# KIVO_PHASE12_8_9_END
+'''
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -362,6 +522,18 @@ def _wrapper_source(
     original_name: str,
 ) -> list[str]:
     method = target.method_name
+    if target.name == "slot_mappings_active_ladder":
+        return [
+            f"{indent}def {method}(self, *args, **kwargs):\n",
+            f"{indent}    result = self.{original_name}(*args, **kwargs)\n",
+            f"{indent}    try:\n",
+            f"{indent}        return _kivo_phase12_8_9_apply(\n",
+            f"{indent}            {target.name!r}, result\n",
+            f"{indent}        )\n",
+            f"{indent}    except Exception:\n",
+            f"{indent}        return result\n",
+            "\n",
+        ]
     return [
         f"{indent}def {method}(self, *args, **kwargs):\n",
         f"{indent}    result = self.{original_name}(*args, **kwargs)\n",
@@ -383,14 +555,25 @@ def _wrapper_source(
 
 
 def build_patched_source(source: str, target: PatchTarget) -> str:
-    if BEGIN_MARKER in source or END_MARKER in source:
+    markers = (
+        BEGIN_MARKER,
+        END_MARKER,
+        ACTIVE_BEGIN_MARKER,
+        ACTIVE_END_MARKER,
+    )
+    if any(marker in source for marker in markers):
         raise ValueError("target file is already patched")
     _, method = _find_method(source, target.class_name, target.method_name)
     lines = source.splitlines(keepends=True)
     def_index = method.lineno - 1
     def_line = lines[def_index]
     indent = def_line[: len(def_line) - len(def_line.lstrip())]
-    original_name = f"_kivo_phase12_7_original_{target.method_name}"
+    phase = (
+        "phase12_8_9"
+        if target.name == "slot_mappings_active_ladder"
+        else "phase12_7"
+    )
+    original_name = f"_kivo_{phase}_original_{target.method_name}"
     if re.search(rf"\bdef\s+{re.escape(original_name)}\s*\(", source):
         raise ValueError(f"original method alias already exists: {original_name}")
     renamed = re.sub(
@@ -413,7 +596,12 @@ def build_patched_source(source: str, target: PatchTarget) -> str:
     patched = "".join(lines)
     if not patched.endswith("\n"):
         patched += "\n"
-    patched += PATCH_HELPER.lstrip("\n")
+    helper = (
+        ACTIVE_PATCH_HELPER
+        if target.name == "slot_mappings_active_ladder"
+        else PATCH_HELPER
+    )
+    patched += helper.lstrip("\n")
     ast.parse(patched)
     return patched
 
@@ -466,13 +654,18 @@ def install_patch(
         raise ValueError(f"backup already exists with different content: {backup_path}")
     if not backup_path.exists():
         backup_path.write_bytes(original)
+    markers = (
+        [ACTIVE_BEGIN_MARKER, ACTIVE_END_MARKER]
+        if target.name == "slot_mappings_active_ladder"
+        else [BEGIN_MARKER, END_MARKER]
+    )
     manifest = {
         "target": asdict(target),
         "target_path": str(target_path),
         "backup_path": str(backup_path),
         "original_sha256": _sha256(original),
         "patched_sha256": _sha256(patched),
-        "markers": [BEGIN_MARKER, END_MARKER],
+        "markers": markers,
     }
     _manifest_path(backup_dir).write_text(
         json.dumps(manifest, indent=2) + "\n",
@@ -527,8 +720,9 @@ def patch_status(
         }
     target_path = Path(manifest["target_path"])
     content = target_path.read_text(encoding="utf-8")
+    markers = manifest.get("markers", [BEGIN_MARKER, END_MARKER])
     return {
-        "patched": BEGIN_MARKER in content and END_MARKER in content,
+        "patched": all(marker in content for marker in markers),
         "manifest_present": True,
         "manifest": manifest,
         "current_sha256": _sha256(target_path.read_bytes()),
@@ -538,6 +732,10 @@ def patch_status(
 
 def render_markdown(report: dict[str, Any]) -> str:
     operation = report["operation"]
+    target = report.get("target")
+    active_ladder = bool(
+        target and target.get("name") == "slot_mappings_active_ladder"
+    )
     lines = [
         "# Kivo-VD Phase 12.7 Installed vLLM Patch",
         "",
@@ -552,15 +750,23 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "- The target is an installed wheel, never repository-local `vllm/`.",
         "- Original bytes are backed up before editing.",
-        "- Observation and active-decision code is fail-closed.",
-        "- Active mode computes side-channel `would_select_blocks` only.",
+        "- Injected code is disabled unless its phase-specific env flag is set.",
+        "- Exceptions fail closed by returning the original method result.",
         (
-            "- KV tensors, scheduler state, block tables, slots, and "
-            "attention are unchanged."
+            "- The active-ladder target mutates shallow copies only."
+            if active_ladder
+            else "- Active mode computes side-channel `would_select_blocks` only."
+        ),
+        (
+            "- It never mutates tensors in place or changes kernels."
+            if active_ladder
+            else (
+                "- KV tensors, scheduler state, block tables, slots, and "
+                "attention are unchanged."
+            )
         ),
         "- No measured memory, latency, quality, or active-routing claim is made.",
     ]
-    target = report.get("target")
     if target:
         lines.extend([
             "",
