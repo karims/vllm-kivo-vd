@@ -50,8 +50,10 @@ marker includes:
 - imported vLLM version and file path when available;
 - explicit no-mutation caveats.
 
-The plugin does not monkeypatch, register a model, inspect KV tensors, or
-change scheduler or attention behavior.
+With Phase 12.6A settings, the plugin does not install a wrapper, register a
+model, inspect KV tensors, or change scheduler or attention behavior. Phase
+12.6B adds a separately documented, explicitly enabled public
+`LLM.generate` wrapper.
 
 ## RunPod Installation
 

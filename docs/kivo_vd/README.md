@@ -321,6 +321,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.5 RunPod Validation](phase12_5_runpod_validation_summary.md)
 - [Phase 12.6A: Plugin Feasibility Probe](phase12_6a_plugin_feasibility_probe.md)
 - [Phase 12.6A RunPod Validation](phase12_6a_runpod_validation_summary.md)
+- [Phase 12.6B: Plugin Generate Shadow Hook](phase12_6b_plugin_generate_shadow_hook.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -371,6 +372,13 @@ generation probe both succeeded, so
 passive, opt-in, fail-closed hook-discovery experiment. No active routing,
 runtime monkeypatch, scheduler or attention change, KV or block-table
 mutation, or measured memory or latency improvement is present.
+
+Phase 12.6B adds a disabled-by-default plugin-owned wrapper around the public
+`vllm.LLM.generate` boundary. When explicitly enabled, it emits
+validator-compatible, preview-only synthetic block-selection events after
+generation and returns the exact original result object. It does not access
+or modify scheduler state, attention, KV cache, block tables, or generated
+outputs. Active routing and measured runtime reduction remain false.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

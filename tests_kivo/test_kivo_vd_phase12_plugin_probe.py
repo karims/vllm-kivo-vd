@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib
 import importlib.util
 import json
 import os
@@ -22,14 +23,11 @@ def _load_module(path: Path, module_name: str):
 
 
 def _load_plugin():
-    return _load_module(
-        _repo_root()
-        / "plugins"
-        / "kivo_vllm_shadow_plugin"
-        / "kivo_vllm_shadow_plugin"
-        / "plugin.py",
-        "kivo_vllm_shadow_plugin_test_plugin",
-    )
+    plugin_root = _repo_root() / "plugins" / "kivo_vllm_shadow_plugin"
+    if str(plugin_root) not in sys.path:
+        sys.path.insert(0, str(plugin_root))
+    module = importlib.import_module("kivo_vllm_shadow_plugin.plugin")
+    return importlib.reload(module)
 
 
 def _load_probe():
@@ -84,6 +82,11 @@ def test_register_writes_marker_from_environment(
 ) -> None:
     plugin = _load_plugin()
     marker_path = tmp_path / "marker.json"
+    fake_vllm = SimpleNamespace(
+        __version__="0.test",
+        __file__="/site-packages/vllm/__init__.py",
+    )
+    monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
     monkeypatch.setenv("KIVO_SHADOW_PLUGIN_MARKER", str(marker_path))
 
     plugin.register()
@@ -118,7 +121,21 @@ def test_probe_report_handles_marker_present(
     args = _args(probe, tmp_path, "--skip-generation")
 
     def load_plugin():
-        plugin.write_load_marker(args.marker_path)
+        plugin.write_load_marker(
+            args.marker_path,
+            plugin.KivoShadowPluginState(
+                loaded=True,
+                plugin_name="kivo_shadow",
+                timestamp=1.0,
+                python_executable="/fake/python",
+                cwd="/tmp",
+                sys_path_preview=["/tmp"],
+                process_id=123,
+                vllm_version="0.22.1",
+                vllm_file="/site-packages/vllm/__init__.py",
+                caveats=["marker only"],
+            ),
+        )
         return {
             "vllm_version": "0.22.1",
             "vllm_file": "/site-packages/vllm/__init__.py",
@@ -158,7 +175,21 @@ def test_probe_generation_status_can_succeed(tmp_path: Path) -> None:
     args = _args(probe, tmp_path)
 
     def load_plugin():
-        plugin.write_load_marker(args.marker_path)
+        plugin.write_load_marker(
+            args.marker_path,
+            plugin.KivoShadowPluginState(
+                loaded=True,
+                plugin_name="kivo_shadow",
+                timestamp=1.0,
+                python_executable="/fake/python",
+                cwd="/tmp",
+                sys_path_preview=["/tmp"],
+                process_id=123,
+                vllm_version="0.22.1",
+                vllm_file="/site-packages/vllm/__init__.py",
+                caveats=["marker only"],
+            ),
+        )
         return {
             "vllm_version": "0.22.1",
             "vllm_file": "/site-packages/vllm/__init__.py",

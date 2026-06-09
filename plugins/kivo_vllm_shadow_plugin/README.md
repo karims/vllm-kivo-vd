@@ -1,11 +1,15 @@
 # Kivo vLLM Shadow Plugin
 
-This package is a Phase 12.6A feasibility probe for vLLM's general plugin
-entry-point mechanism.
+This package supports the Phase 12.6A entry-point feasibility probe and the
+Phase 12.6B opt-in public `LLM.generate` shadow hook.
 
 The `kivo_shadow` plugin writes an optional JSON load marker when
-`KIVO_SHADOW_PLUGIN_MARKER` is set. It does not monkeypatch vLLM, register a
-model, alter scheduling, inspect KV tensors, or change attention behavior.
+`KIVO_SHADOW_PLUGIN_MARKER` is set. By default it does nothing else.
+
+Setting `KIVO_SHADOW_PLUGIN_PATCH_GENERATE=1` installs a fail-closed wrapper
+around the public `vllm.LLM.generate` method. The wrapper returns the original
+result object unchanged and can append preview-only events to
+`KIVO_SHADOW_PLUGIN_EVENTS`.
 
 Enable only this plugin with:
 
@@ -17,3 +21,7 @@ export KIVO_SHADOW_PLUGIN_MARKER=/tmp/kivo_shadow_plugin_marker.json
 The marker is evidence that vLLM discovered and invoked the entry point. It is
 not evidence that the plugin can access internal block tables or decode
 metadata.
+
+The optional wrapper does not alter prompts, sampling parameters, outputs,
+scheduler state, KV cache, block tables, or attention. Its block IDs are
+deterministic synthetic previews and are never used for routing.
