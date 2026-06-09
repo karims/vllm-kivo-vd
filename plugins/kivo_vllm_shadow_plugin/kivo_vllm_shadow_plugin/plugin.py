@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import sys
@@ -12,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .kv_observation import record_kv_get_block_ids_observation
 from .shadow_events import (
     DEFAULT_BLOCK_SIZE,
     DEFAULT_RATIO_POLICY,
@@ -28,6 +30,10 @@ BLOCK_SIZE_ENV = "KIVO_SHADOW_PLUGIN_BLOCK_SIZE"
 RATIO_POLICY_ENV = "KIVO_SHADOW_PLUGIN_RATIO_POLICY"
 PATCH_SENTINEL = "_kivo_shadow_generate_wrapper"
 ORIGINAL_GENERATE = "_kivo_shadow_original_generate"
+PATCH_KV_GET_BLOCK_IDS_ENV = "KIVO_SHADOW_PLUGIN_PATCH_KV_GET_BLOCK_IDS"
+KV_OBSERVATIONS_ENV = "KIVO_SHADOW_PLUGIN_KV_OBS"
+KV_PATCH_SENTINEL = "_kivo_shadow_kv_get_block_ids_wrapper"
+KV_ORIGINAL_METHOD = "_kivo_shadow_original_get_block_ids"
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,10 @@ class KivoShadowPluginState:
     original_generate_qualname: str | None = None
     runtime_warnings: list[str] | None = None
     internal_discovery_available: bool = True
+    patch_kv_get_block_ids_requested: bool = False
+    patch_kv_get_block_ids_installed: bool = False
+    kv_get_block_ids_original_qualname: str | None = None
+    kv_observations_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -61,6 +71,10 @@ def build_plugin_state(
     patch_generate_requested: bool = False,
     patch_generate_installed: bool = False,
     original_generate_qualname: str | None = None,
+    patch_kv_get_block_ids_requested: bool = False,
+    patch_kv_get_block_ids_installed: bool = False,
+    kv_get_block_ids_original_qualname: str | None = None,
+    kv_observations_path: str | None = None,
     runtime_warnings: list[str] | None = None,
 ) -> KivoShadowPluginState:
     try:
@@ -84,7 +98,8 @@ def build_plugin_state(
         caveats=[
             "public LLM.generate wrapper is disabled unless explicitly enabled",
             "no scheduler or attention patch",
-            "no KV or block-table access",
+            "KV block IDs are copied only when explicitly enabled",
+            "no KV or block-table mutation",
             "active routing is disabled",
             "no measured runtime reduction",
         ],
@@ -93,6 +108,10 @@ def build_plugin_state(
         original_generate_qualname=original_generate_qualname,
         runtime_warnings=list(runtime_warnings or []),
         internal_discovery_available=True,
+        patch_kv_get_block_ids_requested=patch_kv_get_block_ids_requested,
+        patch_kv_get_block_ids_installed=patch_kv_get_block_ids_installed,
+        kv_get_block_ids_original_qualname=kv_get_block_ids_original_qualname,
+        kv_observations_path=kv_observations_path,
     )
 
 
@@ -201,12 +220,69 @@ def install_generate_patch(
     return True, getattr(original_generate, "__qualname__", None)
 
 
+def install_kv_get_block_ids_patch(
+    *,
+    import_module: Callable[[str], Any] | None = None,
+    observer: Callable[..., dict[str, Any]] = (
+        record_kv_get_block_ids_observation
+    ),
+) -> tuple[bool, str | None]:
+    """Install a fail-closed observation wrapper at most once."""
+
+    module_loader = import_module or importlib.import_module
+    module = module_loader("vllm.v1.core.kv_cache_manager")
+    manager_class = getattr(module, "KVCacheManager", None)
+    if manager_class is None:
+        raise AttributeError("KVCacheManager is unavailable")
+    current_method = getattr(manager_class, "get_block_ids", None)
+    if current_method is None:
+        raise AttributeError("KVCacheManager.get_block_ids is unavailable")
+
+    if getattr(current_method, KV_PATCH_SENTINEL, False):
+        original = getattr(manager_class, KV_ORIGINAL_METHOD, current_method)
+        return True, getattr(original, "__qualname__", None)
+
+    original_method = current_method
+
+    def get_block_ids_wrapper(
+        self: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        result = original_method(self, *args, **kwargs)
+        try:
+            output_path = os.getenv(KV_OBSERVATIONS_ENV)
+            if output_path:
+                observer(
+                    instance=self,
+                    args=args,
+                    kwargs=kwargs,
+                    result=result,
+                    output_path=output_path,
+                )
+        except Exception as exc:
+            _record_runtime_warning(
+                "KV block-ID observation failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        return result
+
+    setattr(get_block_ids_wrapper, KV_PATCH_SENTINEL, True)
+    setattr(manager_class, KV_ORIGINAL_METHOD, original_method)
+    manager_class.get_block_ids = get_block_ids_wrapper
+    return True, getattr(original_method, "__qualname__", None)
+
+
 def register() -> None:
-    """Record loading and optionally wrap the public generate boundary."""
+    """Record loading and install only explicitly requested wrappers."""
 
     patch_requested = _env_enabled(PATCH_GENERATE_ENV)
     patch_installed = False
     original_qualname = None
+    kv_patch_requested = _env_enabled(PATCH_KV_GET_BLOCK_IDS_ENV)
+    kv_patch_installed = False
+    kv_original_qualname = None
+    kv_observations_path = os.getenv(KV_OBSERVATIONS_ENV)
     warnings: list[str] = []
     if patch_requested:
         try:
@@ -218,6 +294,16 @@ def register() -> None:
                 f"generate patch installation failed: "
                 f"{type(exc).__name__}: {exc}"
             )
+    if kv_patch_requested:
+        try:
+            kv_patch_installed, kv_original_qualname = (
+                install_kv_get_block_ids_patch()
+            )
+        except Exception as exc:
+            warnings.append(
+                "KV block-ID patch installation failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
     marker_path = os.getenv(MARKER_ENV)
     if marker_path:
         write_load_marker(
@@ -226,6 +312,10 @@ def register() -> None:
                 patch_generate_requested=patch_requested,
                 patch_generate_installed=patch_installed,
                 original_generate_qualname=original_qualname,
+                patch_kv_get_block_ids_requested=kv_patch_requested,
+                patch_kv_get_block_ids_installed=kv_patch_installed,
+                kv_get_block_ids_original_qualname=kv_original_qualname,
+                kv_observations_path=kv_observations_path,
                 runtime_warnings=warnings,
             ),
         )

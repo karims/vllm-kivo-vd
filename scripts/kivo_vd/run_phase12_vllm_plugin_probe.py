@@ -48,6 +48,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Validate events; defaults to enabled with the generate hook.",
     )
+    parser.add_argument(
+        "--enable-kv-get-block-ids-hook",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--kv-observations-jsonl",
+        default=(
+            "outputs/kivo_vd/runs/"
+            "phase12_6d_kv_get_block_ids_observations.jsonl"
+        ),
+    )
+    parser.add_argument(
+        "--require-kv-observations",
+        action="store_true",
+    )
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args(argv)
@@ -62,6 +77,14 @@ def _set_probe_environment(args: argparse.Namespace) -> None:
     else:
         os.environ.pop("KIVO_SHADOW_PLUGIN_PATCH_GENERATE", None)
         os.environ.pop("KIVO_SHADOW_PLUGIN_EVENTS", None)
+    if args.enable_kv_get_block_ids_hook:
+        os.environ["KIVO_SHADOW_PLUGIN_PATCH_KV_GET_BLOCK_IDS"] = "1"
+        os.environ["KIVO_SHADOW_PLUGIN_KV_OBS"] = str(
+            args.kv_observations_jsonl
+        )
+    else:
+        os.environ.pop("KIVO_SHADOW_PLUGIN_PATCH_KV_GET_BLOCK_IDS", None)
+        os.environ.pop("KIVO_SHADOW_PLUGIN_KV_OBS", None)
 
 
 def _read_marker(path: str | Path) -> dict[str, Any] | None:
@@ -162,6 +185,12 @@ def build_probe_report(
     events_path = Path(args.events_jsonl)
     if args.enable_generate_hook and events_path.exists():
         events_path.unlink()
+    kv_observation_path = Path(args.kv_observations_jsonl)
+    if (
+        args.enable_kv_get_block_ids_hook
+        and kv_observation_path.exists()
+    ):
+        kv_observation_path.unlink()
     _set_probe_environment(args)
 
     load_status = {
@@ -220,8 +249,21 @@ def build_probe_report(
     patch_installed = bool(
         marker and marker.get("patch_generate_installed") is True
     )
+    kv_patch_requested = bool(
+        marker
+        and marker.get("patch_kv_get_block_ids_requested") is True
+    )
+    kv_patch_installed = bool(
+        marker
+        and marker.get("patch_kv_get_block_ids_installed") is True
+    )
     events_written = (
         _count_jsonl_rows(events_path) if args.enable_generate_hook else 0
+    )
+    kv_observations_written = (
+        _count_jsonl_rows(kv_observation_path)
+        if args.enable_kv_get_block_ids_hook
+        else 0
     )
     validate_requested = (
         args.enable_generate_hook
@@ -262,6 +304,16 @@ def build_probe_report(
         and events_written > 0
         and validation["validation_passed"]
     )
+    phase12_7_candidate = bool(
+        generation["status"] == "succeeded"
+        and args.enable_kv_get_block_ids_hook
+        and kv_patch_requested
+        and kv_patch_installed
+        and kv_observations_written > 0
+    )
+    requirement_satisfied = bool(
+        not args.require_kv_observations or kv_observations_written > 0
+    )
     return {
         "plugin_name": "kivo_shadow",
         "plugin_marker_written": marker_written,
@@ -285,16 +337,39 @@ def build_probe_report(
         "events_written": events_written,
         "validation": validation,
         "validation_passed": validation["validation_passed"],
+        "patch_kv_get_block_ids_requested": kv_patch_requested,
+        "patch_kv_get_block_ids_installed": kv_patch_installed,
+        "kv_get_block_ids_original_qualname": (
+            marker.get("kv_get_block_ids_original_qualname")
+            if marker
+            else None
+        ),
+        "kv_observation_path": str(kv_observation_path),
+        "kv_observations_written": kv_observations_written,
+        "kv_observations_required": args.require_kv_observations,
+        "kv_observation_requirement_satisfied": requirement_satisfied,
         "phase12_6b_plugin_shadow_hook_candidate": phase12_6b_candidate,
         "phase12_6c_internal_hook_candidate": phase12_6c_candidate,
+        "phase12_7_active_experiment_candidate": phase12_7_candidate,
         "dry_run_only": True,
         "shadow_only": True,
         "active_routing": False,
         "measured_runtime_reduction": False,
-        "runtime_monkeypatch_applied": patch_installed,
-        "runtime_monkeypatch_scope": (
-            "public_vllm_LLM_generate" if patch_installed else None
+        "runtime_monkeypatch_applied": bool(
+            patch_installed or kv_patch_installed
         ),
+        "runtime_monkeypatch_scope": [
+            name
+            for enabled, name in (
+                (patch_installed, "public_vllm_LLM_generate"),
+                (
+                    kv_patch_installed,
+                    "KVCacheManager.get_block_ids_observation",
+                ),
+            )
+            if enabled
+        ],
+        "runtime_behavior_changed": False,
         "scheduler_behavior_changed": False,
         "attention_behavior_changed": False,
         "kv_cache_mutated": False,
@@ -340,6 +415,30 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"`{str(report['validation_passed']).lower()}`"
         ),
         "",
+        "## KV Block-ID Observation Hook",
+        "",
+        (
+            "- Patch requested: "
+            f"`{str(report['patch_kv_get_block_ids_requested']).lower()}`"
+        ),
+        (
+            "- Patch installed: "
+            f"`{str(report['patch_kv_get_block_ids_installed']).lower()}`"
+        ),
+        (
+            "- Original method: "
+            f"`{report['kv_get_block_ids_original_qualname']}`"
+        ),
+        f"- Observation path: `{report['kv_observation_path']}`",
+        (
+            "- Observations written: "
+            f"`{report['kv_observations_written']}`"
+        ),
+        (
+            "- Required observation satisfied: "
+            f"`{str(report['kv_observation_requirement_satisfied']).lower()}`"
+        ),
+        "",
         "## Feasibility",
         "",
         (
@@ -350,12 +449,17 @@ def render_markdown(report: dict[str, Any]) -> str:
             "- Phase 12.6C internal-hook candidate: "
             f"`{str(report['phase12_6c_internal_hook_candidate']).lower()}`"
         ),
+        (
+            "- Phase 12.7 experiment-review candidate: "
+            f"`{str(report['phase12_7_active_experiment_candidate']).lower()}`"
+        ),
         "",
         "## Caveats",
         "",
         "- The optional wrapper observes only the public generate boundary.",
         "- It does not prove access to block tables or decode metadata.",
         "- Preview block IDs are synthetic and never used for routing.",
+        "- KV observations copy bounded metadata after the original call.",
         "- Scheduler, attention, KV cache, block tables, and outputs are unchanged.",
         "- No memory, latency, or quality claim is made.",
     ]
@@ -378,6 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             "error": str(exc),
             "phase12_6b_plugin_shadow_hook_candidate": False,
             "phase12_6c_internal_hook_candidate": False,
+            "phase12_7_active_experiment_candidate": False,
             "dry_run_only": True,
             "active_routing": False,
             "runtime_monkeypatch_applied": False,
@@ -401,16 +506,34 @@ def main(argv: list[str] | None = None) -> int:
         "patch_generate_installed": report["patch_generate_installed"],
         "events_written": report["events_written"],
         "validation_passed": report["validation_passed"],
+        "patch_kv_get_block_ids_requested": report[
+            "patch_kv_get_block_ids_requested"
+        ],
+        "patch_kv_get_block_ids_installed": report[
+            "patch_kv_get_block_ids_installed"
+        ],
+        "kv_observations_written": report["kv_observations_written"],
         "phase12_6b_plugin_shadow_hook_candidate": report[
             "phase12_6b_plugin_shadow_hook_candidate"
         ],
         "phase12_6c_internal_hook_candidate": report[
             "phase12_6c_internal_hook_candidate"
         ],
+        "phase12_7_active_experiment_candidate": report[
+            "phase12_7_active_experiment_candidate"
+        ],
         "output_json": args.output_json,
         "output_md": args.output_md,
         "active_routing": False,
+        "measured_runtime_reduction": False,
+        "runtime_behavior_changed": False,
     }, separators=(",", ":")))
+    if (
+        args.require_kv_observations
+        and not report["kv_observation_requirement_satisfied"]
+        and not args.continue_on_error
+    ):
+        return 1
     return 0
 
 

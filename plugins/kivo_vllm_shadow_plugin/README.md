@@ -29,3 +29,15 @@ deterministic synthetic previews and are never used for routing.
 The package also provides `internal_discovery`, a read-only catalog scanner
 for installed-wheel vLLM. It records callable signatures and conservative
 risk/usefulness rankings. It does not install an internal hook.
+
+Phase 12.6D can independently enable a fail-closed observation wrapper around
+`KVCacheManager.get_block_ids`:
+
+```bash
+export KIVO_SHADOW_PLUGIN_PATCH_KV_GET_BLOCK_IDS=1
+export KIVO_SHADOW_PLUGIN_KV_OBS=/tmp/kivo_kv_observations.jsonl
+```
+
+The wrapper appends bounded copied metadata after the original method returns,
+then returns the exact original result. It does not mutate KV state, block
+tables, slot mappings, scheduler decisions, or attention behavior.
