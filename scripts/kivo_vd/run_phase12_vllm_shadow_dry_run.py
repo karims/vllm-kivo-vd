@@ -53,8 +53,85 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--skip-vllm-generation", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument(
+        "--prefer-installed-vllm",
+        action="store_true",
+        help=(
+            "Remove repo-root import entries before loading vLLM so an "
+            "installed wheel is preferred over an unbuilt source tree."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args(argv)
+
+
+def sanitize_sys_path_for_installed_vllm(
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Remove only sys.path entries that resolve to the repository root."""
+
+    resolved_repo_root = repo_root.resolve()
+    removed_paths: list[str] = []
+    kept_paths: list[str] = []
+    for entry in sys.path:
+        display_entry = entry or ""
+        try:
+            resolved_entry = (
+                Path.cwd().resolve()
+                if entry == ""
+                else Path(entry).expanduser().resolve()
+            )
+        except (OSError, RuntimeError):
+            kept_paths.append(entry)
+            continue
+        if resolved_entry == resolved_repo_root:
+            removed_paths.append(display_entry)
+        else:
+            kept_paths.append(entry)
+    sys.path[:] = kept_paths
+    return {
+        "prefer_installed_vllm": True,
+        "sys_path_sanitized": True,
+        "removed_paths": removed_paths,
+        "kept_paths_preview": kept_paths[:12],
+    }
+
+
+def _default_import_path_report() -> dict[str, Any]:
+    return {
+        "prefer_installed_vllm": False,
+        "sys_path_sanitized": False,
+        "removed_paths": [],
+        "kept_paths_preview": sys.path[:12],
+    }
+
+
+def _classify_vllm_source(
+    source: str | None,
+    repo_root: Path,
+) -> dict[str, Any]:
+    if not source:
+        return {
+            "vllm_import_source": source,
+            "vllm_source_is_repo_local": False,
+            "vllm_source_is_site_packages": False,
+        }
+    try:
+        resolved_source = Path(source).expanduser().resolve()
+        resolved_repo_root = repo_root.resolve()
+        is_repo_local = resolved_source.is_relative_to(resolved_repo_root)
+        is_site_packages = any(
+            part in {"site-packages", "dist-packages"}
+            for part in resolved_source.parts
+        )
+    except (OSError, RuntimeError):
+        is_repo_local = False
+        is_site_packages = False
+    return {
+        "vllm_import_source": source,
+        "vllm_source_is_repo_local": is_repo_local,
+        "vllm_source_is_site_packages": is_site_packages,
+    }
 
 
 def _import_status(
@@ -84,6 +161,9 @@ def _import_status(
 
 def collect_environment_report(
     import_module: Callable[[str], Any] = importlib.import_module,
+    *,
+    repo_root: Path = REPO_ROOT,
+    import_path_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     torch_status, torch_module = _import_status("torch", import_module)
     if torch_module is not None:
@@ -123,12 +203,24 @@ def collect_environment_report(
         status, _ = _import_status(module_name, import_module)
         extension_statuses[module_name] = status
 
+    path_report = import_path_report or _default_import_path_report()
+    source_report = _classify_vllm_source(
+        vllm_status["file"],
+        repo_root,
+    )
     return {
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch_status,
         "vllm": vllm_status,
         "extensions": extension_statuses,
+        "prefer_installed_vllm": path_report[
+            "prefer_installed_vllm"
+        ],
+        "sys_path_sanitized": path_report["sys_path_sanitized"],
+        "removed_sys_path_entries": path_report["removed_paths"],
+        "kept_sys_path_preview": path_report["kept_paths_preview"],
+        **source_report,
     }
 
 
@@ -239,8 +331,19 @@ def build_report(
     generation_fn: Callable[[argparse.Namespace], dict[str, Any]] = (
         run_vllm_generation
     ),
+    sanitize_fn: Callable[[Path], dict[str, Any]] = (
+        sanitize_sys_path_for_installed_vllm
+    ),
 ) -> dict[str, Any]:
-    environment = collect_environment_report(import_module)
+    import_path_report = (
+        sanitize_fn(REPO_ROOT)
+        if args.prefer_installed_vllm
+        else _default_import_path_report()
+    )
+    environment = collect_environment_report(
+        import_module,
+        import_path_report=import_path_report,
+    )
     generation = {
         "status": "skipped",
         "output_text": None,
@@ -310,6 +413,20 @@ def build_report(
         and environment["torch"]["cuda_available"]
         and environment["vllm"]["ok"]
         and environment["extensions"]["vllm._C"]["ok"]
+        and (
+            not args.prefer_installed_vllm
+            or (
+                environment["vllm_source_is_site_packages"]
+                and not environment["vllm_source_is_repo_local"]
+            )
+        )
+    )
+    installed_source_mismatch = bool(
+        args.prefer_installed_vllm
+        and (
+            environment["vllm_source_is_repo_local"]
+            or not environment["vllm_source_is_site_packages"]
+        )
     )
     return {
         "config": {
@@ -322,6 +439,7 @@ def build_report(
             "max_num_seqs": args.max_num_seqs,
             "enable_shadow": bool(args.enable_shadow),
             "skip_vllm_generation": bool(args.skip_vllm_generation),
+            "prefer_installed_vllm": bool(args.prefer_installed_vllm),
         },
         "environment": environment,
         "generation": generation,
@@ -337,8 +455,13 @@ def build_report(
                 "Consider one reviewed opt-in runtime hook in Phase 12.6."
                 if environment_ready and generation_ready and shadow_ready
                 else (
-                    "Resolve environment/generation/event validation gaps "
-                    "before an actual runtime hook."
+                    "Installed vLLM was requested, but import provenance "
+                    "was not a non-repo site-packages path."
+                    if installed_source_mismatch
+                    else (
+                        "Resolve environment/generation/event validation "
+                        "gaps before an actual runtime hook."
+                    )
                 )
             ),
         },
@@ -383,6 +506,30 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- vLLM import: `{str(environment['vllm']['ok']).lower()}`",
         f"- vLLM version: `{environment['vllm']['version']}`",
         f"- vLLM path: `{environment['vllm']['file']}`",
+        (
+            "- Prefer installed vLLM: "
+            f"`{str(environment['prefer_installed_vllm']).lower()}`"
+        ),
+        (
+            "- `sys.path` sanitized: "
+            f"`{str(environment['sys_path_sanitized']).lower()}`"
+        ),
+        (
+            "- Removed `sys.path` entries: "
+            f"`{environment['removed_sys_path_entries']}`"
+        ),
+        (
+            "- vLLM import source: "
+            f"`{environment['vllm_import_source']}`"
+        ),
+        (
+            "- vLLM source is repo-local: "
+            f"`{str(environment['vllm_source_is_repo_local']).lower()}`"
+        ),
+        (
+            "- vLLM source is site-packages: "
+            f"`{str(environment['vllm_source_is_site_packages']).lower()}`"
+        ),
         (
             "- `vllm._C` import: "
             f"`{str(core_extension_ok).lower()}`"

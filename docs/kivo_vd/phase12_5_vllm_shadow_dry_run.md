@@ -48,10 +48,49 @@ The report records Python, Torch, CUDA, GPU, vLLM, `vllm._C`,
 `vllm._C_stable_libtorch`, and `vllm.vllm_flash_attn` import status. Optional
 extension failures are reported rather than hidden.
 
+## Installed Wheel Versus Repo-Local vLLM Source
+
+Phase 12.5 can validate against an installed vLLM wheel because it does not
+install a runtime hook or depend on modified repo-local vLLM code. On a pod
+where the source checkout has no compiled CUDA extensions, use:
+
+```bash
+PYTHONPATH=/workspace/vllm-kivo-vd/scripts:\
+/workspace/vllm-kivo-vd/scripts/kivo_vd \
+python -m kivo_vd.run_phase12_vllm_shadow_dry_run \
+  --prefer-installed-vllm \
+  --model gpt2 \
+  --skip-vllm-generation \
+  --output-json \
+    /workspace/vllm-kivo-vd/outputs/kivo_vd/runs/phase12_5_env_check.json \
+  --output-md \
+    /workspace/vllm-kivo-vd/outputs/kivo_vd/runs/phase12_5_env_check.md \
+  --continue-on-error
+```
+
+`--prefer-installed-vllm` removes only import entries that resolve to the
+repository root. It preserves `scripts/`, `scripts/kivo_vd/`, and
+site-packages. Reports include:
+
+- whether import-path sanitization was requested and performed;
+- removed `sys.path` entries;
+- the imported vLLM path;
+- whether that path is repo-local;
+- whether that path is under site-packages or dist-packages.
+
+If installed-wheel mode still imports repo-local vLLM, environment readiness
+is false. This prevents an unbuilt source package from being mistaken for a
+working wheel.
+
+For Phase 12.6 and later, an installed wheel is insufficient if repo-local
+runtime files are modified. Those phases require either a compatible local
+source build or a separately reviewed patch/overlay strategy.
+
 ## Baseline Generation
 
 ```bash
 .venv/bin/python scripts/kivo_vd/run_phase12_vllm_shadow_dry_run.py \
+  --prefer-installed-vllm \
   --model gpt2 \
   --prompt "Kivo Phase 12 vLLM baseline smoke." \
   --max-tokens 8 \
@@ -71,6 +110,7 @@ No Phase 12 event file is created when shadow mode is disabled.
 
 ```bash
 .venv/bin/python scripts/kivo_vd/run_phase12_vllm_shadow_dry_run.py \
+  --prefer-installed-vllm \
   --model gpt2 \
   --prompt "Kivo Phase 12 vLLM shadow smoke." \
   --max-tokens 8 \

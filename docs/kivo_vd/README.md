@@ -344,7 +344,9 @@ not change model execution.
 Phase 12.5 adds a real-environment and optional baseline-generation workflow,
 then emits separately validated runtime-adjacent shadow events. A readiness
 result requires environment, generation, and event validation to pass
-together; no automatic runtime hook is added.
+together; no automatic runtime hook is added. Installed-wheel mode can
+sanitize repo-root import entries and reports vLLM import provenance so an
+unbuilt local source package cannot masquerade as the working wheel.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
