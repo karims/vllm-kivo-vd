@@ -286,6 +286,28 @@ Apply a conservative readiness gate. Require complete IDs, valid ordering and
 causality, bounded overhead, clean baseline-output comparison, and explicit
 fallback behavior before proposing Phase 13.
 
+## Phase 12.4 Runtime Touchpoint Status
+
+Phase 12.4 added a standalone runtime-facing helper:
+
+```text
+scripts/kivo_vd/phase12_vllm_runtime_touchpoint.py
+```
+
+The chosen strategy is deliberately conservative:
+
+- no core vLLM runtime file is modified;
+- no automatic scheduler, model-runner, block-table, or attention hook runs;
+- helpers are disabled unless `KIVO_PHASE12_SHADOW_ENABLED` is explicitly set;
+- disabled helpers return a no-op result and write no event file;
+- enabled helpers copy caller-provided metadata, delegate to the Phase 12
+  passive observer, and emit validator-compatible shadow events;
+- all failures return fail-closed result dictionaries.
+
+This preserves Phase 12 as shadow-only scaffolding. The active selected-KV
+path remains Phase 13 because applying selected IDs would require changing
+attention metadata, block-table/slot-mapping semantics, or backend inputs.
+
 ## Validator
 
 Validate the example events with:
