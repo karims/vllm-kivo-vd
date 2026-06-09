@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kivo-vllm-shadow-plugin"
+version = "0.1.0"
+description = "Kivo-VD Phase 12 shadow plugin feasibility marker"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+
+[project.entry-points."vllm.general_plugins"]
+kivo_shadow = "kivo_vllm_shadow_plugin.plugin:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kivo_vllm_shadow_plugin*"]

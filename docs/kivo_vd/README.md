@@ -319,6 +319,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.4: Runtime Touchpoint Helper](phase12_4_runtime_touchpoint.md)
 - [Phase 12.5: vLLM Shadow Dry-Run](phase12_5_vllm_shadow_dry_run.md)
 - [Phase 12.5 RunPod Validation](phase12_5_runpod_validation_summary.md)
+- [Phase 12.6A: Plugin Feasibility Probe](phase12_6a_plugin_feasibility_probe.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -355,6 +356,12 @@ events validated without errors or warnings. The readiness report returned
 `phase12_6_runtime_hook_ready=true`. This authorizes consideration of a
 separately reviewed opt-in shadow hook only; active routing remains absent,
 and no measured memory or latency improvement is claimed.
+
+Phase 12.6A adds a separately installable, marker-only
+`vllm.general_plugins` package and probe runner. It tests installed-wheel
+plugin discovery without monkeypatching scheduler, attention, KV cache, or
+block tables. Plugin loading alone does not establish access to useful runtime
+metadata.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
