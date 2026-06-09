@@ -317,6 +317,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.2: Passive Shadow Observer](phase12_2_shadow_observer.md)
 - [Phase 12.3: vLLM Shadow Hook Scaffold](phase12_3_vllm_shadow_hook_scaffold.md)
 - [Phase 12.4: Runtime Touchpoint Helper](phase12_4_runtime_touchpoint.md)
+- [Phase 12.5: vLLM Shadow Dry-Run](phase12_5_vllm_shadow_dry_run.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -339,6 +340,11 @@ disabled by default, fail-closed, and unwired from all vLLM runtime paths.
 Phase 12.4 adds a no-op runtime-facing helper that future vLLM code can call
 with copied metadata. It is still not wired into core runtime files and does
 not change model execution.
+
+Phase 12.5 adds a real-environment and optional baseline-generation workflow,
+then emits separately validated runtime-adjacent shadow events. A readiness
+result requires environment, generation, and event validation to pass
+together; no automatic runtime hook is added.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
