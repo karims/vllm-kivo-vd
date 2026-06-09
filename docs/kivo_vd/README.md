@@ -324,6 +324,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.6B: Plugin Generate Shadow Hook](phase12_6b_plugin_generate_shadow_hook.md)
 - [Phase 12.6C: Internal Hook Discovery](phase12_6c_internal_hook_discovery.md)
 - [Phase 12.6D: KV Block-ID Observation](phase12_6d_kv_get_block_ids_observation.md)
+- [Phase 12.7: Installed vLLM Runtime Patch](phase12_7_installed_vllm_runtime_patch.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -395,6 +396,13 @@ only bounded metadata, catches observer failures, and returns the exact
 original result object. A nonempty validated observation file would prove
 that the plugin reaches real block-ID metadata, but it would not authorize
 active routing, KV mutation, block-table changes, or memory/latency claims.
+
+Phase 12.7 adds tooling for a reversible patch against an installed vLLM
+wheel after the plugin-only internal wrapper produced zero runtime
+observations. The patch manager refuses repository-local source, backs up and
+checksums the target, inserts a fail-closed observation wrapper, and restores
+the exact original bytes. Guarded active mode computes only a side-channel
+`would_select_blocks` preview and explicitly blocks runtime mutation.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
