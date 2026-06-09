@@ -86,6 +86,102 @@ For Phase 12.6 and later, an installed wheel is insufficient if repo-local
 runtime files are modified. Those phases require either a compatible local
 source build or a separately reviewed patch/overlay strategy.
 
+## RunPod Validation Result
+
+Phase 12.5 passed on a RunPod RTX 4090 environment using an installed vLLM
+wheel and a clean script-copy import boundary.
+
+### Environment
+
+| item | validated value |
+| --- | --- |
+| GPU | NVIDIA RTX 4090 |
+| Torch | `2.11.0+cu130` |
+| Torch CUDA | `13.0` |
+| vLLM | `0.22.1` |
+| vLLM source | `/usr/local/lib/python3.12/dist-packages/vllm/__init__.py` |
+| `vllm._C` | imported successfully |
+| `vllm._C_stable_libtorch` | imported successfully |
+| `vllm.vllm_flash_attn` | imported successfully |
+
+Baseline generation completed successfully with the conservative runtime
+limits. Shadow-enabled generation also completed successfully. The shadow
+path wrote four events, and the independent validator reported:
+
+- total events: `4`;
+- valid events: `4`;
+- invalid events: `0`;
+- errors: none;
+- warnings: none.
+
+The final report returned:
+
+- `phase12_6_runtime_hook_ready=true`;
+- `active_routing=false`;
+- `measured_runtime_reduction=false`;
+- no attention-kernel change;
+- no KV-cache or block-table mutation;
+- no scheduler behavior change.
+
+This result proves that the Phase 12.5 environment, baseline-generation, and
+post-generation shadow-event workflow can run together on the target GPU
+environment. It does not prove an in-runtime hook, active routing, memory
+reduction, latency improvement, or generation-quality preservation.
+
+## Import Isolation Lesson
+
+Running from `/workspace/vllm-kivo-vd`, or otherwise retaining the repository
+root on Python's import path, selected the repo-local unbuilt `vllm` package.
+That source package could not load `vllm._C`. A local source build was also
+blocked because the extension build expected unavailable Torch headers,
+including:
+
+```text
+torch/headeronly/util/Exception.h
+```
+
+The installed vLLM wheel was healthy. The clean Phase 12.5 workaround copied
+only the Kivo scripts to `/tmp`, kept the repository root out of the import
+path, and wrote resulting artifacts back into the repository:
+
+```bash
+rm -rf /tmp/kivo_phase12
+mkdir -p /tmp/kivo_phase12
+cp -r /workspace/vllm-kivo-vd/scripts/kivo_vd /tmp/kivo_phase12/
+
+cd /tmp
+
+PYTHONPATH=/tmp/kivo_phase12:/tmp/kivo_phase12/kivo_vd \
+python -m kivo_vd.run_phase12_vllm_shadow_dry_run \
+  --prefer-installed-vllm \
+  --model gpt2 \
+  --prompt "Kivo Phase 12 vLLM shadow smoke." \
+  --max-tokens 8 \
+  --gpu-memory-utilization 0.05 \
+  --max-model-len 128 \
+  --max-num-batched-tokens 128 \
+  --max-num-seqs 1 \
+  --enable-shadow \
+  --shadow-output-jsonl \
+    /workspace/vllm-kivo-vd/outputs/kivo_vd/runs/phase12_5_shadow_events_tmpcopy.jsonl \
+  --output-json \
+    /workspace/vllm-kivo-vd/outputs/kivo_vd/runs/phase12_5_vllm_generation_with_shadow_tmpcopy.json \
+  --output-md \
+    /workspace/vllm-kivo-vd/outputs/kivo_vd/runs/phase12_5_vllm_generation_with_shadow_tmpcopy.md \
+  --continue-on-error
+```
+
+This installed-wheel technique is acceptable for Phase 12.5 because the
+workflow installs no runtime hook and modifies no vLLM runtime code. Phase
+12.6 needs a different strategy if it modifies repo-local runtime files:
+
+- build the source checkout against compatible Torch/CUDA headers; or
+- use a separately reviewed patch or source-overlay strategy that guarantees
+  the executed runtime includes the intended changes.
+
+An installed wheel that does not contain future runtime changes cannot
+validate those changes.
+
 ## Baseline Generation
 
 ```bash

@@ -318,6 +318,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.3: vLLM Shadow Hook Scaffold](phase12_3_vllm_shadow_hook_scaffold.md)
 - [Phase 12.4: Runtime Touchpoint Helper](phase12_4_runtime_touchpoint.md)
 - [Phase 12.5: vLLM Shadow Dry-Run](phase12_5_vllm_shadow_dry_run.md)
+- [Phase 12.5 RunPod Validation](phase12_5_runpod_validation_summary.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -347,6 +348,13 @@ result requires environment, generation, and event validation to pass
 together; no automatic runtime hook is added. Installed-wheel mode can
 sanitize repo-root import entries and reports vLLM import provenance so an
 unbuilt local source package cannot masquerade as the working wheel.
+
+Phase 12.5 passed on RunPod with an RTX 4090 and installed vLLM `0.22.1`.
+Baseline and shadow-enabled generation succeeded, and all four emitted shadow
+events validated without errors or warnings. The readiness report returned
+`phase12_6_runtime_hook_ready=true`. This authorizes consideration of a
+separately reviewed opt-in shadow hook only; active routing remains absent,
+and no measured memory or latency improvement is claimed.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
