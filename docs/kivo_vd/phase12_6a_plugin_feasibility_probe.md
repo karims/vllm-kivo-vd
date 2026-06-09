@@ -136,10 +136,109 @@ plugin can observe useful internal metadata.
 - No active routing, KV mutation, block-table mutation, or monkeypatch exists.
 - No measured memory, latency, or quality claim is made.
 
-## Next Decision
+## RunPod Validation Result
 
-If the marker and generation probe pass, Phase 12.6B can inspect whether a
-plugin can obtain useful passive metadata through a documented extension
-surface. If not, the project may need a compatible source build or a
-separately reviewed source-overlay strategy. Active selected attention remains
-outside Phase 12.
+Phase 12.6A passed on RunPod with this installed-wheel environment:
+
+| Component | Validated value |
+| --- | --- |
+| GPU | NVIDIA RTX 4090 |
+| Driver CUDA support | 13.0 |
+| PyTorch | `2.11.0+cu130` |
+| PyTorch CUDA | `13.0` |
+| vLLM | `0.22.1` |
+| vLLM import path | `/usr/local/lib/python3.12/dist-packages/vllm/__init__.py` |
+| `vllm._C` | Import succeeded |
+| `vllm._C_stable_libtorch` | Import succeeded |
+| `vllm.vllm_flash_attn` | Import succeeded |
+
+The environment-only probe reported:
+
+```text
+plugin_loaded=true
+plugin_marker_written=true
+generation_status=skipped
+phase12_6b_plugin_shadow_hook_candidate=true
+active_routing=false
+```
+
+The generation probe used `gpt2`. Generation succeeded, with output text that
+included `The first`, and reported:
+
+```text
+plugin_loaded=true
+plugin_marker_written=true
+phase12_6b_plugin_shadow_hook_candidate=true
+active_routing=false
+```
+
+Both probes imported vLLM from `site-packages`, not from the unbuilt
+repository-local source tree. This establishes that plugin-style discovery
+and invocation are feasible enough to continue to Phase 12.6B. It does not
+establish access to scheduler, block-table, KV-cache, attention, or
+decode-step metadata.
+
+## Known Bad / Avoided Environment
+
+An earlier environment used:
+
+- PyTorch `2.8.0+cu128`;
+- vLLM `0.10.2`.
+
+The plugin loaded and wrote its marker, so entry-point discovery itself
+worked. GPT-2/OPT generation then failed because that stack exposed an
+incompatible tokenizer API:
+
+```text
+GPT2Tokenizer has no attribute all_special_tokens_extended
+```
+
+This failure does not invalidate plugin feasibility, but the environment
+should not be used for Phase 12.6B. The validated target is vLLM `0.22.1`
+with PyTorch `2.11.0+cu130`.
+
+## Recommended Phase 12.6B Environment
+
+Use the validated installed-wheel stack:
+
+- vLLM `0.22.1`;
+- PyTorch `2.11.0+cu130`;
+- execution from `/tmp`;
+- only the Kivo plugin package installed into that environment.
+
+Install the plugin from the repository without installing the repository as
+vLLM:
+
+```bash
+cd /workspace/vllm-kivo-vd
+uv pip install --system -e plugins/kivo_vllm_shadow_plugin
+```
+
+Then return to `/tmp` and use the isolated script-copy pattern shown above.
+Do not run `uv pip install -e .`, add `/workspace/vllm-kivo-vd` to
+`PYTHONPATH`, or otherwise import the repository-local `vllm/` package unless
+a compatible source build is separately completed and validated.
+
+## Phase 12.6A Conclusion
+
+The official `vllm.general_plugins` entry point successfully discovered and
+invoked the marker-only `kivo_shadow` plugin in the working installed-wheel
+environment. Baseline generation through that environment also succeeded
+while the plugin was enabled.
+
+Phase 12.6A proves plugin loading only. It does not prove that a general
+plugin can observe block tables, KV cache state, scheduler decisions,
+attention metadata, or decode-step tensors. No runtime monkeypatch was
+applied, and no scheduler, attention, KV-cache, block-table, or model-output
+behavior was changed.
+
+Phase 12.6B may attempt discovery of a plugin-owned no-op observation surface.
+That work must remain:
+
+- explicitly opt-in;
+- passive and shadow-only;
+- fail-closed when metadata is unavailable;
+- free of active routing and runtime mutation.
+
+Active selected attention remains outside Phase 12. No measured memory,
+latency, or quality claim follows from this validation.

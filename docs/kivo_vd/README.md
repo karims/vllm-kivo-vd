@@ -320,6 +320,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.5: vLLM Shadow Dry-Run](phase12_5_vllm_shadow_dry_run.md)
 - [Phase 12.5 RunPod Validation](phase12_5_runpod_validation_summary.md)
 - [Phase 12.6A: Plugin Feasibility Probe](phase12_6a_plugin_feasibility_probe.md)
+- [Phase 12.6A RunPod Validation](phase12_6a_runpod_validation_summary.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -362,6 +363,14 @@ Phase 12.6A adds a separately installable, marker-only
 plugin discovery without monkeypatching scheduler, attention, KV cache, or
 block tables. Plugin loading alone does not establish access to useful runtime
 metadata.
+
+Phase 12.6A passed on RunPod using installed vLLM `0.22.1`, PyTorch
+`2.11.0+cu130`, and an RTX 4090. The environment-only marker probe and GPT-2
+generation probe both succeeded, so
+`phase12_6b_plugin_shadow_hook_candidate=true`. This authorizes only a
+passive, opt-in, fail-closed hook-discovery experiment. No active routing,
+runtime monkeypatch, scheduler or attention change, KV or block-table
+mutation, or measured memory or latency improvement is present.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 
