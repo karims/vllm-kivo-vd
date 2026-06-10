@@ -38,6 +38,11 @@ REQUIRED_FIELDS = (
     "mutation_applied",
     "mutation_policy",
     "mutation_blocker_reason",
+    "valid_slot_count",
+    "pad_slot_id",
+    "valid_mutation_index",
+    "previous_valid_index",
+    "old_new_differ",
     "runtime_behavior_changed",
     "active_routing",
     "measured_runtime_reduction",
@@ -109,12 +114,20 @@ def validate_record(record: dict[str, Any], *, active_expected: bool) -> list[st
                 errors.append(
                     "applied mutation requires runtime_behavior_changed=true"
                 )
+            if record.get("valid_slot_count", 0) < 2:
+                errors.append("applied mutation requires valid_slot_count>=2")
+            if record.get("old_new_differ") is not True:
+                errors.append("applied mutation requires old_new_differ=true")
             if record.get("old_value") is None:
                 errors.append("applied mutation requires old_value")
             if record.get("new_value") is None:
                 errors.append("applied mutation requires new_value")
             if record.get("mutation_index") is None:
                 errors.append("applied mutation requires mutation_index")
+            if record.get("valid_mutation_index") is None:
+                errors.append("applied mutation requires valid_mutation_index")
+            if record.get("previous_valid_index") is None:
+                errors.append("applied mutation requires previous_valid_index")
         else:
             if not record.get("mutation_blocker_reason"):
                 errors.append("blocked active observation requires blocker reason")

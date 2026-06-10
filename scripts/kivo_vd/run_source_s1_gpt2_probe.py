@@ -81,6 +81,11 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "old_value": record.get("old_value"),
         "new_value": record.get("new_value"),
         "mutation_index": record.get("mutation_index"),
+        "valid_slot_count": record.get("valid_slot_count"),
+        "pad_slot_id": record.get("pad_slot_id"),
+        "valid_mutation_index": record.get("valid_mutation_index"),
+        "previous_valid_index": record.get("previous_valid_index"),
+        "old_new_differ": record.get("old_new_differ"),
     }
 
 
@@ -123,7 +128,7 @@ def _set_stage_env(observation_path: str, *, active: bool) -> None:
     os.environ["KIVO_SOURCE_FAIL_CLOSED"] = "1"
     if active:
         os.environ["KIVO_SOURCE_ACTIVE"] = "1"
-        os.environ["KIVO_SOURCE_POLICY"] = "mask_last_slot"
+        os.environ["KIVO_SOURCE_POLICY"] = "mask_last_valid_slot"
         os.environ["KIVO_SOURCE_MAX_MUTATIONS"] = "1"
     else:
         os.environ.pop("KIVO_SOURCE_ACTIVE", None)
@@ -212,6 +217,11 @@ def build_report(
         "old_value": active_summary["old_value"],
         "new_value": active_summary["new_value"],
         "mutation_index": active_summary["mutation_index"],
+        "valid_slot_count": active_summary["valid_slot_count"],
+        "pad_slot_id": active_summary["pad_slot_id"],
+        "valid_mutation_index": active_summary["valid_mutation_index"],
+        "previous_valid_index": active_summary["previous_valid_index"],
+        "old_new_differ": active_summary["old_new_differ"],
         "output_changed": output_changed,
         "runtime_behavior_changed": active_summary["mutation_applied"],
         "active_routing": active_summary["mutation_applied"],
@@ -256,6 +266,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Old value: `{report['old_value']}`",
         f"- New value: `{report['new_value']}`",
         f"- Mutation index: `{report['mutation_index']}`",
+        f"- Valid slot count: `{report['valid_slot_count']}`",
+        f"- Pad slot id: `{report['pad_slot_id']}`",
+        f"- Valid mutation index: `{report['valid_mutation_index']}`",
+        f"- Previous valid index: `{report['previous_valid_index']}`",
+        f"- Old/new differ: `{report['old_new_differ']}`",
         f"- Records written: `{report['active_records_written']}`",
         "",
         "## Boundary",

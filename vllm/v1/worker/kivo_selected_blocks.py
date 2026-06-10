@@ -11,6 +11,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from vllm.v1.attention.backends.utils import PAD_SLOT_ID as _PAD_SLOT_ID
+except Exception:  # pragma: no cover - defensive fallback
+    _PAD_SLOT_ID = -1
+
 
 def _env_flag(name: str) -> bool:
     return os.getenv(name) == "1"
@@ -107,6 +112,13 @@ def _is_tensor_like(value: Any) -> bool:
     )
 
 
+def _pad_slot_id() -> int:
+    try:
+        return int(_PAD_SLOT_ID)
+    except Exception:  # pragma: no cover - defensive fallback
+        return -1
+
+
 def _append_jsonl(path: str | Path, record: dict[str, Any]) -> None:
     output_path = Path(path)
     parent = output_path.parent
@@ -130,13 +142,45 @@ def _block_table_view(instance: Any) -> Any:
     return getattr(block_table, "gpu", block_table)
 
 
-def _maybe_mutate_slot_mapping(slot_mapping: Any) -> tuple[bool, dict[str, Any]]:
+def _slot_mapping_item(value: Any) -> Any:
+    return value.item() if hasattr(value, "item") else value
+
+
+def _valid_slot_entries(slot_mapping: Any, pad_slot_id: int) -> list[tuple[int, Any]]:
+    flat = slot_mapping.reshape(-1) if hasattr(slot_mapping, "reshape") else slot_mapping
+    numel = _tensor_numel(flat)
+    if numel is None:
+        return []
+    entries: list[tuple[int, Any]] = []
+    for index in range(numel):
+        try:
+            value = _slot_mapping_item(flat[index])
+        except Exception:
+            continue
+        try:
+            if int(value) != pad_slot_id:
+                entries.append((index, value))
+        except Exception:
+            continue
+    return entries
+
+
+def _maybe_mutate_slot_mapping(
+    slot_mapping: Any,
+    *,
+    policy: str,
+) -> tuple[bool, dict[str, Any]]:
     record: dict[str, Any] = {
         "mutation_policy": None,
         "mutation_blocker_reason": None,
         "old_value": None,
         "new_value": None,
         "mutation_index": None,
+        "valid_slot_count": None,
+        "pad_slot_id": _pad_slot_id(),
+        "valid_mutation_index": None,
+        "previous_valid_index": None,
+        "old_new_differ": False,
     }
     if slot_mapping is None:
         record["mutation_blocker_reason"] = (
@@ -164,27 +208,71 @@ def _maybe_mutate_slot_mapping(slot_mapping: Any) -> tuple[bool, dict[str, Any]]
             "tensor-like slot mapping needs at least two elements"
         )
         return False, record
+    if policy == "mask_last_slot":
+        try:
+            old_tensor_value = slot_mapping[-1]
+            new_tensor_value = slot_mapping[-2]
+            old_value = _slot_mapping_item(old_tensor_value)
+            new_value = _slot_mapping_item(new_tensor_value)
+            slot_mapping[-1] = new_tensor_value
+            record.update(
+                {
+                    "mutation_policy": policy,
+                    "mutation_blocker_reason": None,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "mutation_index": numel - 1,
+                    "valid_mutation_index": numel - 1,
+                    "previous_valid_index": numel - 2,
+                    "old_new_differ": old_value != new_value,
+                }
+            )
+            return True, record
+        except Exception as exc:
+            record["mutation_blocker_reason"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, record
+
+    if policy != "mask_last_valid_slot":
+        record["mutation_blocker_reason"] = (
+            f"unsupported mutation policy: {policy or '<unset>'}"
+        )
+        return False, record
+
+    valid_entries = _valid_slot_entries(slot_mapping, record["pad_slot_id"])
+    record["valid_slot_count"] = len(valid_entries)
+    if len(valid_entries) < 2:
+        record["mutation_blocker_reason"] = "fewer than two valid slot entries"
+        return False, record
+
+    last_valid_index, last_valid_value = valid_entries[-1]
+    previous_choice: tuple[int, Any] | None = None
+    for prev_index, prev_value in reversed(valid_entries[:-1]):
+        if prev_value != last_valid_value:
+            previous_choice = (prev_index, prev_value)
+            break
+    if previous_choice is None:
+        record["mutation_blocker_reason"] = (
+            "no differing valid slot pair found"
+        )
+        return False, record
+
+    previous_valid_index, previous_valid_value = previous_choice
     try:
-        old_tensor_value = slot_mapping[-1]
-        new_tensor_value = slot_mapping[-2]
-        old_value = (
-            old_tensor_value.item()
-            if hasattr(old_tensor_value, "item")
-            else old_tensor_value
-        )
-        new_value = (
-            new_tensor_value.item()
-            if hasattr(new_tensor_value, "item")
-            else new_tensor_value
-        )
-        slot_mapping[-1] = new_tensor_value
+        old_value = last_valid_value
+        new_value = previous_valid_value
+        slot_mapping[last_valid_index] = slot_mapping[previous_valid_index]
         record.update(
             {
-                "mutation_policy": "mask_last_slot",
+                "mutation_policy": policy,
                 "mutation_blocker_reason": None,
                 "old_value": old_value,
                 "new_value": new_value,
-                "mutation_index": numel - 1,
+                "mutation_index": last_valid_index,
+                "valid_mutation_index": last_valid_index,
+                "previous_valid_index": previous_valid_index,
+                "old_new_differ": old_value != new_value,
             }
         )
         return True, record
@@ -217,7 +305,10 @@ def maybe_observe_compute_slot_mapping(
         policy = os.getenv("KIVO_SOURCE_POLICY", "")
         slot_mapping = _slot_mapping_view(instance)
         block_table = _block_table_view(instance)
-        mutation_attempted = active_enabled and policy == "mask_last_slot"
+        mutation_attempted = active_enabled and policy in {
+            "mask_last_slot",
+            "mask_last_valid_slot",
+        }
         mutation_applied = False
         mutation_record = {
             "mutation_policy": None,
@@ -225,6 +316,11 @@ def maybe_observe_compute_slot_mapping(
             "old_value": None,
             "new_value": None,
             "mutation_index": None,
+            "valid_slot_count": None,
+            "pad_slot_id": _pad_slot_id(),
+            "valid_mutation_index": None,
+            "previous_valid_index": None,
+            "old_new_differ": False,
         }
         if active_enabled and not mutation_attempted:
             mutation_record["mutation_blocker_reason"] = (
@@ -232,7 +328,8 @@ def maybe_observe_compute_slot_mapping(
             )
         if mutation_attempted:
             mutation_applied, mutation_record = _maybe_mutate_slot_mapping(
-                slot_mapping
+                slot_mapping,
+                policy=policy,
             )
         result_summary = _safe_summary(result)
         slot_info = _tensor_info(slot_mapping)
@@ -287,6 +384,11 @@ def maybe_observe_compute_slot_mapping(
             "old_value": mutation_record["old_value"],
             "new_value": mutation_record["new_value"],
             "mutation_index": mutation_record["mutation_index"],
+            "valid_slot_count": mutation_record["valid_slot_count"],
+            "pad_slot_id": mutation_record["pad_slot_id"],
+            "valid_mutation_index": mutation_record["valid_mutation_index"],
+            "previous_valid_index": mutation_record["previous_valid_index"],
+            "old_new_differ": mutation_record["old_new_differ"],
             "runtime_behavior_changed": mutation_applied,
             "active_routing": mutation_applied,
             "measured_runtime_reduction": False,
@@ -307,11 +409,26 @@ def maybe_observe_compute_slot_mapping(
                 "class_name": type(instance).__qualname__,
                 "function_name": function_name,
                 "args_summary": [_safe_summary(item) for item in args[:8]],
+                "mutation_policy": None,
+                "mutation_blocker_reason": None,
+                "old_value": None,
+                "new_value": None,
+                "mutation_index": None,
+                "valid_slot_count": None,
+                "pad_slot_id": _pad_slot_id(),
+                "valid_mutation_index": None,
+                "previous_valid_index": None,
+                "old_new_differ": False,
                 "mutation_attempted": False,
                 "mutation_applied": False,
                 "runtime_behavior_changed": False,
                 "active_routing": False,
                 "measured_runtime_reduction": False,
+                "valid_slot_count": None,
+                "pad_slot_id": _pad_slot_id(),
+                "valid_mutation_index": None,
+                "previous_valid_index": None,
+                "old_new_differ": False,
                 "caveats": [
                     "source-level experiment hook",
                     "fail closed on any hook error",

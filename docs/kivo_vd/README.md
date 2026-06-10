@@ -428,6 +428,10 @@ Phase S1 shifts the experiment into repo-local source so the live
 in the source-built runtime. It mutates only the last slot-mapping entry under
 explicit env flags and remains a fail-closed, no-default-change experiment.
 
+Phase S1.1 refines that active policy to target the last valid non-padding
+slot instead of the padded tail. It remains source-only, fail-closed, and
+non-production.
+
 Phase S2 is the source-built smoke runbook for S1. It checks whether the
 runtime is importing the repo-local source, verifies the compiled extensions,
 and then exercises the GPT-2 S1 probe inside generation. No performance,

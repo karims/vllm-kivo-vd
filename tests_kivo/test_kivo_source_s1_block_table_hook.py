@@ -106,11 +106,16 @@ def _source_record(*, active: bool, applied: bool, blocker=None) -> dict:
         "active_enabled": active,
         "mutation_attempted": active,
         "mutation_applied": applied,
-        "mutation_policy": "mask_last_slot" if applied else None,
+        "mutation_policy": "mask_last_valid_slot" if applied else None,
         "mutation_blocker_reason": blocker,
         "old_value": 3 if applied else None,
         "new_value": 2 if applied else None,
         "mutation_index": 2 if applied else None,
+        "valid_slot_count": 3 if applied else None,
+        "pad_slot_id": -1,
+        "valid_mutation_index": 2 if applied else None,
+        "previous_valid_index": 1 if applied else None,
+        "old_new_differ": applied,
         "runtime_behavior_changed": applied,
         "active_routing": applied,
         "measured_runtime_reduction": False,
@@ -165,7 +170,9 @@ def test_observation_record_contains_required_fields(tmp_path, monkeypatch):
     assert record["active_routing"] is False
 
 
-def test_mask_last_slot_mutates_final_integer_entry(tmp_path, monkeypatch):
+def test_mask_last_slot_backwards_compatibility_mutates_final_integer_entry(
+    tmp_path, monkeypatch
+):
     helper = _load_helper()
     slot_mapping = torch.tensor([10, 11, 12], dtype=torch.int64)
     instance = _fake_instance(slot_mapping)
@@ -196,30 +203,71 @@ def test_mask_last_slot_mutates_final_integer_entry(tmp_path, monkeypatch):
     assert record["active_routing"] is True
 
 
-def test_policy_refuses_too_short_tensor(tmp_path, monkeypatch):
+def test_mask_last_valid_slot_mutates_last_valid_non_padding_entry(
+    tmp_path, monkeypatch
+):
     helper = _load_helper()
-    slot_mapping = torch.tensor([10], dtype=torch.int64)
+    slot_mapping = torch.tensor([-1, 5, 6, 7, -1], dtype=torch.int64)
     instance = _fake_instance(slot_mapping)
     path = tmp_path / "obs.jsonl"
     monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
     monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
     monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
-    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_slot")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
 
     helper.maybe_observe_compute_slot_mapping(
         instance,
         module_file="/tmp/block_table.py",
         function_name="compute_slot_mapping",
-        args=(1, torch.tensor([0]), torch.tensor([0])),
+        args=(1, torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2])),
         kwargs={},
         result=None,
     )
 
     record = _read_jsonl(path)[0]
 
-    assert slot_mapping.tolist() == [10]
+    assert slot_mapping.tolist() == [-1, 5, 6, 6, -1]
+    assert record["mutation_attempted"] is True
+    assert record["mutation_applied"] is True
+    assert record["mutation_policy"] == "mask_last_valid_slot"
+    assert record["valid_slot_count"] == 3
+    assert record["pad_slot_id"] == -1
+    assert record["valid_mutation_index"] == 3
+    assert record["previous_valid_index"] == 2
+    assert record["old_value"] == 7
+    assert record["new_value"] == 6
+    assert record["old_new_differ"] is True
+    assert record["mutation_index"] == 3
+    assert record["runtime_behavior_changed"] is True
+    assert record["active_routing"] is True
+
+
+def test_policy_refuses_fewer_than_two_valid_entries(tmp_path, monkeypatch):
+    helper = _load_helper()
+    slot_mapping = torch.tensor([-1, 10, -1], dtype=torch.int64)
+    instance = _fake_instance(slot_mapping)
+    path = tmp_path / "obs.jsonl"
+    monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
+    monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
+
+    helper.maybe_observe_compute_slot_mapping(
+        instance,
+        module_file="/tmp/block_table.py",
+        function_name="compute_slot_mapping",
+        args=(1, torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2])),
+        kwargs={},
+        result=None,
+    )
+
+    record = _read_jsonl(path)[0]
+
+    assert slot_mapping.tolist() == [-1, 10, -1]
     assert record["mutation_applied"] is False
-    assert "at least two elements" in record["mutation_blocker_reason"]
+    assert "fewer than two valid slot entries" in record[
+        "mutation_blocker_reason"
+    ]
 
 
 def test_policy_refuses_non_integer_tensor(tmp_path, monkeypatch):
@@ -230,7 +278,7 @@ def test_policy_refuses_non_integer_tensor(tmp_path, monkeypatch):
     monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
     monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
     monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
-    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_slot")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
 
     helper.maybe_observe_compute_slot_mapping(
         instance,
@@ -246,6 +294,62 @@ def test_policy_refuses_non_integer_tensor(tmp_path, monkeypatch):
     assert slot_mapping.tolist() == [1.0, 2.0]
     assert record["mutation_applied"] is False
     assert "integer dtype" in record["mutation_blocker_reason"]
+
+
+def test_policy_refuses_all_padding_tensor(tmp_path, monkeypatch):
+    helper = _load_helper()
+    slot_mapping = torch.tensor([-1, -1, -1], dtype=torch.int64)
+    instance = _fake_instance(slot_mapping)
+    path = tmp_path / "obs.jsonl"
+    monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
+    monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
+
+    helper.maybe_observe_compute_slot_mapping(
+        instance,
+        module_file="/tmp/block_table.py",
+        function_name="compute_slot_mapping",
+        args=(1, torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2])),
+        kwargs={},
+        result=None,
+    )
+
+    record = _read_jsonl(path)[0]
+
+    assert slot_mapping.tolist() == [-1, -1, -1]
+    assert record["mutation_applied"] is False
+    assert "fewer than two valid slot entries" in record[
+        "mutation_blocker_reason"
+    ]
+
+
+def test_policy_refuses_no_differing_valid_pair(tmp_path, monkeypatch):
+    helper = _load_helper()
+    slot_mapping = torch.tensor([-1, 5, 5, -1], dtype=torch.int64)
+    instance = _fake_instance(slot_mapping)
+    path = tmp_path / "obs.jsonl"
+    monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
+    monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
+
+    helper.maybe_observe_compute_slot_mapping(
+        instance,
+        module_file="/tmp/block_table.py",
+        function_name="compute_slot_mapping",
+        args=(1, torch.tensor([0, 1, 2]), torch.tensor([0, 1, 2])),
+        kwargs={},
+        result=None,
+    )
+
+    record = _read_jsonl(path)[0]
+
+    assert slot_mapping.tolist() == [-1, 5, 5, -1]
+    assert record["mutation_applied"] is False
+    assert "no differing valid slot pair found" in record[
+        "mutation_blocker_reason"
+    ]
 
 
 def test_policy_refuses_missing_slot_mapping(tmp_path, monkeypatch):
@@ -313,7 +417,7 @@ def test_compute_slot_mapping_integration_records_and_mutates(
     monkeypatch.setenv("KIVO_SOURCE_ENABLE", "1")
     monkeypatch.setenv("KIVO_SOURCE_OBS_PATH", str(path))
     monkeypatch.setenv("KIVO_SOURCE_ACTIVE", "1")
-    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_slot")
+    monkeypatch.setenv("KIVO_SOURCE_POLICY", "mask_last_valid_slot")
     monkeypatch.setenv("KIVO_SOURCE_FAIL_CLOSED", "1")
 
     block_table_mod.BlockTable.compute_slot_mapping(

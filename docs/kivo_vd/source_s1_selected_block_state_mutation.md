@@ -27,6 +27,20 @@ process that owns the real source build.
 - `self.block_table`.
 - Repository-local behavior when `KIVO_SOURCE_ENABLE` is unset.
 
+## Phase S1.1: Valid Non-Padding Slot Mutation
+
+Phase S1 proved that the source-level hook can observe and mutate slot-mapping
+state, but the first active policy hit the padded tail of the tensor. Phase
+S1.1 keeps the same source hook and changes only the active policy so it
+targets the last valid non-padding slot instead.
+
+- New default policy: `mask_last_valid_slot`
+- Backward-compatible policy: `mask_last_slot`
+- Mutation now requires at least two valid slot entries and a differing
+  previous valid value
+- The experiment still makes no memory, latency, or production-selected
+  attention claim
+
 ## Run Commands
 
 S1 requires a source-built vLLM environment. Do not expect it to work from the
