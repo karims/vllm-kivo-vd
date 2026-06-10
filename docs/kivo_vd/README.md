@@ -432,6 +432,12 @@ Phase S1.1 refines that active policy to target the last valid non-padding
 slot instead of the padded tail. It remains source-only, fail-closed, and
 non-production.
 
+Phase S1.2 adds a small multi-prompt quality sanity runner for the valid-slot
+mutation. It checks that baseline and active generations complete across a few
+prompts and aggregates output-change and blocker statistics, but it still does
+not claim selected attention, quality preservation, memory reduction, or
+latency improvement.
+
 Phase S2 is the source-built smoke runbook for S1. It checks whether the
 runtime is importing the repo-local source, verifies the compiled extensions,
 and then exercises the GPT-2 S1 probe inside generation. No performance,
