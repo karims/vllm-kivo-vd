@@ -180,6 +180,183 @@ def _find_differing_entry(
     return None
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _visible_block_ids(
+    slot_mapping: Any,
+    *,
+    block_size: int,
+    pad_slot_id: int,
+) -> tuple[list[int], list[int]]:
+    """Return valid slots and visible blocks in first-seen order."""
+
+    if block_size <= 0:
+        return [], []
+    valid_slots: list[int] = []
+    visible_blocks: list[int] = []
+    seen_blocks: set[int] = set()
+    for _, value in _valid_slot_entries(slot_mapping, pad_slot_id):
+        try:
+            slot_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if slot_id < 0:
+            continue
+        valid_slots.append(slot_id)
+        block_id = slot_id // block_size
+        if block_id not in seen_blocks:
+            seen_blocks.add(block_id)
+            visible_blocks.append(block_id)
+    return valid_slots, visible_blocks
+
+
+def _placeholder_block_score(block_id: int) -> int:
+    """Return a deterministic integer score for S2 shadow selection."""
+
+    value = int(block_id) & 0xFFFFFFFF
+    value ^= value >> 16
+    value = (value * 0x7FEB352D) & 0xFFFFFFFF
+    value ^= value >> 15
+    value = (value * 0x846CA68B) & 0xFFFFFFFF
+    return value ^ (value >> 16)
+
+
+def _select_shadow_blocks(
+    visible_block_ids: list[int],
+    *,
+    budget_ratio: float,
+    keep_recent_blocks: int,
+) -> list[int]:
+    """Select a bounded shadow set without changing runtime state."""
+
+    if not visible_block_ids:
+        return []
+    ratio = min(max(float(budget_ratio), 0.0), 1.0)
+    recent_count = min(
+        max(int(keep_recent_blocks), 1),
+        len(visible_block_ids),
+    )
+    target_count = min(
+        len(visible_block_ids),
+        max(recent_count, int(len(visible_block_ids) * ratio + 0.999999)),
+    )
+    recent = visible_block_ids[-recent_count:]
+    recent_set = set(recent)
+    older = [
+        block_id
+        for block_id in visible_block_ids
+        if block_id not in recent_set
+    ]
+    older.sort(
+        key=lambda block_id: (_placeholder_block_score(block_id), block_id),
+        reverse=True,
+    )
+    selected = older[: target_count - recent_count] + recent
+    selected_set = set(selected)
+    return [
+        block_id
+        for block_id in visible_block_ids
+        if block_id in selected_set
+    ]
+
+
+def _build_block_visibility_shadow_record(
+    instance: Any,
+    *,
+    function_name: str,
+) -> dict[str, Any]:
+    slot_mapping = _slot_mapping_view(instance)
+    block_table = _block_table_view(instance)
+    slot_info = _tensor_info(slot_mapping)
+    block_info = _tensor_info(block_table)
+    block_size = int(getattr(instance, "block_size", 0) or 0)
+    pad_slot_id = _pad_slot_id()
+    budget_ratio = min(
+        max(_env_float("KIVO_SOURCE_BUDGET_RATIO", 0.5), 0.0),
+        1.0,
+    )
+    keep_recent_blocks = max(
+        _env_int("KIVO_SOURCE_KEEP_RECENT_BLOCKS", 1),
+        1,
+    )
+    valid_slots, visible_blocks = _visible_block_ids(
+        slot_mapping,
+        block_size=block_size,
+        pad_slot_id=pad_slot_id,
+    )
+    selected_blocks = _select_shadow_blocks(
+        visible_blocks,
+        budget_ratio=budget_ratio,
+        keep_recent_blocks=keep_recent_blocks,
+    )
+    dropped_block_count = len(visible_blocks) - len(selected_blocks)
+    reduction_ratio = (
+        dropped_block_count / len(visible_blocks)
+        if visible_blocks
+        else 0.0
+    )
+    return {
+        "schema_version": "kivo_source_s2_0_block_visibility_shadow_v1",
+        "timestamp": time.time(),
+        "pid": os.getpid(),
+        "hook_name": "BlockTable.compute_slot_mapping",
+        "function_name": function_name,
+        "block_size": block_size,
+        "slot_mapping_present": slot_mapping is not None,
+        "slot_mapping_shape": slot_info["shape"],
+        "slot_mapping_dtype": slot_info["dtype"],
+        "slot_mapping_device": slot_info["device"],
+        "block_table_present": block_table is not None,
+        "block_table_shape": block_info["shape"],
+        "block_table_dtype": block_info["dtype"],
+        "block_table_device": block_info["device"],
+        "valid_slot_count": len(valid_slots),
+        "valid_slot_min": min(valid_slots) if valid_slots else None,
+        "valid_slot_max": max(valid_slots) if valid_slots else None,
+        "visible_block_count": len(visible_blocks),
+        "visible_block_ids_sample": visible_blocks[:32],
+        "total_block_table_entries": _tensor_numel(block_table),
+        "policy_name": "sketch_shadow_blocks",
+        "budget_ratio": budget_ratio,
+        "keep_recent_blocks": keep_recent_blocks,
+        "selected_block_count": len(selected_blocks),
+        "selected_block_ids_sample": selected_blocks[:32],
+        "dropped_block_count": dropped_block_count,
+        "selection_ratio_actual": (
+            len(selected_blocks) / len(visible_blocks)
+            if visible_blocks
+            else 0.0
+        ),
+        "theoretical_visible_block_reduction": dropped_block_count,
+        "theoretical_visible_block_reduction_ratio": reduction_ratio,
+        "mutation_attempted": False,
+        "mutation_applied": False,
+        "runtime_behavior_changed": False,
+        "active_routing": False,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "caveats": [
+            "shadow selection only; selected blocks are not applied",
+            "placeholder block scores do not inspect KV tensors",
+            "theoretical block reduction is not measured memory reduction",
+            "no scheduler, attention, block table, or KV cache mutation",
+        ],
+    }
+
+
 def _maybe_mutate_slot_mapping(
     slot_mapping: Any,
     *,
@@ -445,6 +622,15 @@ def maybe_observe_compute_slot_mapping(
     try:
         active_enabled = _env_flag("KIVO_SOURCE_ACTIVE")
         policy = os.getenv("KIVO_SOURCE_POLICY", "")
+        if policy == "sketch_shadow_blocks":
+            _append_jsonl(
+                output_path,
+                _build_block_visibility_shadow_record(
+                    instance,
+                    function_name=function_name,
+                ),
+            )
+            return
         slot_mapping = _slot_mapping_view(instance)
         block_table = _block_table_view(instance)
         mutation_attempted = active_enabled and policy in {
