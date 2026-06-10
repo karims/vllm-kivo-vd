@@ -327,6 +327,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.7: Installed vLLM Runtime Patch](phase12_7_installed_vllm_runtime_patch.md)
 - [Phase 12.8/12.9: Active Mutation Ladder](phase12_8_9_active_ladder.md)
 - [Phase 12.10: BlockTable Slot-Mapping Mutation](phase12_10_block_table_slot_mapping_mutation.md)
+- [Phase S1: Source-Level Selected-Block State Mutation](source_s1_selected_block_state_mutation.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
 separates score-ranked block IDs from sequence-ordered gather IDs and requires
@@ -420,6 +421,11 @@ safe direct Python slot structure for selected-slot mutation. The active policy
 removes exactly one trailing entry from a copied Python list or tuple result,
 blocks tensor-like results explicitly, and preserves the same installed-wheel
 backup/restore boundary. This is still an invariant-discovery experiment only.
+
+Phase S1 shifts the experiment into repo-local source so the live
+`BlockTable.compute_slot_mapping` state can be observed and, if safe, mutated
+in the source-built runtime. It mutates only the last slot-mapping entry under
+explicit env flags and remains a fail-closed, no-default-change experiment.
 
 ## Phase 3 Runtime Dry-Run And Quality Prep
 

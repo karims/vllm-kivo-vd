@@ -11,6 +11,9 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.utils import CpuGpuBuffer
 from vllm.v1.worker.cp_utils import get_total_cp_world_size
+from vllm.v1.worker.kivo_selected_blocks import (
+    maybe_observe_compute_slot_mapping,
+)
 
 logger = init_logger(__name__)
 
@@ -161,6 +164,14 @@ class BlockTable:
             CP_KV_CACHE_INTERLEAVE_SIZE=self.cp_kv_cache_interleave_size,
             PAD_ID=PAD_SLOT_ID,
             BLOCK_SIZE=1024,
+        )
+        maybe_observe_compute_slot_mapping(
+            self,
+            module_file=__file__,
+            function_name="compute_slot_mapping",
+            args=(num_reqs, query_start_loc, positions),
+            kwargs={},
+            result=None,
         )
 
     def commit_block_table(self, num_reqs: int) -> None:
