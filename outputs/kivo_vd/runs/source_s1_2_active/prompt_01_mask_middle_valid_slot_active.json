@@ -1,0 +1,19 @@
+{
+  "generation": {
+    "status": "succeeded",
+    "output_text": "drift-middle",
+    "error": null
+  },
+  "summary": {
+    "records_written": 1,
+    "mutation_attempted_count": 1,
+    "mutation_applied_count": 1,
+    "active_routing_count": 1,
+    "runtime_behavior_changed_count": 1,
+    "old_new_differ_count": 1,
+    "max_valid_slot_count": 4,
+    "min_valid_slot_count": 4,
+    "blocker_reasons": [],
+    "measured_runtime_reduction": false
+  }
+}

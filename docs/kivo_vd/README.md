@@ -328,6 +328,7 @@ This phase does not authorize vLLM integration.
 - [Phase 12.8/12.9: Active Mutation Ladder](phase12_8_9_active_ladder.md)
 - [Phase 12.10: BlockTable Slot-Mapping Mutation](phase12_10_block_table_slot_mapping_mutation.md)
 - [Phase S1: Source-Level Selected-Block State Mutation](source_s1_selected_block_state_mutation.md)
+- [Phase S1.3: Source-Level Policy Drift](source_s1_3_policy_drift.md)
 - [Phase S2: Source-Built vLLM Smoke Run](source_s2_runpod_source_build_smoke.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
@@ -437,6 +438,11 @@ mutation. It checks that baseline and active generations complete across a few
 prompts and aggregates output-change and blocker statistics, but it still does
 not claim selected attention, quality preservation, memory reduction, or
 latency improvement.
+
+Phase S1.3 compares safer valid-slot mutation policies, including oldest and
+middle slot targets, and records the resulting output drift. It is still only
+a source-level control experiment and does not claim selected attention or
+runtime improvement.
 
 Phase S2 is the source-built smoke runbook for S1. It checks whether the
 runtime is importing the repo-local source, verifies the compiled extensions,

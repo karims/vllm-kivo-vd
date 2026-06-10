@@ -165,6 +165,21 @@ def _valid_slot_entries(slot_mapping: Any, pad_slot_id: int) -> list[tuple[int, 
     return entries
 
 
+def _find_differing_entry(
+    valid_entries: list[tuple[int, Any]],
+    *,
+    start_index: int,
+    reverse: bool = False,
+) -> tuple[int, Any] | None:
+    target_value = valid_entries[start_index][1]
+    indices = range(start_index - 1, -1, -1) if reverse else range(start_index + 1, len(valid_entries))
+    for index in indices:
+        candidate_index, candidate_value = valid_entries[index]
+        if candidate_value != target_value:
+            return candidate_index, candidate_value
+    return None
+
+
 def _maybe_mutate_slot_mapping(
     slot_mapping: Any,
     *,
@@ -173,6 +188,7 @@ def _maybe_mutate_slot_mapping(
     record: dict[str, Any] = {
         "mutation_policy": None,
         "mutation_blocker_reason": None,
+        "mutation_target_position": None,
         "old_value": None,
         "new_value": None,
         "mutation_index": None,
@@ -180,6 +196,7 @@ def _maybe_mutate_slot_mapping(
         "pad_slot_id": _pad_slot_id(),
         "valid_mutation_index": None,
         "previous_valid_index": None,
+        "next_valid_index": None,
         "old_new_differ": False,
     }
     if slot_mapping is None:
@@ -208,22 +225,31 @@ def _maybe_mutate_slot_mapping(
             "tensor-like slot mapping needs at least two elements"
         )
         return False, record
+    valid_entries = _valid_slot_entries(slot_mapping, record["pad_slot_id"])
+    record["valid_slot_count"] = len(valid_entries)
     if policy == "mask_last_slot":
         try:
             old_tensor_value = slot_mapping[-1]
             new_tensor_value = slot_mapping[-2]
             old_value = _slot_mapping_item(old_tensor_value)
             new_value = _slot_mapping_item(new_tensor_value)
+            if old_value == new_value:
+                record["mutation_blocker_reason"] = (
+                    "no differing valid slot pair found"
+                )
+                return False, record
             slot_mapping[-1] = new_tensor_value
             record.update(
                 {
                     "mutation_policy": policy,
+                    "mutation_target_position": "last",
                     "mutation_blocker_reason": None,
                     "old_value": old_value,
                     "new_value": new_value,
                     "mutation_index": numel - 1,
                     "valid_mutation_index": numel - 1,
                     "previous_valid_index": numel - 2,
+                    "next_valid_index": None,
                     "old_new_differ": old_value != new_value,
                 }
             )
@@ -234,53 +260,169 @@ def _maybe_mutate_slot_mapping(
             )
             return False, record
 
-    if policy != "mask_last_valid_slot":
-        record["mutation_blocker_reason"] = (
-            f"unsupported mutation policy: {policy or '<unset>'}"
-        )
-        return False, record
-
-    valid_entries = _valid_slot_entries(slot_mapping, record["pad_slot_id"])
-    record["valid_slot_count"] = len(valid_entries)
-    if len(valid_entries) < 2:
+    if not valid_entries:
         record["mutation_blocker_reason"] = "fewer than two valid slot entries"
         return False, record
-
-    last_valid_index, last_valid_value = valid_entries[-1]
-    previous_choice: tuple[int, Any] | None = None
-    for prev_index, prev_value in reversed(valid_entries[:-1]):
-        if prev_value != last_valid_value:
-            previous_choice = (prev_index, prev_value)
-            break
-    if previous_choice is None:
-        record["mutation_blocker_reason"] = (
-            "no differing valid slot pair found"
+    if policy == "mask_last_valid_slot":
+        if len(valid_entries) < 2:
+            record["mutation_blocker_reason"] = (
+                "fewer than two valid slot entries"
+            )
+            return False, record
+        target_pos = len(valid_entries) - 1
+        candidate = _find_differing_entry(
+            valid_entries, start_index=target_pos, reverse=True
         )
-        return False, record
-
-    previous_valid_index, previous_valid_value = previous_choice
-    try:
-        old_value = last_valid_value
-        new_value = previous_valid_value
-        slot_mapping[last_valid_index] = slot_mapping[previous_valid_index]
+        if candidate is None:
+            record["mutation_blocker_reason"] = (
+                "no differing valid slot pair found"
+            )
+            return False, record
+        valid_mutation_index, new_value = candidate
+        previous_valid_index = valid_entries[target_pos - 1][0]
+        old_value = _slot_mapping_item(slot_mapping[valid_entries[target_pos][0]])
+        try:
+            slot_mapping[valid_entries[target_pos][0]] = slot_mapping[
+                valid_mutation_index
+            ]
+        except Exception as exc:
+            record["mutation_blocker_reason"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, record
         record.update(
             {
                 "mutation_policy": policy,
+                "mutation_target_position": "last",
                 "mutation_blocker_reason": None,
                 "old_value": old_value,
                 "new_value": new_value,
-                "mutation_index": last_valid_index,
-                "valid_mutation_index": last_valid_index,
+                "mutation_index": valid_entries[target_pos][0],
+                "valid_mutation_index": valid_entries[target_pos][0],
                 "previous_valid_index": previous_valid_index,
+                "next_valid_index": None,
                 "old_new_differ": old_value != new_value,
             }
         )
         return True, record
-    except Exception as exc:
-        record["mutation_blocker_reason"] = (
-            f"{type(exc).__name__}: {exc}"
+
+    if policy == "mask_oldest_valid_slot":
+        if len(valid_entries) < 2:
+            record["mutation_blocker_reason"] = (
+                "fewer than two valid slot entries"
+            )
+            return False, record
+        target_pos = 0
+        next_valid_index, new_value = valid_entries[1]
+        if valid_entries[1][1] == valid_entries[target_pos][1]:
+            record["mutation_blocker_reason"] = (
+                "no differing valid slot pair found"
+            )
+            return False, record
+        old_value = _slot_mapping_item(slot_mapping[valid_entries[target_pos][0]])
+        try:
+            slot_mapping[valid_entries[target_pos][0]] = slot_mapping[
+                next_valid_index
+            ]
+        except Exception as exc:
+            record["mutation_blocker_reason"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, record
+        record.update(
+            {
+                "mutation_policy": policy,
+                "mutation_target_position": "oldest",
+                "mutation_blocker_reason": None,
+                "old_value": old_value,
+                "new_value": new_value,
+                "mutation_index": valid_entries[target_pos][0],
+                "valid_mutation_index": valid_entries[target_pos][0],
+                "previous_valid_index": None,
+                "next_valid_index": next_valid_index,
+                "old_new_differ": old_value != new_value,
+            }
+        )
+        return True, record
+
+    if policy == "mask_middle_valid_slot":
+        if len(valid_entries) < 3:
+            record["mutation_blocker_reason"] = (
+                "fewer than three valid slot entries"
+            )
+            return False, record
+        target_pos = len(valid_entries) // 2
+        prev_entry = valid_entries[target_pos - 1]
+        next_entry = valid_entries[target_pos + 1]
+        target_index, target_value = valid_entries[target_pos]
+        candidate = None
+        if prev_entry[1] != target_value:
+            candidate = prev_entry
+        elif next_entry[1] != target_value:
+            candidate = next_entry
+        if candidate is None:
+            record["mutation_blocker_reason"] = (
+                "no differing valid slot pair found"
+            )
+            return False, record
+        chosen_index, new_value = candidate
+        try:
+            slot_mapping[target_index] = slot_mapping[chosen_index]
+        except Exception as exc:
+            record["mutation_blocker_reason"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, record
+        record.update(
+            {
+                "mutation_policy": policy,
+                "mutation_target_position": "middle",
+                "mutation_blocker_reason": None,
+                "old_value": target_value,
+                "new_value": new_value,
+                "mutation_index": target_index,
+                "valid_mutation_index": target_index,
+                "previous_valid_index": prev_entry[0],
+                "next_valid_index": next_entry[0],
+                "old_new_differ": target_value != new_value,
+            }
+        )
+        return True, record
+
+    if policy == "noop_valid_slot_shadow":
+        target_pos = len(valid_entries) - 1
+        candidate = _find_differing_entry(
+            valid_entries, start_index=target_pos, reverse=True
+        )
+        if candidate is None:
+            record["mutation_blocker_reason"] = (
+                "no differing valid slot pair found"
+            )
+            return False, record
+        candidate_index, new_value = candidate
+        old_value = _slot_mapping_item(slot_mapping[valid_entries[target_pos][0]])
+        record.update(
+            {
+                "mutation_policy": policy,
+                "mutation_target_position": "shadow",
+                "mutation_blocker_reason": "shadow policy; no mutation applied",
+                "old_value": old_value,
+                "new_value": new_value,
+                "mutation_index": valid_entries[target_pos][0],
+                "valid_mutation_index": valid_entries[target_pos][0],
+                "previous_valid_index": valid_entries[target_pos - 1][0]
+                if target_pos > 0
+                else None,
+                "next_valid_index": None,
+                "old_new_differ": old_value != new_value,
+            }
         )
         return False, record
+
+    record["mutation_blocker_reason"] = (
+        f"unsupported mutation policy: {policy or '<unset>'}"
+    )
+    return False, record
 
 
 def maybe_observe_compute_slot_mapping(
@@ -308,11 +450,15 @@ def maybe_observe_compute_slot_mapping(
         mutation_attempted = active_enabled and policy in {
             "mask_last_slot",
             "mask_last_valid_slot",
+            "mask_oldest_valid_slot",
+            "mask_middle_valid_slot",
+            "noop_valid_slot_shadow",
         }
         mutation_applied = False
         mutation_record = {
             "mutation_policy": None,
             "mutation_blocker_reason": None,
+            "mutation_target_position": None,
             "old_value": None,
             "new_value": None,
             "mutation_index": None,
@@ -320,6 +466,7 @@ def maybe_observe_compute_slot_mapping(
             "pad_slot_id": _pad_slot_id(),
             "valid_mutation_index": None,
             "previous_valid_index": None,
+            "next_valid_index": None,
             "old_new_differ": False,
         }
         if active_enabled and not mutation_attempted:
@@ -381,6 +528,9 @@ def maybe_observe_compute_slot_mapping(
             "mutation_blocker_reason": mutation_record[
                 "mutation_blocker_reason"
             ],
+            "mutation_target_position": mutation_record[
+                "mutation_target_position"
+            ],
             "old_value": mutation_record["old_value"],
             "new_value": mutation_record["new_value"],
             "mutation_index": mutation_record["mutation_index"],
@@ -388,6 +538,7 @@ def maybe_observe_compute_slot_mapping(
             "pad_slot_id": mutation_record["pad_slot_id"],
             "valid_mutation_index": mutation_record["valid_mutation_index"],
             "previous_valid_index": mutation_record["previous_valid_index"],
+            "next_valid_index": mutation_record["next_valid_index"],
             "old_new_differ": mutation_record["old_new_differ"],
             "runtime_behavior_changed": mutation_applied,
             "active_routing": mutation_applied,
@@ -411,6 +562,7 @@ def maybe_observe_compute_slot_mapping(
                 "args_summary": [_safe_summary(item) for item in args[:8]],
                 "mutation_policy": None,
                 "mutation_blocker_reason": None,
+                "mutation_target_position": None,
                 "old_value": None,
                 "new_value": None,
                 "mutation_index": None,
@@ -418,17 +570,13 @@ def maybe_observe_compute_slot_mapping(
                 "pad_slot_id": _pad_slot_id(),
                 "valid_mutation_index": None,
                 "previous_valid_index": None,
+                "next_valid_index": None,
                 "old_new_differ": False,
                 "mutation_attempted": False,
                 "mutation_applied": False,
                 "runtime_behavior_changed": False,
                 "active_routing": False,
                 "measured_runtime_reduction": False,
-                "valid_slot_count": None,
-                "pad_slot_id": _pad_slot_id(),
-                "valid_mutation_index": None,
-                "previous_valid_index": None,
-                "old_new_differ": False,
                 "caveats": [
                     "source-level experiment hook",
                     "fail closed on any hook error",
