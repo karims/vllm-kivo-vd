@@ -28,6 +28,9 @@ from vllm.v1.worker.utils import (
     bind_kv_cache,
     prepare_kernel_block_sizes,
 )
+from vllm.v1.worker.kivo_attention_metadata_observer import (
+    maybe_observe_attention_metadata,
+)
 
 
 @dataclass(frozen=True)
@@ -406,6 +409,7 @@ def build_attn_metadata(
     for i in range(num_kv_cache_groups):
         block_table = block_tables[i]
         slot_mapping = slot_mappings[i]
+        kv_cache_spec = kv_cache_config.kv_cache_groups[i].kv_cache_spec
 
         common_attn_metadata_extra_kwargs = (
             model_specific_attn_metadata.get_extra_common_attn_kwargs(i, num_reqs)
@@ -427,6 +431,12 @@ def build_attn_metadata(
             dcp_local_seq_lens=dcp_local_seq_lens,
             positions=positions,
             **common_attn_metadata_extra_kwargs,
+        )
+        maybe_observe_attention_metadata(
+            hook_point="build_attn_metadata",
+            kv_cache_group_id=i,
+            common_attn_metadata=common_attn_metadata,
+            kv_cache_spec=kv_cache_spec,
         )
 
         for attn_group in attn_groups[i]:
