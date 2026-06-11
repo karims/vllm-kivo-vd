@@ -15,11 +15,6 @@ from typing import Any
 
 import torch
 
-from vllm.v1.worker.kivo_runtime_counters import (
-    current_record_mode,
-    record_counter_event,
-)
-
 SCHEMA_VERSION = "kivo_source_s3_3a_attention_tensor_sketch_observer_v1"
 POLICY_NAME = "observe_attention_tensors_for_sketch"
 S3_3B_SCHEMA_VERSION = "kivo_source_s3_3b_shadow_kv_block_sketch_v1"
@@ -50,10 +45,6 @@ def _observation_path() -> Path | None:
         "KIVO_SOURCE_OBS_PATH"
     )
     return Path(value) if value else None
-
-
-def _record_mode() -> str:
-    return current_record_mode()
 
 
 def _safe_tensor_info(value: Any) -> dict[str, Any]:
@@ -301,8 +292,7 @@ def _sketch_block_tensor(
     *,
     sketch_dim: int,
     seed: int,
-    include_sample: bool = True,
-) -> tuple[float, list[float] | None]:
+) -> tuple[float, list[float]]:
     flat = block_tensor.reshape(-1).to(torch.float32)
     projection = _projection_tensor(
         int(flat.numel()),
@@ -312,11 +302,7 @@ def _sketch_block_tensor(
     )
     sketch = torch.matmul(flat, projection)
     norm = float(torch.linalg.vector_norm(flat).item())
-    sample = None
-    if include_sample:
-        sample = [
-            float(item) for item in sketch.detach().to("cpu").tolist()[:sketch_dim]
-        ]
+    sample = [float(item) for item in sketch.detach().to("cpu").tolist()[:sketch_dim]]
     return norm, sample
 
 
@@ -451,7 +437,6 @@ def _build_kv_block_sketch_record(
     kv_cache: Any,
     attn_metadata: Any,
     slot_mapping: Any,
-    include_samples: bool = True,
 ) -> dict[str, Any]:
     """Build a bounded real KV-cache block sketch record."""
     query_info = _safe_tensor_info(query)
@@ -523,25 +508,21 @@ def _build_kv_block_sketch_record(
                                     k_block,
                                     sketch_dim=sketch_dim,
                                     seed=sketch_seed,
-                                    include_sample=include_samples,
                                 )
                                 v_l2_norm, v_sketch = _sketch_block_tensor(
                                     v_block,
                                     sketch_dim=sketch_dim,
                                     seed=sketch_seed + 1,
-                                    include_sample=include_samples,
                                 )
                                 score = float(k_l2_norm + v_l2_norm)
-                                sketch_row = {
+                                block_sketch_sample.append({
                                     "block_id": int(block_id),
                                     "k_l2_norm": k_l2_norm,
                                     "v_l2_norm": v_l2_norm,
                                     "score": score,
-                                }
-                                if include_samples:
-                                    sketch_row["k_sketch_sample"] = k_sketch or []
-                                    sketch_row["v_sketch_sample"] = v_sketch or []
-                                block_sketch_sample.append(sketch_row)
+                                    "k_sketch_sample": k_sketch[:sketch_dim],
+                                    "v_sketch_sample": v_sketch[:sketch_dim],
+                                })
                         except Exception as exc:
                             blocker = (
                                 "kv block sketch computation failed: "
@@ -586,7 +567,7 @@ def _build_kv_block_sketch_record(
     if blocker is not None:
         caveats.append(f"blocker: {blocker}")
 
-    record = {
+    return {
         "schema_version": schema_version,
         "timestamp": time.time(),
         "sequence_id": _next_sequence_id(),
@@ -621,6 +602,7 @@ def _build_kv_block_sketch_record(
         "selected_block_ids_sample": selected_block_ids[:16],
         "excluded_block_count": len(excluded_block_ids),
         "excluded_block_ids_sample": excluded_block_ids[:16],
+        "block_sketch_sample": block_sketch_sample[:16],
         "sketch_computed": sketch_computed,
         "sketch_blocker_reason": blocker,
         "mutation_attempted": False,
@@ -632,9 +614,6 @@ def _build_kv_block_sketch_record(
         "performance_claim_allowed": False,
         "caveats": caveats,
     }
-    if include_samples:
-        record["block_sketch_sample"] = block_sketch_sample[:16]
-    return record
 
 
 def build_shadow_kv_block_sketch_record(
@@ -648,7 +627,6 @@ def build_shadow_kv_block_sketch_record(
     kv_cache: Any,
     attn_metadata: Any,
     slot_mapping: Any,
-    include_samples: bool = True,
 ) -> dict[str, Any]:
     return _build_kv_block_sketch_record(
         schema_version=S3_3B_SCHEMA_VERSION,
@@ -662,7 +640,6 @@ def build_shadow_kv_block_sketch_record(
         kv_cache=kv_cache,
         attn_metadata=attn_metadata,
         slot_mapping=slot_mapping,
-        include_samples=include_samples,
     )
 
 
@@ -677,7 +654,6 @@ def build_active_sketch_plan_record(
     kv_cache: Any,
     attn_metadata: Any,
     slot_mapping: Any,
-    include_samples: bool = True,
 ) -> dict[str, Any]:
     return _build_kv_block_sketch_record(
         schema_version=S3_3C_PLAN_SCHEMA_VERSION,
@@ -691,7 +667,6 @@ def build_active_sketch_plan_record(
         kv_cache=kv_cache,
         attn_metadata=attn_metadata,
         slot_mapping=slot_mapping,
-        include_samples=include_samples,
     )
 
 
@@ -715,18 +690,14 @@ def maybe_observe_attention_tensors(
         if os.getenv("KIVO_SOURCE_ENABLE") != "1":
             return None
         policy_name = os.getenv("KIVO_SOURCE_POLICY")
-        record_mode = _record_mode()
         if policy_name not in {
             POLICY_NAME,
             S3_3B_POLICY_NAME,
             S3_3C_POLICY_NAME,
         }:
             return None
-        if record_mode == "off":
-            return None
-        include_samples = record_mode == "events"
         output_path = _observation_path()
-        if record_mode == "events" and output_path is None:
+        if output_path is None:
             return None
         if policy_name == POLICY_NAME:
             record = build_attention_tensor_record(
@@ -751,7 +722,6 @@ def maybe_observe_attention_tensors(
                 kv_cache=kv_cache,
                 attn_metadata=attn_metadata,
                 slot_mapping=slot_mapping,
-                include_samples=include_samples,
             )
         else:
             record = build_active_sketch_plan_record(
@@ -764,13 +734,10 @@ def maybe_observe_attention_tensors(
                 kv_cache=kv_cache,
                 attn_metadata=attn_metadata,
                 slot_mapping=slot_mapping,
-                include_samples=include_samples,
             )
             if record.get("sketch_computed") is True:
                 _store_latest_sketch_plan(record)
-        record_counter_event(record)
-        if record_mode == "events":
-            _append_jsonl(output_path, record)
+        _append_jsonl(output_path, record)
         return record
     except Exception:
         return None

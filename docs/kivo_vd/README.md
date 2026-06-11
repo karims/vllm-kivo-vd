@@ -27,9 +27,6 @@ Recommended reading order:
 ## Current Research Status
 
 - Runtime dry-run is validated on Linux/NVIDIA for a GPT-2 run.
-- Phase S4.1 now separates verbose JSONL overhead from counters-only source
-  overhead so we can measure the logging cost without changing the active
-  source path.
 - Offline sketch baselines are established for CountSketch, Random Projection,
   and SRHT.
 - Phase 6 offline structured exploration is complete. The strongest current
@@ -61,7 +58,6 @@ Recommended reading order:
 - [Phase S3.3B: Shadow KV Block Sketch](source_s3_3b_shadow_kv_block_sketch.md)
 - [Phase S3.3C: Active Sketch KV Metadata Alias](source_s3_3c_active_sketch_kv_metadata_alias.md)
 - [Phase S4.0: Quick Measurement Harness](source_s4_0_quick_measurement.md)
-- [Phase S4.1: Low-Overhead Measurement](source_s4_1_low_overhead_measurement.md)
 - [Phase 2 Runtime Integration Plan](phase2_runtime_integration_plan.md)
 - [Phase 2.5: Real Sketch Feasibility](phase2_5_real_sketch_feasibility.md)
 
