@@ -38,6 +38,12 @@ _ACTIVE_SCHEMA_VERSION = (
 )
 _ACTIVE_POLICY_NAME = "active_sketch_selected_attention_metadata"
 _ACTIVE_FILTER_MODE = "alias_excluded_blocks_to_recent_selected"
+_RECENT_WINDOW_SCHEMA_VERSION = (
+    "kivo_source_s3_2b_active_recent_window_attention_metadata_v1"
+)
+_RECENT_WINDOW_POLICY_NAME = "active_recent_window_attention_metadata"
+_RECENT_WINDOW_FILTER_MODE = "compact_to_recent_window"
+_RECENT_WINDOW_SELECTION_POLICY_NAME = "recent_window_compaction"
 _DEFAULT_BUDGET_RATIO = 0.5
 _DEFAULT_KEEP_RECENT_BLOCKS = 1
 _DEFAULT_COVERAGE_WEIGHT = 0.6
@@ -321,6 +327,22 @@ def _slot_coverage_by_block(
         block_id = slot_id // block_size
         coverage[block_id] = coverage.get(block_id, 0) + 1
     return coverage, None
+
+
+def _recent_window_selected_token_length(
+    *,
+    seq_len: int,
+    visible_block_count: int,
+    keep_recent_blocks: int,
+    block_size: int,
+) -> int:
+    if seq_len <= 0 or visible_block_count <= 0 or keep_recent_blocks <= 0:
+        return 0
+    tail_tokens = seq_len - max(0, visible_block_count - 1) * block_size
+    tail_tokens = min(block_size, max(1, tail_tokens))
+    full_blocks_before_tail = max(0, min(keep_recent_blocks - 1, visible_block_count - 1))
+    selected_length = tail_tokens + full_blocks_before_tail * block_size
+    return min(seq_len, selected_length)
 
 
 def _planned_selected_count(
@@ -1135,6 +1157,244 @@ def _build_active_selected_attention_record(
     return record
 
 
+def _build_active_recent_window_record(
+    *,
+    hook_point: str,
+    kv_cache_group_id: int,
+    common_attn_metadata: Any,
+    kv_cache_spec: Any,
+    env_debug: dict[str, Any],
+) -> dict[str, Any]:
+    block_table_tensor = getattr(common_attn_metadata, "block_table_tensor", None)
+    slot_mapping = getattr(common_attn_metadata, "slot_mapping", None)
+    query_start_loc = getattr(common_attn_metadata, "query_start_loc", None)
+    seq_lens = getattr(common_attn_metadata, "seq_lens", None)
+    positions = getattr(common_attn_metadata, "positions", None)
+    max_query_len = getattr(common_attn_metadata, "max_query_len", None)
+    max_seq_len = getattr(common_attn_metadata, "max_seq_len", None)
+    block_size = int(
+        getattr(kv_cache_spec, "storage_block_size", None)
+        or getattr(kv_cache_spec, "block_size", 0)
+        or 0
+    )
+    keep_recent_blocks = _parse_env_int(
+        "KIVO_SOURCE_KEEP_RECENT_BLOCKS",
+        default=_DEFAULT_KEEP_RECENT_BLOCKS,
+        minimum=1,
+    )
+    active_filter_mode = os.getenv(
+        "KIVO_SOURCE_ACTIVE_FILTER_MODE",
+        _RECENT_WINDOW_FILTER_MODE,
+    )
+    block_table_info = _safe_tensor_info(block_table_tensor)
+    slot_mapping_info = _safe_tensor_info(slot_mapping)
+    query_start_loc_info = _safe_tensor_info(query_start_loc)
+    seq_lens_info = _safe_tensor_info(seq_lens)
+    positions_info = _safe_tensor_info(positions)
+
+    seq_len_values, seq_lens_caveat = _safe_exact_int_values(seq_lens)
+    visible_entries, visible_entries_caveat = _extract_visible_block_entries(
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
+    )
+
+    mutation_attempted = True
+    mutation_applied = False
+    mutation_blocker_reason = None
+    original_seq_len = None
+    modified_seq_len = None
+    selected_token_length = None
+    selected_block_ids: list[int] = []
+    excluded_block_ids: list[int] = []
+    original_visible_block_ids: list[int] = []
+    original_visible_block_count = 0
+
+    if active_filter_mode != _RECENT_WINDOW_FILTER_MODE:
+        mutation_blocker_reason = "unsupported active filter mode"
+    elif block_table_tensor is None:
+        mutation_blocker_reason = "block_table_tensor unavailable"
+    elif seq_len_values is None:
+        mutation_blocker_reason = (
+            seq_lens_caveat or "seq_lens unavailable"
+        )
+    elif visible_entries is None:
+        mutation_blocker_reason = (
+            visible_entries_caveat or "visible block entries unavailable"
+        )
+    elif not hasattr(block_table_tensor, "clone"):
+        mutation_blocker_reason = "block_table_tensor does not support clone"
+    elif not hasattr(seq_lens, "clone"):
+        mutation_blocker_reason = "seq_lens_clone_or_update_unavailable"
+    else:
+        shape = getattr(block_table_tensor, "shape", None)
+        if shape is None or len(shape) != 2:
+            mutation_blocker_reason = "block_table shape unavailable"
+        else:
+            try:
+                num_rows = int(shape[0])
+                num_cols = int(shape[1])
+            except Exception:
+                mutation_blocker_reason = "block_table shape unavailable"
+            else:
+                rows_to_entries: dict[int, list[tuple[int, int]]] = {}
+                for flat_index, block_id in visible_entries:
+                    row = flat_index // num_cols
+                    rows_to_entries.setdefault(row, []).append((flat_index, block_id))
+                cloned_block_table = block_table_tensor.clone()
+                cloned_seq_lens = seq_lens.clone()
+                applied_rows = 0
+                visible_blocks_not_above_budget = True
+                for row in range(min(num_rows, len(seq_len_values))):
+                    row_entries = rows_to_entries.get(row, [])
+                    row_block_ids = [block_id for _, block_id in row_entries]
+                    if not row_block_ids:
+                        continue
+                    original_visible_block_count = max(
+                        original_visible_block_count,
+                        len(row_block_ids),
+                    )
+                    for block_id in row_block_ids:
+                        if block_id not in original_visible_block_ids:
+                            original_visible_block_ids.append(block_id)
+                    row_seq_len = int(seq_len_values[row])
+                    original_seq_len = (
+                        row_seq_len
+                        if original_seq_len is None
+                        else max(original_seq_len, row_seq_len)
+                    )
+                    if len(row_block_ids) <= keep_recent_blocks:
+                        continue
+                    visible_blocks_not_above_budget = False
+                    row_selected_block_ids = row_block_ids[-keep_recent_blocks:]
+                    row_excluded_block_ids = row_block_ids[:-keep_recent_blocks]
+                    row_selected_token_length = _recent_window_selected_token_length(
+                        seq_len=row_seq_len,
+                        visible_block_count=len(row_block_ids),
+                        keep_recent_blocks=keep_recent_blocks,
+                        block_size=block_size,
+                    )
+                    if row_selected_token_length <= 0:
+                        mutation_blocker_reason = "invalid selected token length"
+                        break
+                    row_prefix_flat_indices = [
+                        row * num_cols + col for col in range(len(row_selected_block_ids))
+                    ]
+                    flat_block_table = cloned_block_table.reshape(-1)
+                    for flat_index, block_id in zip(
+                        row_prefix_flat_indices,
+                        row_selected_block_ids,
+                    ):
+                        flat_block_table[flat_index] = int(block_id)
+                    cloned_seq_lens[row] = int(row_selected_token_length)
+                    applied_rows += 1
+                    selected_token_length = (
+                        row_selected_token_length
+                        if selected_token_length is None
+                        else max(selected_token_length, row_selected_token_length)
+                    )
+                    modified_seq_len = (
+                        row_selected_token_length
+                        if modified_seq_len is None
+                        else max(modified_seq_len, row_selected_token_length)
+                    )
+                    for block_id in row_selected_block_ids:
+                        if block_id not in selected_block_ids:
+                            selected_block_ids.append(block_id)
+                    for block_id in row_excluded_block_ids:
+                        if block_id not in excluded_block_ids:
+                            excluded_block_ids.append(block_id)
+                if mutation_blocker_reason is None:
+                    if applied_rows <= 0:
+                        mutation_blocker_reason = (
+                            "visible_blocks_not_above_budget"
+                            if visible_blocks_not_above_budget
+                            else "seq_lens_clone_or_update_unavailable"
+                        )
+                    else:
+                        common_attn_metadata.block_table_tensor = cloned_block_table
+                        common_attn_metadata.seq_lens = cloned_seq_lens
+                        if hasattr(common_attn_metadata, "max_seq_len"):
+                            common_attn_metadata.max_seq_len = int(
+                                max(
+                                    int(value)
+                                    for value in _bounded_sample(
+                                        cloned_seq_lens,
+                                        limit=len(seq_len_values),
+                                    )
+                                )
+                            )
+                        mutation_applied = True
+
+    visible_block_count_estimate = (
+        original_visible_block_count if original_visible_block_count > 0 else None
+    )
+    if visible_block_count_estimate is None:
+        visible_block_count_estimate, _ = _visible_block_count_estimate(
+            slot_mapping,
+            block_size=block_size,
+            pad_slot_id=int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1,
+        )
+    theoretical_reduction = len(excluded_block_ids)
+    reduction_ratio = (
+        float(theoretical_reduction) / float(original_visible_block_count)
+        if original_visible_block_count > 0
+        else 0.0
+    )
+    caveats = [
+        "active recent-window compaction uses cloned metadata only",
+        "scheduler-owned block tables and KV allocation remain unchanged",
+        "this is not KV memory reduction or a latency claim",
+    ]
+    if seq_lens_caveat is not None:
+        caveats.append(f"seq_lens caveat: {seq_lens_caveat}")
+    if visible_entries_caveat is not None:
+        caveats.append(f"visible block entries caveat: {visible_entries_caveat}")
+
+    record = _common_metadata_record(
+        schema_version=_RECENT_WINDOW_SCHEMA_VERSION,
+        policy_name=_RECENT_WINDOW_POLICY_NAME,
+        hook_point=hook_point,
+        kv_cache_group_id=kv_cache_group_id,
+        block_size=block_size,
+        pad_slot_id=int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1,
+        env_debug=env_debug,
+        block_table_info=block_table_info,
+        slot_mapping_info=slot_mapping_info,
+        query_start_loc_info=query_start_loc_info,
+        seq_lens_info=seq_lens_info,
+        positions_info=positions_info,
+        max_query_len=max_query_len,
+        max_seq_len=max_seq_len,
+        visible_block_count_estimate=visible_block_count_estimate,
+    )
+    record.update({
+        "active_filter_mode": active_filter_mode,
+        "selection_policy_name": _RECENT_WINDOW_SELECTION_POLICY_NAME,
+        "original_seq_len": original_seq_len,
+        "modified_seq_len": modified_seq_len,
+        "original_visible_block_count": original_visible_block_count,
+        "selected_block_count": len(selected_block_ids),
+        "excluded_block_count": len(excluded_block_ids),
+        "selected_block_ids_sample": selected_block_ids[:16],
+        "excluded_block_ids_sample": excluded_block_ids[:16],
+        "keep_recent_blocks": keep_recent_blocks,
+        "selected_token_length": selected_token_length,
+        "theoretical_attention_visible_block_reduction": theoretical_reduction,
+        "theoretical_attention_visible_block_reduction_ratio": reduction_ratio,
+        "mutation_attempted": mutation_attempted,
+        "mutation_applied": mutation_applied,
+        "mutation_blocker_reason": mutation_blocker_reason,
+        "active_routing": mutation_applied,
+        "runtime_behavior_changed": False,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "caveats": caveats,
+    })
+    return record
+
+
 def maybe_observe_attention_metadata(
     *,
     hook_point: str,
@@ -1184,6 +1444,16 @@ def maybe_observe_attention_metadata(
             if hook_point != "_build_attention_metadata":
                 return None
             record = _build_active_selected_attention_record(
+                hook_point=hook_point,
+                kv_cache_group_id=kv_cache_group_id,
+                common_attn_metadata=common_attn_metadata,
+                kv_cache_spec=kv_cache_spec,
+                env_debug=env_debug,
+            )
+        elif policy_name == _RECENT_WINDOW_POLICY_NAME:
+            if hook_point != "_build_attention_metadata":
+                return None
+            record = _build_active_recent_window_record(
                 hook_point=hook_point,
                 kv_cache_group_id=kv_cache_group_id,
                 common_attn_metadata=common_attn_metadata,
