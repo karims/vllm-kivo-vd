@@ -48,6 +48,7 @@ Recommended reading order:
 ## vLLM KV Runtime Map And Integration Plan
 
 - [Phase 0: vLLM KV Map](phase0_vllm_kv_map.md)
+- [Phase S3.0A: Attention Metadata Path Discovery](source_s3_0_attention_metadata_path_discovery.md)
 - [Phase 2 Runtime Integration Plan](phase2_runtime_integration_plan.md)
 - [Phase 2.5: Real Sketch Feasibility](phase2_5_real_sketch_feasibility.md)
 
