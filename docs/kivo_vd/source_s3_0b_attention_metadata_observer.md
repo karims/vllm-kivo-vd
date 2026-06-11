@@ -4,6 +4,17 @@ Phase S3.0A traced the path from block tables and slot mappings into the
 attention metadata builders. Phase S3.0B adds an observer-only hook at that
 backend-agnostic boundary.
 
+The first S3.0B attempt reached healthy runtime execution and preserved model
+outputs, but wrote zero observer events. The likely issue was that the initial
+observer was placed only on `build_attn_metadata(...)`, while the active GPT-2 /
+FlashAttention runtime path was more reliably visible from the higher-level
+`_build_attention_metadata(...)` path in `gpu_model_runner.py`.
+
+The fix is conservative: observe both
+`gpu_model_runner._build_attention_metadata(...)` and
+`gpu/attn_utils.build_attn_metadata(...)`, and record the `hook_point` in each
+event so the runtime path can be verified explicitly.
+
 This phase records what metadata is visible at `build_attn_metadata(...)`
 without mutating the runtime.
 
@@ -20,6 +31,10 @@ For each observed KV cache group, the hook records:
 - a bounded sample of block IDs and slot IDs, when safe
 - a conservative visible-block-count estimate only when it can be computed
   safely without large tensor transfers
+- env-debug visibility fields:
+  - `kivo_source_enable_seen`
+  - `kivo_source_policy_seen`
+  - `observe_path_present`
 
 The hook is observation-only:
 

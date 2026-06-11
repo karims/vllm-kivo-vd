@@ -74,8 +74,20 @@ def _set_observer_env(event_path: str | Path) -> None:
     _clear_source_env()
     os.environ["KIVO_SOURCE_ENABLE"] = "1"
     os.environ["KIVO_SOURCE_OBSERVE_PATH"] = str(event_path)
+    os.environ["KIVO_SOURCE_OBS_PATH"] = str(event_path)
     os.environ["KIVO_SOURCE_POLICY"] = "observe_attention_metadata"
     os.environ["KIVO_SOURCE_FAIL_CLOSED"] = "1"
+
+
+def _capture_source_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _SOURCE_ENV_KEYS}
+
+
+def _restore_source_env(env_snapshot: dict[str, str | None]) -> None:
+    _clear_source_env()
+    for key, value in env_snapshot.items():
+        if value is not None:
+            os.environ[key] = value
 
 
 def _build_generation_args(
@@ -166,6 +178,15 @@ def _write(path: str | Path, text: str) -> None:
     output_path.write_text(text, encoding="utf-8")
 
 
+def _zero_event_debug(event_path: Path) -> dict[str, Any]:
+    return {
+        "env_policy_used": os.environ.get("KIVO_SOURCE_POLICY"),
+        "observe_path": str(event_path),
+        "file_exists": event_path.exists(),
+        "file_size": event_path.stat().st_size if event_path.exists() else 0,
+    }
+
+
 def _concat_jsonl(paths: list[Path], output_path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     lines: list[str] = []
@@ -191,55 +212,64 @@ def build_report(
     prompts = [str(prompt) for prompt in DEFAULT_PROMPTS if str(prompt).strip()]
     prompt_results: list[dict[str, Any]] = []
     all_event_paths: list[Path] = []
-    stop_early = False
+    previous_env = _capture_source_env()
 
     events_path = Path(args.events_jsonl)
-    for prompt_index, prompt in enumerate(prompts):
-        generation_args = _build_generation_args(args, prompt)
-        _clear_source_env()
-        baseline = _run_generation_safe(generation_args, generation_fn)
+    if events_path.exists():
+        events_path.unlink()
+    try:
+        for prompt_index, prompt in enumerate(prompts):
+            generation_args = _build_generation_args(args, prompt)
+            _clear_source_env()
+            baseline = _run_generation_safe(generation_args, generation_fn)
 
-        prompt_events_path = events_path.with_name(
-            f"{events_path.stem}_prompt_{prompt_index:02d}.jsonl"
-        )
-        if prompt_events_path.exists():
-            prompt_events_path.unlink()
-        _set_observer_env(prompt_events_path)
-        observer = _run_generation_safe(generation_args, generation_fn)
-        records = record_loader(prompt_events_path)
-        all_event_paths.append(prompt_events_path)
-        summary = summarize_records(records)
-        output_changed = bool(
-            baseline["status"] == "succeeded"
-            and observer["status"] == "succeeded"
-            and baseline["output_text"] != observer["output_text"]
-        )
-        prompt_results.append(
-            {
-                "prompt_index": prompt_index,
-                "prompt": prompt,
-                "baseline_status": baseline["status"],
-                "observer_status": observer["status"],
-                "baseline_output": baseline["output_text"],
-                "observer_output": observer["output_text"],
-                "baseline_error": baseline["error"],
-                "observer_error": observer["error"],
-                "output_changed": output_changed,
-                "events_jsonl": str(prompt_events_path),
-                **summary,
-            }
-        )
-        if (
-            not args.continue_on_error
-            and (
-                baseline["status"] != "succeeded"
-                or observer["status"] != "succeeded"
+            prompt_events_path = events_path.with_name(
+                f"{events_path.stem}_prompt_{prompt_index:02d}.jsonl"
             )
-        ):
-            stop_early = True
-            break
+            if prompt_events_path.exists():
+                prompt_events_path.unlink()
+            _set_observer_env(prompt_events_path)
+            observer = _run_generation_safe(generation_args, generation_fn)
+            records = record_loader(prompt_events_path)
+            all_event_paths.append(prompt_events_path)
+            summary = summarize_records(records)
+            output_changed = bool(
+                baseline["status"] == "succeeded"
+                and observer["status"] == "succeeded"
+                and baseline["output_text"] != observer["output_text"]
+            )
+            zero_event_debug = (
+                _zero_event_debug(prompt_events_path)
+                if summary["records_written"] == 0
+                else None
+            )
+            prompt_results.append(
+                {
+                    "prompt_index": prompt_index,
+                    "prompt": prompt,
+                    "baseline_status": baseline["status"],
+                    "observer_status": observer["status"],
+                    "baseline_output": baseline["output_text"],
+                    "observer_output": observer["output_text"],
+                    "baseline_error": baseline["error"],
+                    "observer_error": observer["error"],
+                    "output_changed": output_changed,
+                    "events_jsonl": str(prompt_events_path),
+                    "zero_event_debug": zero_event_debug,
+                    **summary,
+                }
+            )
+            if (
+                not args.continue_on_error
+                and (
+                    baseline["status"] != "succeeded"
+                    or observer["status"] != "succeeded"
+                )
+            ):
+                break
+    finally:
+        _restore_source_env(previous_env)
 
-    _clear_source_env()
     all_records = _concat_jsonl(all_event_paths, events_path)
     total_prompts = len(prompt_results)
     baseline_success_count = sum(
@@ -273,6 +303,14 @@ def build_report(
         and output_changed_count == 0
         and len(all_records) > 0
     )
+    zero_event_debug = None
+    if len(all_records) == 0:
+        zero_event_debug = {
+            "env_policy_used": "observe_attention_metadata",
+            "observe_path": str(events_path),
+            "file_exists": events_path.exists(),
+            "file_size": events_path.stat().st_size if events_path.exists() else 0,
+        }
     return {
         "model": args.model,
         "max_tokens": args.max_tokens,
@@ -295,6 +333,7 @@ def build_report(
         "s3_0b_observer_passed": s3_0b_observer_passed,
         "prompt_results": prompt_results,
         "events_jsonl": str(events_path),
+        "zero_event_debug": zero_event_debug,
     }
 
 
@@ -318,6 +357,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "- Measured runtime reduction: `false`",
         "- Selected attention claim allowed: `false`",
         "- Performance claim allowed: `false`",
+        f"- Events JSONL: `{report['events_jsonl']}`",
         "",
         "## Prompt Results",
         "",
@@ -335,6 +375,16 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- Max block table rows: `{item['max_block_table_rows']}`",
                 f"- Max block table cols: `{item['max_block_table_cols']}`",
                 f"- Max slot mapping len: `{item['max_slot_mapping_len']}`",
+                f"- Zero-event debug: `{item['zero_event_debug']}`",
+                "",
+            ]
+        )
+    if report.get("zero_event_debug") is not None:
+        lines.extend(
+            [
+                "## Zero Event Debug",
+                "",
+                f"- Debug: `{report['zero_event_debug']}`",
                 "",
             ]
         )

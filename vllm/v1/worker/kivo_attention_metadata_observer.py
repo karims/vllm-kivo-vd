@@ -46,6 +46,15 @@ def _observation_path() -> Path | None:
     return Path(path)
 
 
+def _env_debug() -> dict[str, Any]:
+    observe_path = _observation_path()
+    return {
+        "kivo_source_enable_seen": _env_flag("KIVO_SOURCE_ENABLE"),
+        "kivo_source_policy_seen": os.getenv("KIVO_SOURCE_POLICY"),
+        "observe_path_present": observe_path is not None,
+    }
+
+
 def _safe_tensor_info(value: Any) -> dict[str, Any]:
     info: dict[str, Any] = {
         "present": value is not None,
@@ -136,7 +145,7 @@ def _visible_block_count_estimate(
     numel = _tensor_numel(slot_mapping)
     if numel is None:
         return None, "slot_mapping size unavailable"
-    if numel > 4096:
+    if numel > 256:
         return None, "slot_mapping too large for safe exact scan"
     values = _bounded_sample(slot_mapping, limit=numel)
     if not values:
@@ -178,84 +187,93 @@ def maybe_observe_attention_metadata(
     kv_cache_spec: Any,
 ) -> dict[str, Any] | None:
     """Record a metadata-only observation if the source hook is enabled."""
+    try:
+        env_debug = _env_debug()
+        if not env_debug["kivo_source_enable_seen"]:
+            return None
+        if env_debug["kivo_source_policy_seen"] != _POLICY_NAME:
+            return None
+        output_path = _observation_path()
+        if output_path is None:
+            return None
 
-    if not _env_flag("KIVO_SOURCE_ENABLE"):
+        block_table_tensor = getattr(common_attn_metadata, "block_table_tensor", None)
+        slot_mapping = getattr(common_attn_metadata, "slot_mapping", None)
+        query_start_loc = getattr(common_attn_metadata, "query_start_loc", None)
+        seq_lens = getattr(common_attn_metadata, "seq_lens", None)
+        positions = getattr(common_attn_metadata, "positions", None)
+        max_query_len = getattr(common_attn_metadata, "max_query_len", None)
+        max_seq_len = getattr(common_attn_metadata, "max_seq_len", None)
+        block_size = int(
+            getattr(kv_cache_spec, "storage_block_size", None)
+            or getattr(kv_cache_spec, "block_size", 0)
+            or 0
+        )
+        pad_slot_id = int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1
+        visible_block_count_estimate, estimate_caveat = _visible_block_count_estimate(
+            slot_mapping,
+            block_size=block_size,
+            pad_slot_id=pad_slot_id,
+        )
+        block_table_info = _safe_tensor_info(block_table_tensor)
+        slot_mapping_info = _safe_tensor_info(slot_mapping)
+        query_start_loc_info = _safe_tensor_info(query_start_loc)
+        seq_lens_info = _safe_tensor_info(seq_lens)
+        positions_info = _safe_tensor_info(positions)
+        block_table_sample = _bounded_sample(block_table_tensor, limit=16)
+        slot_mapping_sample = _bounded_sample(slot_mapping, limit=16)
+        record = {
+            "schema_version": _SCHEMA_VERSION,
+            "timestamp": time.time(),
+            "sequence_id": _next_sequence_id(),
+            "pid": os.getpid(),
+            "policy_name": _POLICY_NAME,
+            "hook_point": hook_point,
+            "kv_cache_group_id": kv_cache_group_id,
+            "block_size": block_size,
+            "pad_slot_id": pad_slot_id,
+            "kivo_source_enable_seen": env_debug["kivo_source_enable_seen"],
+            "kivo_source_policy_seen": env_debug["kivo_source_policy_seen"],
+            "observe_path_present": env_debug["observe_path_present"],
+            "block_table_tensor_present": block_table_tensor is not None,
+            "block_table_tensor_shape": block_table_info["shape"],
+            "block_table_tensor_dtype": block_table_info["dtype"],
+            "block_table_tensor_device": block_table_info["device"],
+            "slot_mapping_present": slot_mapping is not None,
+            "slot_mapping_shape": slot_mapping_info["shape"],
+            "slot_mapping_dtype": slot_mapping_info["dtype"],
+            "slot_mapping_device": slot_mapping_info["device"],
+            "query_start_loc_shape": query_start_loc_info["shape"],
+            "query_start_loc_dtype": query_start_loc_info["dtype"],
+            "query_start_loc_device": query_start_loc_info["device"],
+            "seq_lens_shape": seq_lens_info["shape"],
+            "seq_lens_dtype": seq_lens_info["dtype"],
+            "seq_lens_device": seq_lens_info["device"],
+            "positions_shape": positions_info["shape"],
+            "positions_dtype": positions_info["dtype"],
+            "positions_device": positions_info["device"],
+            "max_query_len": int(max_query_len) if max_query_len is not None else None,
+            "max_seq_len": int(max_seq_len) if max_seq_len is not None else None,
+            "visible_block_count_estimate": visible_block_count_estimate,
+            "visible_block_count_estimate_caveat": estimate_caveat,
+            "block_table_tensor_sample": block_table_sample,
+            "slot_mapping_sample": slot_mapping_sample,
+            "selected_block_count": None,
+            "mutation_attempted": False,
+            "mutation_applied": False,
+            "active_routing": False,
+            "runtime_behavior_changed": False,
+            "measured_runtime_reduction": False,
+            "selected_attention_claim_allowed": False,
+            "performance_claim_allowed": False,
+            "caveats": [
+                "observation-only hook; no runtime state is mutated",
+                "metadata visibility is recorded at the backend-agnostic boundary",
+                "visible block count is estimated only when safe and bounded",
+                "no selected attention, KV reduction, or latency claim is made",
+            ],
+        }
+        _append_jsonl(output_path, record)
+        return record
+    except Exception:
         return None
-    if os.getenv("KIVO_SOURCE_POLICY") != _POLICY_NAME:
-        return None
-    output_path = _observation_path()
-    if output_path is None:
-        return None
-
-    block_table_tensor = getattr(common_attn_metadata, "block_table_tensor", None)
-    slot_mapping = getattr(common_attn_metadata, "slot_mapping", None)
-    query_start_loc = getattr(common_attn_metadata, "query_start_loc", None)
-    seq_lens = getattr(common_attn_metadata, "seq_lens", None)
-    positions = getattr(common_attn_metadata, "positions", None)
-    max_query_len = getattr(common_attn_metadata, "max_query_len", None)
-    max_seq_len = getattr(common_attn_metadata, "max_seq_len", None)
-    block_size = int(
-        getattr(kv_cache_spec, "storage_block_size", None)
-        or getattr(kv_cache_spec, "block_size", 0)
-        or 0
-    )
-    pad_slot_id = int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1
-    visible_block_count_estimate, estimate_caveat = _visible_block_count_estimate(
-        slot_mapping,
-        block_size=block_size,
-        pad_slot_id=pad_slot_id,
-    )
-    block_table_sample = _bounded_sample(block_table_tensor, limit=16)
-    slot_mapping_sample = _bounded_sample(slot_mapping, limit=16)
-    record = {
-        "schema_version": _SCHEMA_VERSION,
-        "timestamp": time.time(),
-        "sequence_id": _next_sequence_id(),
-        "pid": os.getpid(),
-        "policy_name": _POLICY_NAME,
-        "hook_point": hook_point,
-        "kv_cache_group_id": kv_cache_group_id,
-        "block_size": block_size,
-        "pad_slot_id": pad_slot_id,
-        "block_table_tensor_present": block_table_tensor is not None,
-        "block_table_tensor_shape": _safe_tensor_info(block_table_tensor)["shape"],
-        "block_table_tensor_dtype": _safe_tensor_info(block_table_tensor)["dtype"],
-        "block_table_tensor_device": _safe_tensor_info(block_table_tensor)[
-            "device"
-        ],
-        "slot_mapping_present": slot_mapping is not None,
-        "slot_mapping_shape": _safe_tensor_info(slot_mapping)["shape"],
-        "slot_mapping_dtype": _safe_tensor_info(slot_mapping)["dtype"],
-        "slot_mapping_device": _safe_tensor_info(slot_mapping)["device"],
-        "query_start_loc_shape": _safe_tensor_info(query_start_loc)["shape"],
-        "query_start_loc_dtype": _safe_tensor_info(query_start_loc)["dtype"],
-        "query_start_loc_device": _safe_tensor_info(query_start_loc)["device"],
-        "seq_lens_shape": _safe_tensor_info(seq_lens)["shape"],
-        "seq_lens_dtype": _safe_tensor_info(seq_lens)["dtype"],
-        "seq_lens_device": _safe_tensor_info(seq_lens)["device"],
-        "positions_shape": _safe_tensor_info(positions)["shape"],
-        "positions_dtype": _safe_tensor_info(positions)["dtype"],
-        "positions_device": _safe_tensor_info(positions)["device"],
-        "max_query_len": int(max_query_len) if max_query_len is not None else None,
-        "max_seq_len": int(max_seq_len) if max_seq_len is not None else None,
-        "visible_block_count_estimate": visible_block_count_estimate,
-        "visible_block_count_estimate_caveat": estimate_caveat,
-        "block_table_tensor_sample": block_table_sample,
-        "slot_mapping_sample": slot_mapping_sample,
-        "selected_block_count": None,
-        "mutation_attempted": False,
-        "mutation_applied": False,
-        "active_routing": False,
-        "runtime_behavior_changed": False,
-        "measured_runtime_reduction": False,
-        "selected_attention_claim_allowed": False,
-        "performance_claim_allowed": False,
-        "caveats": [
-            "observation-only hook; no runtime state is mutated",
-            "metadata visibility is recorded at the backend-agnostic boundary",
-            "visible block count is estimated only when safe and bounded",
-            "no selected attention, KV reduction, or latency claim is made",
-        ],
-    }
-    _append_jsonl(output_path, record)
-    return record

@@ -202,6 +202,9 @@ from vllm.v1.worker.ec_connector_model_runner_mixin import ECConnectorModelRunne
 from vllm.v1.worker.gpu.pool.late_interaction_runner import LateInteractionRunner
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
 from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
+from vllm.v1.worker.kivo_attention_metadata_observer import (
+    maybe_observe_attention_metadata,
+)
 from vllm.v1.worker.kv_connector_model_runner_mixin import KVConnectorModelRunnerMixin
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
 from vllm.v1.worker.ubatch_utils import (
@@ -2417,6 +2420,13 @@ class GPUModelRunner(
             if kv_cache_gid > 0:
                 cm.block_table_tensor = _get_block_table(kv_cache_gid)
                 cm.slot_mapping = slot_mappings[kv_cache_gid]
+
+            maybe_observe_attention_metadata(
+                hook_point="_build_attention_metadata",
+                kv_cache_group_id=kv_cache_gid,
+                common_attn_metadata=cm,
+                kv_cache_spec=kv_cache_group.kv_cache_spec,
+            )
 
             if self.speculative_config and spec_decode_common_attn_metadata is None:
                 if isinstance(
