@@ -50,6 +50,7 @@ Recommended reading order:
 - [Phase 0: vLLM KV Map](phase0_vllm_kv_map.md)
 - [Phase S3.0A: Attention Metadata Path Discovery](source_s3_0_attention_metadata_path_discovery.md)
 - [Phase S3.0B: Attention Metadata Observer](source_s3_0b_attention_metadata_observer.md)
+- [Phase S3.1A: Shadow Selected-Attention Metadata](source_s3_1a_shadow_selected_attention_metadata.md)
 - [Phase 2 Runtime Integration Plan](phase2_runtime_integration_plan.md)
 - [Phase 2.5: Real Sketch Feasibility](phase2_5_real_sketch_feasibility.md)
 
