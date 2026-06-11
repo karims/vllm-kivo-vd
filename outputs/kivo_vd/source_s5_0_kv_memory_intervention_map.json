@@ -1,0 +1,196 @@
+{
+  "phase": "S5.0",
+  "goal": "real_kv_memory_intervention_map",
+  "recommended_next_phase": "S5.1",
+  "files_inspected": [
+    "vllm/v1/core/kv_cache_manager.py",
+    "vllm/v1/core/block_pool.py",
+    "vllm/v1/core/kv_cache_coordinator.py",
+    "vllm/v1/core/single_type_kv_cache_manager.py",
+    "vllm/v1/worker/block_table.py",
+    "vllm/v1/worker/gpu_input_batch.py",
+    "vllm/v1/worker/gpu_model_runner.py",
+    "vllm/v1/attention/backend.py",
+    "vllm/v1/attention/backends/utils.py",
+    "vllm/v1/attention/backends/cpu_attn.py",
+    "vllm/v1/attention/backends/flex_attention.py",
+    "vllm/v1/attention/backends/flashinfer.py",
+    "vllm/v1/attention/backends/rocm_attn.py",
+    "vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py",
+    "vllm/v1/attention/backends/mla/sparse_swa.py",
+    "vllm/model_executor/layers/attention/attention.py"
+  ],
+  "classes_inspected": [
+    "KVCacheManager",
+    "BlockPool",
+    "KVCacheCoordinator",
+    "SingleTypeKVCacheManager",
+    "BlockTable",
+    "MultiGroupBlockTable",
+    "InputBatch",
+    "CommonAttentionMetadata",
+    "AttentionMetadataBuilder",
+    "CPUAttentionMetadataBuilder",
+    "FlexAttentionMetadataBuilder",
+    "FlashInferMetadataBuilder",
+    "RocmAttentionMetadataBuilder",
+    "Attention",
+    "AttentionBackend"
+  ],
+  "functions_inspected": [
+    "KVCacheManager.allocate_slots",
+    "KVCacheManager.free",
+    "KVCacheManager.cache_blocks",
+    "KVCacheManager.remove_skipped_blocks",
+    "KVCacheManager.get_blocks",
+    "KVCacheCoordinator.get_num_blocks_to_allocate",
+    "KVCacheCoordinator.allocate_new_blocks",
+    "KVCacheCoordinator.allocate_new_computed_blocks",
+    "KVCacheCoordinator.cache_blocks",
+    "KVCacheCoordinator.free",
+    "SingleTypeKVCacheManager.get_num_blocks_to_allocate",
+    "SingleTypeKVCacheManager.allocate_new_computed_blocks",
+    "SingleTypeKVCacheManager.allocate_new_blocks",
+    "SingleTypeKVCacheManager.cache_blocks",
+    "SingleTypeKVCacheManager.remove_skipped_blocks",
+    "SingleTypeKVCacheManager.free",
+    "BlockPool.get_new_blocks",
+    "BlockPool.cache_full_blocks",
+    "BlockPool.free_blocks",
+    "BlockPool.evict_blocks",
+    "BlockTable.append_row",
+    "BlockTable.compute_slot_mapping",
+    "MultiGroupBlockTable.compute_slot_mapping",
+    "gpu_model_runner._get_slot_mappings",
+    "gpu_model_runner._build_attention_metadata",
+    "get_attention_context",
+    "unified_attention_with_output",
+    "AttentionMetadataBuilder.build",
+    "AttentionMetadataBuilder.update_block_table"
+  ],
+  "current_kivo_hooks": [
+    {
+      "file": "vllm/v1/worker/gpu_model_runner.py",
+      "function": "_build_attention_metadata",
+      "hook_type": "metadata_observer",
+      "data_available": [
+        "block_table_tensor",
+        "slot_mapping",
+        "seq_lens",
+        "query_start_loc"
+      ],
+      "tensor_location": "CPU/GPU tensor objects already present in runner path",
+      "can_reduce_kv_memory": false,
+      "can_reduce_attention_compute": false,
+      "requires_gpu_kernel_change": false
+    },
+    {
+      "file": "vllm/model_executor/layers/attention/attention.py",
+      "function": "unified_attention_with_output",
+      "hook_type": "tensor_observer",
+      "data_available": [
+        "query",
+        "key",
+        "value",
+        "kv_cache",
+        "slot_mapping",
+        "attention_metadata"
+      ],
+      "tensor_location": "device tensors already handed to backend",
+      "can_reduce_kv_memory": false,
+      "can_reduce_attention_compute": false,
+      "requires_gpu_kernel_change": false
+    }
+  ],
+  "intervention_candidates": [
+    {
+      "name": "KV cache ownership demotion and free path",
+      "files": [
+        "vllm/v1/core/single_type_kv_cache_manager.py",
+        "vllm/v1/core/block_pool.py",
+        "vllm/v1/core/kv_cache_manager.py"
+      ],
+      "functions": [
+        "SingleTypeKVCacheManager.remove_skipped_blocks",
+        "SingleTypeKVCacheManager.free",
+        "BlockPool.free_blocks"
+      ],
+      "intervention_type": "free",
+      "can_reduce_kv_memory": true,
+      "can_reduce_attention_compute": false,
+      "requires_gpu_kernel_change": false,
+      "risk": "medium",
+      "notes": "Best first place to make blocks actually leave ownership. Must preserve correctness if paired with a compressed or recently retained replacement."
+    },
+    {
+      "name": "Block-table and GPU input remapping",
+      "files": [
+        "vllm/v1/worker/block_table.py",
+        "vllm/v1/worker/gpu_input_batch.py",
+        "vllm/v1/worker/gpu_model_runner.py"
+      ],
+      "functions": [
+        "BlockTable.compute_slot_mapping",
+        "MultiGroupBlockTable.append_row",
+        "gpu_model_runner._get_slot_mappings",
+        "gpu_model_runner._build_attention_metadata"
+      ],
+      "intervention_type": "block_table",
+      "can_reduce_kv_memory": false,
+      "can_reduce_attention_compute": true,
+      "requires_gpu_kernel_change": false,
+      "risk": "medium",
+      "notes": "Can hide or compact blocks from attention, but by itself does not free physical KV."
+    },
+    {
+      "name": "Attention backend selected/compressed path",
+      "files": [
+        "vllm/v1/attention/backend.py",
+        "vllm/v1/attention/backends/*",
+        "vllm/model_executor/layers/attention/attention.py"
+      ],
+      "functions": [
+        "AttentionMetadataBuilder.build",
+        "AttentionMetadataBuilder.update_block_table",
+        "unified_attention_with_output"
+      ],
+      "intervention_type": "attention_backend",
+      "can_reduce_kv_memory": false,
+      "can_reduce_attention_compute": true,
+      "requires_gpu_kernel_change": true,
+      "risk": "high",
+      "notes": "Most correct long-term path for selected/compressed attention, but not the smallest step."
+    },
+    {
+      "name": "Two-tier KV cache",
+      "files": [
+        "vllm/v1/core/single_type_kv_cache_manager.py",
+        "vllm/v1/core/block_pool.py",
+        "vllm/v1/worker/block_table.py",
+        "vllm/v1/attention/backends/*"
+      ],
+      "functions": [
+        "remove_skipped_blocks",
+        "free_blocks",
+        "compute_slot_mapping",
+        "backend build/update_block_table"
+      ],
+      "intervention_type": "two_tier_cache",
+      "can_reduce_kv_memory": true,
+      "can_reduce_attention_compute": true,
+      "requires_gpu_kernel_change": true,
+      "risk": "high",
+      "notes": "Likely eventual design: keep recent blocks full, demote old blocks to compact summaries, and teach attention to consume both."
+    }
+  ],
+  "recommended_candidate": {
+    "name": "KV cache ownership demotion and free path",
+    "file": "vllm/v1/core/single_type_kv_cache_manager.py",
+    "function": "remove_skipped_blocks",
+    "why": "This is the smallest point where blocks can actually stop being owned by a request and return to the pool. It is the first real memory-control boundary before any attention rewrite.",
+    "expected_behavior": "Keep recent blocks live, free only truly no-longer-needed blocks, and preserve request correctness.",
+    "failure_mode_to_guard": "Freeing blocks that attention still needs.",
+    "local_test": "Unit tests for block ownership bookkeeping and demotion decisions with fake blocks.",
+    "gpu_validation_later": "Confirm output parity and actual reserved-memory drop once a real compressed or demoted representation exists."
+  }
+}

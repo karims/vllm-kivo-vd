@@ -8,6 +8,7 @@ Recommended reading order:
 ## Status
 
 - [Phase 3.7: Status and Next Steps](phase3_7_status_and_next_steps.md)
+- [Phase S5.0: KV Memory Intervention Map](source_s5_0_kv_memory_intervention_map.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 
