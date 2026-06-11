@@ -754,7 +754,10 @@ def unified_attention_with_output(
     if (
         os.getenv("KIVO_SOURCE_ENABLE") == "1"
         and os.getenv("KIVO_SOURCE_POLICY")
-        == "observe_attention_tensors_for_sketch"
+        in {
+            "observe_attention_tensors_for_sketch",
+            "shadow_kv_block_sketch",
+        }
     ):
         try:
             from vllm.v1.worker.kivo_attention_tensor_observer import (

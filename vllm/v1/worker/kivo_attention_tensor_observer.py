@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fail-closed source observer for attention tensors relevant to sketching."""
+"""Fail-closed source observers for attention tensors relevant to sketching."""
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -12,12 +13,20 @@ import time
 from pathlib import Path
 from typing import Any
 
+import torch
+
 SCHEMA_VERSION = "kivo_source_s3_3a_attention_tensor_sketch_observer_v1"
 POLICY_NAME = "observe_attention_tensors_for_sketch"
+S3_3B_SCHEMA_VERSION = "kivo_source_s3_3b_shadow_kv_block_sketch_v1"
+S3_3B_POLICY_NAME = "shadow_kv_block_sketch"
+S3_3B_SKETCH_METHOD = "random_projection_l2"
 HOOK_POINT = "unified_attention_with_output"
+_PAD_SLOT_ID = -1
 
 _SEQUENCE_LOCK = threading.Lock()
 _SEQUENCE_ID = 0
+_PROJECTION_CACHE_LOCK = threading.Lock()
+_PROJECTION_CACHE: dict[tuple[int, int, str, int], torch.Tensor] = {}
 
 
 def _next_sequence_id() -> int:
@@ -124,6 +133,118 @@ def _can_sketch(info: dict[str, Any]) -> bool:
         and info["numel"] is not None
         and info["numel"] > 0
     )
+
+
+def _parse_env_int(name: str, *, default: int, minimum: int = 0) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return max(minimum, parsed)
+
+
+def _parse_env_float(
+    name: str,
+    *,
+    default: float,
+    minimum: float = 0.0,
+    maximum: float = 1.0,
+) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, parsed))
+
+
+def _safe_int_list(
+    value: Any,
+    *,
+    max_numel: int = 256,
+) -> list[int] | None:
+    if value is None:
+        return None
+    numel = getattr(value, "numel", None)
+    if callable(numel):
+        try:
+            size = int(numel())
+        except Exception:
+            return None
+        if size > max_numel:
+            return None
+    try:
+        flat = value.detach().reshape(-1)
+        if flat.numel() > max_numel:
+            return None
+        sample = flat.to("cpu").tolist()
+    except Exception:
+        return None
+    try:
+        return [int(item) for item in sample]
+    except Exception:
+        return None
+
+
+def _last_valid_slot_id(slot_mapping: Any) -> tuple[int | None, str | None]:
+    values = _safe_int_list(slot_mapping)
+    if values is None:
+        return None, "slot_mapping unavailable or too large"
+    valid = [value for value in values if value != _PAD_SLOT_ID and value >= 0]
+    if not valid:
+        return None, "no valid slot ids in slot_mapping"
+    return int(valid[-1]), None
+
+
+def _projection_tensor(
+    input_dim: int,
+    sketch_dim: int,
+    *,
+    device: torch.device,
+    seed: int,
+) -> torch.Tensor:
+    key = (input_dim, sketch_dim, str(device), seed)
+    with _PROJECTION_CACHE_LOCK:
+        cached = _PROJECTION_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    row_ids = torch.arange(input_dim, device=device, dtype=torch.int64).unsqueeze(1)
+    col_ids = torch.arange(sketch_dim, device=device, dtype=torch.int64).unsqueeze(0)
+    hashed = (
+        row_ids * 1103515245
+        + col_ids * 12345
+        + int(seed) * 2654435761
+    ) & 1
+    projection = hashed.mul(2).sub(1).to(torch.float32)
+    projection /= math.sqrt(float(sketch_dim))
+    with _PROJECTION_CACHE_LOCK:
+        _PROJECTION_CACHE[key] = projection
+    return projection
+
+
+def _sketch_block_tensor(
+    block_tensor: torch.Tensor,
+    *,
+    sketch_dim: int,
+    seed: int,
+) -> tuple[float, list[float]]:
+    flat = block_tensor.reshape(-1).to(torch.float32)
+    projection = _projection_tensor(
+        int(flat.numel()),
+        sketch_dim,
+        device=flat.device,
+        seed=seed,
+    )
+    sketch = torch.matmul(flat, projection)
+    norm = float(torch.linalg.vector_norm(flat).item())
+    sample = [float(item) for item in sketch.detach().to("cpu").tolist()[:sketch_dim]]
+    return norm, sample
 
 
 def build_attention_tensor_record(
@@ -244,6 +365,196 @@ def build_attention_tensor_record(
     }
 
 
+def build_shadow_kv_block_sketch_record(
+    *,
+    hook_point: str,
+    layer_name: str | None,
+    attn_layer: Any,
+    query: Any,
+    key: Any,
+    value: Any,
+    kv_cache: Any,
+    attn_metadata: Any,
+    slot_mapping: Any,
+) -> dict[str, Any]:
+    """Build a bounded real KV-cache block sketch record in shadow mode."""
+    query_info = _safe_tensor_info(query)
+    key_info = _safe_tensor_info(key)
+    value_info = _safe_tensor_info(value)
+    kv_cache_info = _safe_tensor_info(kv_cache)
+    slot_mapping_info = _safe_tensor_info(slot_mapping)
+    sketch_dim = _parse_env_int("KIVO_SOURCE_SKETCH_DIM", default=8, minimum=1)
+    max_sketch_blocks = _parse_env_int(
+        "KIVO_SOURCE_MAX_SKETCH_BLOCKS", default=4, minimum=1
+    )
+    budget_ratio = _parse_env_float(
+        "KIVO_SOURCE_BUDGET_RATIO",
+        default=0.5,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    sketch_seed = _parse_env_int("KIVO_SOURCE_SKETCH_SEED", default=123, minimum=0)
+    current_slot_id = None
+    blocker = None
+    block_sketch_sample: list[dict[str, Any]] = []
+    candidate_block_ids: list[int] = []
+    selected_block_ids: list[int] = []
+    excluded_block_ids: list[int] = []
+    current_physical_block_id: int | None = None
+    sketch_computed = False
+    block_size = None
+
+    if not kv_cache_info["present"]:
+        blocker = blocker or "kv_cache unavailable"
+    elif not isinstance(kv_cache_info["shape"], list):
+        blocker = blocker or "kv_cache shape unavailable"
+    elif kv_cache_info["ndim"] != 5:
+        blocker = blocker or "kv_cache ndim is not 5"
+    elif kv_cache_info["shape"][1] != 2:
+        blocker = blocker or "kv_cache second dimension is not 2"
+    else:
+        block_size = int(kv_cache_info["shape"][2])
+        if block_size <= 0:
+            blocker = blocker or "invalid kv_cache block size"
+        else:
+            current_slot_id, slot_blocker = _last_valid_slot_id(slot_mapping)
+            if current_slot_id is None:
+                blocker = blocker or slot_blocker or "current slot id unavailable"
+            else:
+                current_physical_block_id = int(current_slot_id // block_size)
+                num_blocks = int(kv_cache_info["shape"][0])
+                if (
+                    current_physical_block_id < 0
+                    or current_physical_block_id >= num_blocks
+                ):
+                    blocker = blocker or "current physical block id out of range"
+                else:
+                    lowest_block_id = max(
+                        0,
+                        current_physical_block_id - max_sketch_blocks + 1,
+                    )
+                    candidate_block_ids = list(
+                        range(current_physical_block_id, lowest_block_id - 1, -1)
+                    )
+                    if not candidate_block_ids:
+                        blocker = blocker or "no candidate block ids available"
+                    else:
+                        try:
+                            for block_id in candidate_block_ids:
+                                k_block = kv_cache[block_id, 0]
+                                v_block = kv_cache[block_id, 1]
+                                k_l2_norm, k_sketch = _sketch_block_tensor(
+                                    k_block,
+                                    sketch_dim=sketch_dim,
+                                    seed=sketch_seed,
+                                )
+                                v_l2_norm, v_sketch = _sketch_block_tensor(
+                                    v_block,
+                                    sketch_dim=sketch_dim,
+                                    seed=sketch_seed + 1,
+                                )
+                                score = float(k_l2_norm + v_l2_norm)
+                                block_sketch_sample.append({
+                                    "block_id": int(block_id),
+                                    "k_l2_norm": k_l2_norm,
+                                    "v_l2_norm": v_l2_norm,
+                                    "score": score,
+                                    "k_sketch_sample": k_sketch[:sketch_dim],
+                                    "v_sketch_sample": v_sketch[:sketch_dim],
+                                })
+                        except Exception as exc:
+                            blocker = (
+                                "kv block sketch computation failed: "
+                                f"{type(exc).__name__}"
+                            )
+
+    if blocker is None and block_sketch_sample:
+        selected_budget = max(
+            1,
+            int(math.ceil(len(candidate_block_ids) * budget_ratio)),
+        )
+        current_block_id = int(candidate_block_ids[0])
+        older_candidates = sorted(
+            block_sketch_sample[1:],
+            key=lambda item: float(item["score"]),
+            reverse=True,
+        )
+        selected_set = {current_block_id}
+        for item in older_candidates[: max(0, selected_budget - 1)]:
+            selected_set.add(int(item["block_id"]))
+        selected_block_ids = [
+            int(block_id)
+            for block_id in candidate_block_ids
+            if block_id in selected_set
+        ]
+        excluded_block_ids = [
+            int(block_id)
+            for block_id in candidate_block_ids
+            if block_id not in selected_set
+        ]
+        sketch_computed = True
+
+    caveats = [
+        "shadow mode only; KV cache and attention metadata are unchanged",
+        "candidate blocks are derived from the current slot and bounded recency only",
+        "tiny block sketches are recorded as summaries, not full tensor dumps",
+        (
+            "this does not prove memory reduction, latency reduction, "
+            "or selected attention"
+        ),
+    ]
+    if blocker is not None:
+        caveats.append(f"blocker: {blocker}")
+
+    return {
+        "schema_version": S3_3B_SCHEMA_VERSION,
+        "timestamp": time.time(),
+        "sequence_id": _next_sequence_id(),
+        "policy_name": S3_3B_POLICY_NAME,
+        "hook_point": hook_point,
+        "pid": os.getpid(),
+        "layer_name": layer_name,
+        "layer_index": _layer_index(layer_name),
+        "attention_backend": _backend_name(attn_layer),
+        "sketch_source": "kv_cache",
+        "sketch_method": S3_3B_SKETCH_METHOD,
+        "sketch_dim": sketch_dim,
+        "max_sketch_blocks": max_sketch_blocks,
+        "budget_ratio": budget_ratio,
+        "query_present": query_info["present"],
+        "key_present": key_info["present"],
+        "value_present": value_info["present"],
+        "kv_cache_present": kv_cache_info["present"],
+        "kv_cache_shape": kv_cache_info["shape"],
+        "kv_cache_dtype": kv_cache_info["dtype"],
+        "kv_cache_device": kv_cache_info["device"],
+        "slot_mapping_present": slot_mapping_info["present"],
+        "slot_mapping_shape": slot_mapping_info["shape"],
+        "slot_mapping_dtype": slot_mapping_info["dtype"],
+        "slot_mapping_device": slot_mapping_info["device"],
+        "block_size": block_size,
+        "current_slot_id": current_slot_id,
+        "current_physical_block_id": current_physical_block_id,
+        "candidate_block_count": len(candidate_block_ids),
+        "candidate_block_ids_sample": candidate_block_ids[:16],
+        "selected_block_count": len(selected_block_ids),
+        "selected_block_ids_sample": selected_block_ids[:16],
+        "excluded_block_count": len(excluded_block_ids),
+        "excluded_block_ids_sample": excluded_block_ids[:16],
+        "block_sketch_sample": block_sketch_sample[:16],
+        "sketch_computed": sketch_computed,
+        "sketch_blocker_reason": blocker,
+        "mutation_attempted": False,
+        "mutation_applied": False,
+        "active_routing": False,
+        "runtime_behavior_changed": False,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "caveats": caveats,
+    }
+
+
 def maybe_observe_attention_tensors(
     *,
     hook_point: str,
@@ -263,22 +574,36 @@ def maybe_observe_attention_tensors(
     try:
         if os.getenv("KIVO_SOURCE_ENABLE") != "1":
             return None
-        if os.getenv("KIVO_SOURCE_POLICY") != POLICY_NAME:
+        policy_name = os.getenv("KIVO_SOURCE_POLICY")
+        if policy_name not in {POLICY_NAME, S3_3B_POLICY_NAME}:
             return None
         output_path = _observation_path()
         if output_path is None:
             return None
-        record = build_attention_tensor_record(
-            hook_point=hook_point,
-            layer_name=layer_name,
-            attn_layer=attn_layer,
-            query=query,
-            key=key,
-            value=value,
-            kv_cache=kv_cache,
-            attn_metadata=attn_metadata,
-            slot_mapping=slot_mapping,
-        )
+        if policy_name == POLICY_NAME:
+            record = build_attention_tensor_record(
+                hook_point=hook_point,
+                layer_name=layer_name,
+                attn_layer=attn_layer,
+                query=query,
+                key=key,
+                value=value,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                slot_mapping=slot_mapping,
+            )
+        else:
+            record = build_shadow_kv_block_sketch_record(
+                hook_point=hook_point,
+                layer_name=layer_name,
+                attn_layer=attn_layer,
+                query=query,
+                key=key,
+                value=value,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                slot_mapping=slot_mapping,
+            )
         _append_jsonl(output_path, record)
         return record
     except Exception:
