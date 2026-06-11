@@ -87,6 +87,88 @@ def _good_report() -> dict:
     }
 
 
+def _mixed_report() -> dict:
+    return {
+        "total_prompts": 3,
+        "baseline_success_count": 3,
+        "active_success_count": 3,
+        "output_changed_count": 2,
+        "mutation_applied_prompt_count": 2,
+        "total_remapped_slot_count": 32,
+        "max_visible_block_count": 3,
+        "max_selected_block_count": 2,
+        "max_unselected_block_count": 1,
+        "active_routing_count": 2,
+        "runtime_behavior_changed_count": 2,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "s2_1_active_mask_passed": True,
+        "prompt_results": [
+            {
+                "prompt_index": 0,
+                "prompt": "p0",
+                "baseline_status": "succeeded",
+                "active_status": "succeeded",
+                "baseline_output": "baseline0",
+                "active_output": "active0",
+                "baseline_error": None,
+                "active_error": None,
+                "output_changed": False,
+                "records_written": 1,
+                "max_visible_block_count": 1,
+                "max_selected_block_count": 1,
+                "max_unselected_block_count": 0,
+                "total_remapped_slot_count": 0,
+                "mutation_attempted_count": 0,
+                "mutation_applied_count": 0,
+                "active_routing_count": 0,
+                "runtime_behavior_changed_count": 0,
+            },
+            {
+                "prompt_index": 1,
+                "prompt": "p1",
+                "baseline_status": "succeeded",
+                "active_status": "succeeded",
+                "baseline_output": "baseline1",
+                "active_output": "active1",
+                "baseline_error": None,
+                "active_error": None,
+                "output_changed": True,
+                "records_written": 1,
+                "max_visible_block_count": 2,
+                "max_selected_block_count": 1,
+                "max_unselected_block_count": 1,
+                "total_remapped_slot_count": 16,
+                "mutation_attempted_count": 1,
+                "mutation_applied_count": 1,
+                "active_routing_count": 1,
+                "runtime_behavior_changed_count": 1,
+            },
+            {
+                "prompt_index": 2,
+                "prompt": "p2",
+                "baseline_status": "succeeded",
+                "active_status": "succeeded",
+                "baseline_output": "baseline2",
+                "active_output": "active2",
+                "baseline_error": None,
+                "active_error": None,
+                "output_changed": True,
+                "records_written": 1,
+                "max_visible_block_count": 3,
+                "max_selected_block_count": 2,
+                "max_unselected_block_count": 1,
+                "total_remapped_slot_count": 16,
+                "mutation_attempted_count": 1,
+                "mutation_applied_count": 1,
+                "active_routing_count": 1,
+                "runtime_behavior_changed_count": 1,
+            },
+        ],
+    }
+
+
 def test_visible_selected_unselected_block_derivation():
     helper = _load_helper()
     slots = torch.tensor([-1, 0, 1, 16, 17, 32, -1], dtype=torch.int64)
@@ -204,6 +286,18 @@ def test_validator_passes_good_report():
     )
 
     result = validator.validate_report(_good_report())
+
+    assert result["validation_passed"] is True
+    assert result["errors"] == []
+
+
+def test_validator_passes_mixed_report_with_noop_prompt():
+    validator = _load_script(
+        "validate_source_s2_1_active_block_mask.py",
+        "source_s2_1_validator_mixed_test",
+    )
+
+    result = validator.validate_report(_mixed_report())
 
     assert result["validation_passed"] is True
     assert result["errors"] == []

@@ -77,3 +77,8 @@ not demonstrate:
 If output changes sharply, the policy is too crude. That is still useful, but
 it means the next step should be a more careful block-selection strategy, not
 a claim of success.
+
+Prompts with only one visible block, or with no unselected older blocks, are
+valid no-op cases. They should pass when baseline and active generations both
+succeed, with remap counts staying at zero. S2.1 passes if at least one
+eligible prompt applies remapping.

@@ -68,6 +68,13 @@ def _true_claims(value: Any, path: str = "") -> list[str]:
     return found
 
 
+def _prompt_can_remap(item: dict[str, Any]) -> bool:
+    return (
+        int(item.get("max_visible_block_count", 0) or 0) >= 2
+        and int(item.get("max_unselected_block_count", 0) or 0) > 0
+    )
+
+
 def validate_report(report: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     required = [
@@ -96,8 +103,6 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         errors.append("baseline_success_count must equal total_prompts")
     if report.get("active_success_count") != total_prompts:
         errors.append("active_success_count must equal total_prompts")
-    if int(report.get("mutation_applied_prompt_count", 0) or 0) <= 0:
-        errors.append("mutation_applied_prompt_count must be > 0")
     if int(report.get("total_remapped_slot_count", 0) or 0) <= 0:
         errors.append("total_remapped_slot_count must be > 0")
     for field in [
@@ -116,13 +121,6 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         )
     if report.get("s2_1_active_mask_passed") is not True:
         errors.append("s2_1_active_mask_passed must be true")
-    if int(report.get("mutation_applied_prompt_count", 0) or 0) > 0:
-        if int(report.get("active_routing_count", 0) or 0) <= 0:
-            errors.append("active_routing_count must be > 0 when remaps apply")
-        if int(report.get("runtime_behavior_changed_count", 0) or 0) <= 0:
-            errors.append(
-                "runtime_behavior_changed_count must be > 0 when remaps apply"
-            )
 
     prompt_results = report.get("prompt_results", [])
     if (
@@ -157,19 +155,45 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
                     f"prompt result {index} missing field {field}"
                 )
         if item.get("active_status") == "succeeded":
-            if item.get("mutation_applied_count", 0) <= 0:
-                errors.append(
-                    f"prompt result {index} must remap at least one slot"
-                )
-            if item.get("active_routing_count", 0) <= 0:
-                errors.append(
-                    f"prompt result {index} must have active_routing_count > 0"
-                )
-            if item.get("runtime_behavior_changed_count", 0) <= 0:
-                errors.append(
-                    f"prompt result {index} must have "
-                    "runtime_behavior_changed_count > 0"
-                )
+            can_remap = _prompt_can_remap(item)
+            if can_remap:
+                if item.get("mutation_applied_count", 0) <= 0:
+                    errors.append(
+                        f"prompt result {index} must remap at least one slot"
+                    )
+                if item.get("total_remapped_slot_count", 0) <= 0:
+                    errors.append(
+                        f"prompt result {index} must have total_remapped_slot_count > 0"
+                    )
+                if item.get("active_routing_count", 0) <= 0:
+                    errors.append(
+                        f"prompt result {index} must have active_routing_count > 0"
+                    )
+                if item.get("runtime_behavior_changed_count", 0) <= 0:
+                    errors.append(
+                        f"prompt result {index} must have "
+                        "runtime_behavior_changed_count > 0"
+                    )
+            else:
+                if item.get("mutation_applied_count", 0) != 0:
+                    errors.append(
+                        f"prompt result {index} is a no-op and must not remap"
+                    )
+                if item.get("total_remapped_slot_count", 0) != 0:
+                    errors.append(
+                        f"prompt result {index} is a no-op and must have "
+                        "total_remapped_slot_count == 0"
+                    )
+                if item.get("active_routing_count", 0) != 0:
+                    errors.append(
+                        f"prompt result {index} is a no-op and must have "
+                        "active_routing_count == 0"
+                    )
+                if item.get("runtime_behavior_changed_count", 0) != 0:
+                    errors.append(
+                        f"prompt result {index} is a no-op and must have "
+                        "runtime_behavior_changed_count == 0"
+                    )
 
     return {
         "validation_passed": not errors,
