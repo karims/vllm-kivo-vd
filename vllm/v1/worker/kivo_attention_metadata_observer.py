@@ -33,6 +33,11 @@ _SHADOW_SKETCH_SCHEMA_VERSION = (
 )
 _SHADOW_SKETCH_POLICY_NAME = "shadow_sketch_selected_attention_metadata"
 _SHADOW_SKETCH_SELECTION_POLICY_NAME = "slot_coverage_recency_proxy"
+_ACTIVE_SCHEMA_VERSION = (
+    "kivo_source_s3_2a_active_selected_attention_metadata_v1"
+)
+_ACTIVE_POLICY_NAME = "active_sketch_selected_attention_metadata"
+_ACTIVE_FILTER_MODE = "alias_excluded_blocks_to_recent_selected"
 _DEFAULT_BUDGET_RATIO = 0.5
 _DEFAULT_KEEP_RECENT_BLOCKS = 1
 _DEFAULT_COVERAGE_WEIGHT = 0.6
@@ -200,20 +205,62 @@ def _visible_block_count_estimate(
     return len(visible_blocks), None
 
 
-def _extract_visible_block_ids(
+def _extract_visible_block_entries(
     block_table_tensor: Any,
-) -> tuple[list[int] | None, str | None]:
+    *,
+    seq_lens: Any,
+    block_size: int,
+) -> tuple[list[tuple[int, int]] | None, str | None]:
     values, value_caveat = _safe_exact_int_values(block_table_tensor)
     if values is None:
         return None, value_caveat or "block_table unavailable"
+    shape = getattr(block_table_tensor, "shape", None)
+    if shape is None or len(shape) != 2:
+        return None, "block_table shape is not two-dimensional"
+    try:
+        num_rows = int(shape[0])
+        num_cols = int(shape[1])
+    except Exception:
+        return None, "block_table shape unavailable"
+    seq_len_values, seq_lens_caveat = _safe_exact_int_values(seq_lens)
+    if seq_len_values is None:
+        return None, seq_lens_caveat or "seq_lens unavailable"
+    if block_size <= 0:
+        return None, "invalid block_size"
+
+    entries: list[tuple[int, int]] = []
+    for row in range(min(num_rows, len(seq_len_values))):
+        valid_cols = min(
+            num_cols,
+            max(0, int(math.ceil(seq_len_values[row] / block_size))),
+        )
+        for col in range(valid_cols):
+            flat_index = row * num_cols + col
+            block_id = values[flat_index]
+            if block_id >= 0:
+                entries.append((flat_index, block_id))
+    return entries, None
+
+
+def _extract_visible_block_ids(
+    block_table_tensor: Any,
+    *,
+    seq_lens: Any,
+    block_size: int,
+) -> tuple[list[int] | None, str | None]:
+    entries, entries_caveat = _extract_visible_block_entries(
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
+    )
+    if entries is None:
+        return None, entries_caveat
     visible_block_ids: list[int] = []
     seen: set[int] = set()
-    for raw_block_id in values:
-        if raw_block_id < 0:
-            continue
-        if raw_block_id not in seen:
-            seen.add(raw_block_id)
-            visible_block_ids.append(raw_block_id)
+    for _, block_id in entries:
+        if block_id not in seen:
+            seen.add(block_id)
+            visible_block_ids.append(block_id)
     return visible_block_ids, None
 
 
@@ -394,6 +441,8 @@ def _plan_shadow_sketch_selection(
             "block_score_sample": [],
             "fallback_used": False,
             "fallback_reason": None,
+            "_selected_block_ids": [],
+            "_excluded_block_ids": [],
         }, caveats
 
     keep_recent = min(max(0, keep_recent_blocks), visible_count)
@@ -419,6 +468,8 @@ def _plan_shadow_sketch_selection(
             "block_score_sample": [],
             "fallback_used": True,
             "fallback_reason": "visible_block_ids_unavailable",
+            "_selected_block_ids": [],
+            "_excluded_block_ids": [],
         }, caveats
 
     recent_ids = visible_block_ids[-keep_recent:] if keep_recent > 0 else []
@@ -508,6 +559,8 @@ def _plan_shadow_sketch_selection(
         "block_score_sample": block_score_sample,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
+        "_selected_block_ids": selected_ids,
+        "_excluded_block_ids": excluded_ids,
     }, caveats
 
 
@@ -681,7 +734,9 @@ def _build_shadow_plan_record(
         minimum=0,
     )
     visible_block_ids, visible_block_ids_caveat = _extract_visible_block_ids(
-        block_table_tensor
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
     )
     visible_block_count_estimate = (
         len(visible_block_ids) if visible_block_ids is not None else None
@@ -794,7 +849,9 @@ def _build_shadow_sketch_plan_record(
         maximum=1.0,
     )
     visible_block_ids, visible_block_ids_caveat = _extract_visible_block_ids(
-        block_table_tensor
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
     )
     visible_block_count_estimate = (
         len(visible_block_ids) if visible_block_ids is not None else None
@@ -825,6 +882,8 @@ def _build_shadow_sketch_plan_record(
         coverage_weight=coverage_weight,
         recency_weight=recency_weight,
     )
+    selection_plan.pop("_selected_block_ids", None)
+    selection_plan.pop("_excluded_block_ids", None)
     caveats = [
         "shadow planning only; no runtime state is mutated",
         "proxy scoring uses metadata-derived coverage and recency only",
@@ -874,6 +933,208 @@ def _build_shadow_sketch_plan_record(
     return record
 
 
+def _build_active_selected_attention_record(
+    *,
+    hook_point: str,
+    kv_cache_group_id: int,
+    common_attn_metadata: Any,
+    kv_cache_spec: Any,
+    env_debug: dict[str, Any],
+) -> dict[str, Any]:
+    block_table_tensor = getattr(common_attn_metadata, "block_table_tensor", None)
+    slot_mapping = getattr(common_attn_metadata, "slot_mapping", None)
+    query_start_loc = getattr(common_attn_metadata, "query_start_loc", None)
+    seq_lens = getattr(common_attn_metadata, "seq_lens", None)
+    positions = getattr(common_attn_metadata, "positions", None)
+    max_query_len = getattr(common_attn_metadata, "max_query_len", None)
+    max_seq_len = getattr(common_attn_metadata, "max_seq_len", None)
+    block_size = int(
+        getattr(kv_cache_spec, "storage_block_size", None)
+        or getattr(kv_cache_spec, "block_size", 0)
+        or 0
+    )
+    pad_slot_id = int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1
+    budget_ratio = _parse_env_float(
+        "KIVO_SOURCE_BUDGET_RATIO",
+        default=_DEFAULT_BUDGET_RATIO,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    keep_recent_blocks = _parse_env_int(
+        "KIVO_SOURCE_KEEP_RECENT_BLOCKS",
+        default=_DEFAULT_KEEP_RECENT_BLOCKS,
+        minimum=0,
+    )
+    coverage_weight = _parse_env_float(
+        "KIVO_SOURCE_COVERAGE_WEIGHT",
+        default=_DEFAULT_COVERAGE_WEIGHT,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    recency_weight = _parse_env_float(
+        "KIVO_SOURCE_RECENCY_WEIGHT",
+        default=_DEFAULT_RECENCY_WEIGHT,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    active_filter_mode = os.getenv(
+        "KIVO_SOURCE_ACTIVE_FILTER_MODE",
+        _ACTIVE_FILTER_MODE,
+    )
+    visible_entries, visible_entries_caveat = _extract_visible_block_entries(
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
+    )
+    visible_block_ids: list[int] | None = None
+    if visible_entries is not None:
+        visible_block_ids = []
+        seen: set[int] = set()
+        for _, block_id in visible_entries:
+            if block_id not in seen:
+                seen.add(block_id)
+                visible_block_ids.append(block_id)
+    visible_block_count_estimate = (
+        len(visible_block_ids) if visible_block_ids is not None else None
+    )
+    estimate_caveat = None
+    if visible_block_count_estimate is None:
+        visible_block_count_estimate, estimate_caveat = _visible_block_count_estimate(
+            slot_mapping,
+            block_size=block_size,
+            pad_slot_id=pad_slot_id,
+        )
+    coverage_by_block, coverage_caveat = _slot_coverage_by_block(
+        slot_mapping,
+        block_size=block_size,
+        pad_slot_id=pad_slot_id,
+    )
+    selection_plan, plan_caveats = _plan_shadow_sketch_selection(
+        visible_block_ids=visible_block_ids,
+        visible_block_count_estimate=visible_block_count_estimate,
+        coverage_by_block=coverage_by_block,
+        budget_ratio=budget_ratio,
+        keep_recent_blocks=keep_recent_blocks,
+        coverage_weight=coverage_weight,
+        recency_weight=recency_weight,
+    )
+    selected_block_ids = list(selection_plan.pop("_selected_block_ids", []))
+    excluded_block_ids = list(selection_plan.pop("_excluded_block_ids", []))
+
+    mutation_attempted = True
+    mutation_applied = False
+    mutation_blocker_reason = None
+    alias_target_block_id = None
+    alias_pairs: list[dict[str, int]] = []
+    if active_filter_mode != _ACTIVE_FILTER_MODE:
+        mutation_blocker_reason = "unsupported active filter mode"
+    elif block_table_tensor is None:
+        mutation_blocker_reason = "block_table_tensor unavailable"
+    elif visible_entries is None:
+        mutation_blocker_reason = (
+            visible_entries_caveat or "visible block entries unavailable"
+        )
+    elif not selected_block_ids:
+        mutation_blocker_reason = "no safe selected block exists"
+    elif not excluded_block_ids:
+        mutation_blocker_reason = "no excluded blocks selected for aliasing"
+    elif not hasattr(block_table_tensor, "clone"):
+        mutation_blocker_reason = "block_table_tensor does not support clone"
+    else:
+        alias_target_block_id = int(selected_block_ids[-1])
+        excluded_set = set(excluded_block_ids)
+        if alias_target_block_id < 0:
+            mutation_blocker_reason = "alias target block id is invalid"
+        else:
+            try:
+                cloned_block_table = block_table_tensor.clone()
+                flat_block_table = cloned_block_table.reshape(-1)
+                aliased_ids: set[int] = set()
+                for flat_index, block_id in visible_entries:
+                    if block_id not in excluded_set:
+                        continue
+                    flat_block_table[flat_index] = alias_target_block_id
+                    aliased_ids.add(block_id)
+                if not aliased_ids:
+                    mutation_blocker_reason = "no excluded block entries found"
+                else:
+                    common_attn_metadata.block_table_tensor = cloned_block_table
+                    mutation_applied = True
+                    alias_pairs = [
+                        {
+                            "excluded_block_id": int(block_id),
+                            "alias_target_block_id": alias_target_block_id,
+                        }
+                        for block_id in excluded_block_ids
+                        if block_id in aliased_ids
+                    ]
+            except Exception as exc:
+                mutation_blocker_reason = (
+                    f"metadata clone or alias assignment failed: "
+                    f"{type(exc).__name__}"
+                )
+
+    caveats = [
+        "active feasibility experiment; metadata block table is cloned",
+        "KV allocation and scheduler-owned block tables are not mutated",
+        "excluded blocks are aliased, not removed from allocated KV",
+        "no memory reduction, latency, or quality claim is made",
+    ]
+    if visible_entries_caveat is not None:
+        caveats.append(f"visible block entries caveat: {visible_entries_caveat}")
+    if estimate_caveat is not None:
+        caveats.append(f"visible block estimate caveat: {estimate_caveat}")
+    if coverage_caveat is not None:
+        caveats.append(f"coverage caveat: {coverage_caveat}")
+    caveats.extend(plan_caveats)
+
+    block_table_info = _safe_tensor_info(block_table_tensor)
+    slot_mapping_info = _safe_tensor_info(slot_mapping)
+    query_start_loc_info = _safe_tensor_info(query_start_loc)
+    seq_lens_info = _safe_tensor_info(seq_lens)
+    positions_info = _safe_tensor_info(positions)
+    record = _common_metadata_record(
+        schema_version=_ACTIVE_SCHEMA_VERSION,
+        policy_name=_ACTIVE_POLICY_NAME,
+        hook_point=hook_point,
+        kv_cache_group_id=kv_cache_group_id,
+        block_size=block_size,
+        pad_slot_id=pad_slot_id,
+        env_debug=env_debug,
+        block_table_info=block_table_info,
+        slot_mapping_info=slot_mapping_info,
+        query_start_loc_info=query_start_loc_info,
+        seq_lens_info=seq_lens_info,
+        positions_info=positions_info,
+        max_query_len=max_query_len,
+        max_seq_len=max_seq_len,
+        visible_block_count_estimate=visible_block_count_estimate,
+    )
+    record.update({
+        "visible_block_ids_sample": (visible_block_ids or [])[:16],
+        "selection_policy_name": _SHADOW_SKETCH_SELECTION_POLICY_NAME,
+        "active_filter_mode": active_filter_mode,
+        "budget_ratio": budget_ratio,
+        "keep_recent_blocks": keep_recent_blocks,
+        "coverage_weight": coverage_weight,
+        "recency_weight": recency_weight,
+        **selection_plan,
+        "aliased_block_count": len(alias_pairs),
+        "alias_target_block_id": alias_target_block_id,
+        "alias_pairs_sample": alias_pairs[:16],
+        "mutation_attempted": mutation_attempted,
+        "mutation_applied": mutation_applied,
+        "mutation_blocker_reason": mutation_blocker_reason,
+        "active_routing": mutation_applied,
+        "runtime_behavior_changed": False,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "caveats": caveats,
+    })
+    return record
+
+
 def maybe_observe_attention_metadata(
     *,
     hook_point: str,
@@ -913,6 +1174,16 @@ def maybe_observe_attention_metadata(
             if hook_point != "_build_attention_metadata":
                 return None
             record = _build_shadow_sketch_plan_record(
+                hook_point=hook_point,
+                kv_cache_group_id=kv_cache_group_id,
+                common_attn_metadata=common_attn_metadata,
+                kv_cache_spec=kv_cache_spec,
+                env_debug=env_debug,
+            )
+        elif policy_name == _ACTIVE_POLICY_NAME:
+            if hook_point != "_build_attention_metadata":
+                return None
+            record = _build_active_selected_attention_record(
                 hook_point=hook_point,
                 kv_cache_group_id=kv_cache_group_id,
                 common_attn_metadata=common_attn_metadata,
