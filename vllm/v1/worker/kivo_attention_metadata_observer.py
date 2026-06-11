@@ -16,6 +16,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from vllm.v1.worker.kivo_runtime_counters import (
+    current_record_mode,
+    record_counter_event,
+)
+
 try:
     from vllm.v1.attention.backends.utils import PAD_SLOT_ID as _PAD_SLOT_ID
 except Exception:  # pragma: no cover - defensive fallback
@@ -90,6 +95,10 @@ def _env_debug() -> dict[str, Any]:
         "kivo_source_policy_seen": _current_policy_name(),
         "observe_path_present": observe_path is not None,
     }
+
+
+def _record_mode() -> str:
+    return current_record_mode()
 
 
 def _safe_tensor_info(value: Any) -> dict[str, Any]:
@@ -1681,8 +1690,8 @@ def maybe_observe_attention_metadata(
         env_debug = _env_debug()
         if not env_debug["kivo_source_enable_seen"]:
             return None
-        output_path = _observation_path()
-        if output_path is None:
+        record_mode = _record_mode()
+        if record_mode == "off":
             return None
 
         policy_name = env_debug["kivo_source_policy_seen"]
@@ -1747,7 +1756,12 @@ def maybe_observe_attention_metadata(
         else:
             return None
 
-        _append_jsonl(output_path, record)
+        record_counter_event(record)
+        if record_mode == "events":
+            output_path = _observation_path()
+            if output_path is None:
+                return None
+            _append_jsonl(output_path, record)
         return record
     except Exception:
         return None
