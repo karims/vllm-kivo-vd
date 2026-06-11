@@ -44,6 +44,13 @@ _RECENT_WINDOW_SCHEMA_VERSION = (
 _RECENT_WINDOW_POLICY_NAME = "active_recent_window_attention_metadata"
 _RECENT_WINDOW_FILTER_MODE = "compact_to_recent_window"
 _RECENT_WINDOW_SELECTION_POLICY_NAME = "recent_window_compaction"
+_ACTIVE_SKETCH_PLAN_SCHEMA_VERSION = "kivo_source_s3_3c_active_sketch_plan_v1"
+_ACTIVE_SKETCH_METADATA_SCHEMA_VERSION = (
+    "kivo_source_s3_3c_active_sketch_metadata_alias_v1"
+)
+_ACTIVE_SKETCH_POLICY_NAME = "active_sketch_kv_metadata_alias"
+_ACTIVE_SKETCH_FILTER_MODE = "alias_excluded_blocks_to_sketch_selected"
+_ACTIVE_SKETCH_SELECTION_POLICY_NAME = "kv_block_random_projection_l2"
 _DEFAULT_BUDGET_RATIO = 0.5
 _DEFAULT_KEEP_RECENT_BLOCKS = 1
 _DEFAULT_COVERAGE_WEIGHT = 0.6
@@ -1395,6 +1402,273 @@ def _build_active_recent_window_record(
     return record
 
 
+def _build_active_sketch_metadata_alias_record(
+    *,
+    hook_point: str,
+    kv_cache_group_id: int,
+    common_attn_metadata: Any,
+    kv_cache_spec: Any,
+    env_debug: dict[str, Any],
+) -> dict[str, Any]:
+    block_table_tensor = getattr(common_attn_metadata, "block_table_tensor", None)
+    slot_mapping = getattr(common_attn_metadata, "slot_mapping", None)
+    query_start_loc = getattr(common_attn_metadata, "query_start_loc", None)
+    seq_lens = getattr(common_attn_metadata, "seq_lens", None)
+    positions = getattr(common_attn_metadata, "positions", None)
+    max_query_len = getattr(common_attn_metadata, "max_query_len", None)
+    max_seq_len = getattr(common_attn_metadata, "max_seq_len", None)
+    block_size = int(
+        getattr(kv_cache_spec, "storage_block_size", None)
+        or getattr(kv_cache_spec, "block_size", 0)
+        or 0
+    )
+    active_filter_mode = os.getenv(
+        "KIVO_SOURCE_ACTIVE_FILTER_MODE",
+        _ACTIVE_SKETCH_FILTER_MODE,
+    )
+    block_table_info = _safe_tensor_info(block_table_tensor)
+    slot_mapping_info = _safe_tensor_info(slot_mapping)
+    query_start_loc_info = _safe_tensor_info(query_start_loc)
+    seq_lens_info = _safe_tensor_info(seq_lens)
+    positions_info = _safe_tensor_info(positions)
+    visible_entries, visible_entries_caveat = _extract_visible_block_entries(
+        block_table_tensor,
+        seq_lens=seq_lens,
+        block_size=block_size,
+    )
+    visible_block_ids: list[int] | None = None
+    if visible_entries is not None:
+        visible_block_ids = []
+        seen: set[int] = set()
+        for _, block_id in visible_entries:
+            if block_id not in seen:
+                seen.add(block_id)
+                visible_block_ids.append(block_id)
+    visible_block_count_estimate = (
+        len(visible_block_ids) if visible_block_ids is not None else None
+    )
+    estimate_caveat = None
+    if visible_block_count_estimate is None:
+        visible_block_count_estimate, estimate_caveat = _visible_block_count_estimate(
+            slot_mapping,
+            block_size=block_size,
+            pad_slot_id=int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1,
+        )
+
+    sketch_plan = None
+    sketch_plan_blocker_reason = None
+    try:
+        from vllm.v1.worker.kivo_attention_tensor_observer import (
+            get_latest_sketch_plan,
+        )
+
+        sketch_plan = get_latest_sketch_plan(
+            pid=os.getpid(),
+        )
+    except Exception as exc:
+        sketch_plan_blocker_reason = (
+            f"sketch plan import or lookup failed: {type(exc).__name__}"
+        )
+
+    latest_candidate_block_ids = list(
+        (sketch_plan or {}).get("candidate_block_ids", [])
+    )
+    latest_selected_block_ids = list(
+        (sketch_plan or {}).get("selected_block_ids", [])
+    )
+    latest_excluded_block_ids = list(
+        (sketch_plan or {}).get("excluded_block_ids", [])
+    )
+    sketch_dim = (sketch_plan or {}).get(
+        "sketch_dim",
+        _parse_env_int("KIVO_SOURCE_SKETCH_DIM", default=8, minimum=1),
+    )
+    max_sketch_blocks = (sketch_plan or {}).get(
+        "max_sketch_blocks",
+        _parse_env_int("KIVO_SOURCE_MAX_SKETCH_BLOCKS", default=4, minimum=1),
+    )
+    budget_ratio = float(
+        (sketch_plan or {}).get(
+            "budget_ratio",
+            _parse_env_float(
+                "KIVO_SOURCE_BUDGET_RATIO",
+                default=_DEFAULT_BUDGET_RATIO,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+        )
+    )
+
+    mutation_attempted = True
+    mutation_applied = False
+    mutation_blocker_reason = None
+    sketch_plan_used = False
+    alias_target_block_id = None
+    alias_pairs: list[dict[str, int]] = []
+    selected_block_ids: list[int] = []
+    excluded_block_ids: list[int] = []
+
+    if active_filter_mode != _ACTIVE_SKETCH_FILTER_MODE:
+        mutation_blocker_reason = "unsupported active filter mode"
+    elif block_table_tensor is None:
+        mutation_blocker_reason = "block_table_tensor unavailable"
+    elif visible_entries is None:
+        mutation_blocker_reason = (
+            visible_entries_caveat or "visible block entries unavailable"
+        )
+    elif not visible_block_ids:
+        mutation_blocker_reason = "no visible block ids available"
+    elif sketch_plan is None:
+        mutation_blocker_reason = (
+            sketch_plan_blocker_reason or "latest sketch plan unavailable"
+        )
+    elif sketch_plan.get("sketch_computed") is not True:
+        mutation_blocker_reason = (
+            sketch_plan.get("sketch_blocker_reason")
+            or "latest sketch plan was not computed"
+        )
+    elif not latest_candidate_block_ids:
+        mutation_blocker_reason = "latest sketch plan has no candidate blocks"
+    else:
+        visible_set = set(visible_block_ids)
+        candidate_overlap = [
+            block_id
+            for block_id in latest_candidate_block_ids
+            if block_id in visible_set
+        ]
+        if not candidate_overlap:
+            mutation_blocker_reason = (
+                "sketch_plan_no_overlap_with_metadata_visible_blocks"
+            )
+        else:
+            selected_block_ids = [
+                int(block_id)
+                for block_id in latest_selected_block_ids
+                if block_id in visible_set
+            ]
+            if not selected_block_ids:
+                selected_block_ids = [int(visible_block_ids[-1])]
+            selected_set = set(selected_block_ids)
+            excluded_block_ids = [
+                int(block_id)
+                for block_id in visible_block_ids
+                if block_id not in selected_set
+            ]
+            sketch_plan_used = True
+            if not excluded_block_ids:
+                mutation_blocker_reason = (
+                    "no excluded visible blocks after sketch selection"
+                )
+            elif not hasattr(block_table_tensor, "clone"):
+                mutation_blocker_reason = "block_table_tensor does not support clone"
+            else:
+                alias_target_block_id = int(selected_block_ids[-1])
+                if alias_target_block_id < 0:
+                    mutation_blocker_reason = "alias target block id is invalid"
+                else:
+                    try:
+                        cloned_block_table = block_table_tensor.clone()
+                        flat_block_table = cloned_block_table.reshape(-1)
+                        excluded_set = set(excluded_block_ids)
+                        aliased_ids: set[int] = set()
+                        for flat_index, block_id in visible_entries:
+                            if block_id not in excluded_set:
+                                continue
+                            flat_block_table[flat_index] = alias_target_block_id
+                            aliased_ids.add(block_id)
+                        if not aliased_ids:
+                            mutation_blocker_reason = "no excluded block entries found"
+                        else:
+                            common_attn_metadata.block_table_tensor = cloned_block_table
+                            mutation_applied = True
+                            alias_pairs = [
+                                {
+                                    "excluded_block_id": int(block_id),
+                                    "alias_target_block_id": alias_target_block_id,
+                                }
+                                for block_id in excluded_block_ids
+                                if block_id in aliased_ids
+                            ]
+                    except Exception as exc:
+                        mutation_blocker_reason = (
+                            "metadata clone or alias assignment failed: "
+                            f"{type(exc).__name__}"
+                        )
+
+    blocker_event = bool(
+        sketch_plan_blocker_reason is not None or mutation_blocker_reason is not None
+    )
+    caveats = [
+        "active sketch aliasing uses cloned metadata only",
+        "real sketch plans come from the runtime kv_cache hook",
+        (
+            "scheduler-owned block tables, slot mappings, and KV allocation "
+            "remain unchanged"
+        ),
+        (
+            "this does not prove memory reduction, latency reduction, "
+            "or quality preservation"
+        ),
+    ]
+    if visible_entries_caveat is not None:
+        caveats.append(f"visible block entries caveat: {visible_entries_caveat}")
+    if estimate_caveat is not None:
+        caveats.append(f"visible block estimate caveat: {estimate_caveat}")
+    if sketch_plan_blocker_reason is not None:
+        caveats.append(f"sketch plan caveat: {sketch_plan_blocker_reason}")
+
+    record = _common_metadata_record(
+        schema_version=_ACTIVE_SKETCH_METADATA_SCHEMA_VERSION,
+        policy_name=_ACTIVE_SKETCH_POLICY_NAME,
+        hook_point=hook_point,
+        kv_cache_group_id=kv_cache_group_id,
+        block_size=block_size,
+        pad_slot_id=int(_PAD_SLOT_ID) if isinstance(_PAD_SLOT_ID, int) else -1,
+        env_debug=env_debug,
+        block_table_info=block_table_info,
+        slot_mapping_info=slot_mapping_info,
+        query_start_loc_info=query_start_loc_info,
+        seq_lens_info=seq_lens_info,
+        positions_info=positions_info,
+        max_query_len=max_query_len,
+        max_seq_len=max_seq_len,
+        visible_block_count_estimate=visible_block_count_estimate,
+    )
+    record.update({
+        "active_filter_mode": active_filter_mode,
+        "selection_policy_name": _ACTIVE_SKETCH_SELECTION_POLICY_NAME,
+        "sketch_source": "kv_cache",
+        "sketch_method": "random_projection_l2",
+        "sketch_dim": int(sketch_dim),
+        "max_sketch_blocks": int(max_sketch_blocks),
+        "budget_ratio": budget_ratio,
+        "visible_block_ids_sample": (visible_block_ids or [])[:16],
+        "latest_sketch_candidate_block_ids_sample": latest_candidate_block_ids[:16],
+        "latest_sketch_selected_block_ids_sample": latest_selected_block_ids[:16],
+        "latest_sketch_excluded_block_ids_sample": latest_excluded_block_ids[:16],
+        "selected_block_count": len(selected_block_ids),
+        "selected_block_ids_sample": selected_block_ids[:16],
+        "excluded_block_count": len(excluded_block_ids),
+        "excluded_block_ids_sample": excluded_block_ids[:16],
+        "alias_pairs_sample": alias_pairs[:16],
+        "alias_target_block_id": alias_target_block_id,
+        "aliased_block_count": len(alias_pairs),
+        "sketch_plan_used": sketch_plan_used,
+        "sketch_plan_blocker_reason": sketch_plan_blocker_reason,
+        "mutation_attempted": mutation_attempted,
+        "mutation_applied": mutation_applied,
+        "mutation_blocker_reason": mutation_blocker_reason,
+        "active_routing": mutation_applied,
+        "runtime_behavior_changed": False,
+        "measured_runtime_reduction": False,
+        "selected_attention_claim_allowed": False,
+        "performance_claim_allowed": False,
+        "blocker_event": blocker_event,
+        "caveats": caveats,
+    })
+    return record
+
+
 def maybe_observe_attention_metadata(
     *,
     hook_point: str,
@@ -1454,6 +1728,16 @@ def maybe_observe_attention_metadata(
             if hook_point != "_build_attention_metadata":
                 return None
             record = _build_active_recent_window_record(
+                hook_point=hook_point,
+                kv_cache_group_id=kv_cache_group_id,
+                common_attn_metadata=common_attn_metadata,
+                kv_cache_spec=kv_cache_spec,
+                env_debug=env_debug,
+            )
+        elif policy_name == _ACTIVE_SKETCH_POLICY_NAME:
+            if hook_point != "_build_attention_metadata":
+                return None
+            record = _build_active_sketch_metadata_alias_record(
                 hook_point=hook_point,
                 kv_cache_group_id=kv_cache_group_id,
                 common_attn_metadata=common_attn_metadata,

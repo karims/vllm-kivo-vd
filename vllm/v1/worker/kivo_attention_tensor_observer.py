@@ -19,6 +19,8 @@ SCHEMA_VERSION = "kivo_source_s3_3a_attention_tensor_sketch_observer_v1"
 POLICY_NAME = "observe_attention_tensors_for_sketch"
 S3_3B_SCHEMA_VERSION = "kivo_source_s3_3b_shadow_kv_block_sketch_v1"
 S3_3B_POLICY_NAME = "shadow_kv_block_sketch"
+S3_3C_PLAN_SCHEMA_VERSION = "kivo_source_s3_3c_active_sketch_plan_v1"
+S3_3C_POLICY_NAME = "active_sketch_kv_metadata_alias"
 S3_3B_SKETCH_METHOD = "random_projection_l2"
 HOOK_POINT = "unified_attention_with_output"
 _PAD_SLOT_ID = -1
@@ -27,6 +29,8 @@ _SEQUENCE_LOCK = threading.Lock()
 _SEQUENCE_ID = 0
 _PROJECTION_CACHE_LOCK = threading.Lock()
 _PROJECTION_CACHE: dict[tuple[int, int, str, int], torch.Tensor] = {}
+_PLAN_CACHE_LOCK = threading.Lock()
+_LATEST_SKETCH_PLAN_BY_LAYER: dict[tuple[int, int | None], dict[str, Any]] = {}
 
 
 def _next_sequence_id() -> int:
@@ -228,6 +232,61 @@ def _projection_tensor(
     return projection
 
 
+def _store_latest_sketch_plan(record: dict[str, Any]) -> None:
+    layer_index = record.get("layer_index")
+    key = (int(record.get("pid", os.getpid())), int(layer_index)
+           if layer_index is not None else None)
+    plan = {
+        "schema_version": record.get("schema_version"),
+        "policy_name": record.get("policy_name"),
+        "timestamp": record.get("timestamp"),
+        "sequence_id": record.get("sequence_id"),
+        "pid": key[0],
+        "layer_name": record.get("layer_name"),
+        "layer_index": key[1],
+        "sketch_dim": record.get("sketch_dim"),
+        "max_sketch_blocks": record.get("max_sketch_blocks"),
+        "budget_ratio": record.get("budget_ratio"),
+        "current_physical_block_id": record.get("current_physical_block_id"),
+        "candidate_block_ids": list(record.get("candidate_block_ids_sample", [])),
+        "selected_block_ids": list(record.get("selected_block_ids_sample", [])),
+        "excluded_block_ids": list(record.get("excluded_block_ids_sample", [])),
+        "sketch_computed": record.get("sketch_computed") is True,
+        "sketch_blocker_reason": record.get("sketch_blocker_reason"),
+    }
+    with _PLAN_CACHE_LOCK:
+        _LATEST_SKETCH_PLAN_BY_LAYER[key] = plan
+        if len(_LATEST_SKETCH_PLAN_BY_LAYER) > 64:
+            oldest_key = min(
+                _LATEST_SKETCH_PLAN_BY_LAYER,
+                key=lambda item: float(
+                    _LATEST_SKETCH_PLAN_BY_LAYER[item].get("timestamp", 0.0) or 0.0
+                ),
+            )
+            _LATEST_SKETCH_PLAN_BY_LAYER.pop(oldest_key, None)
+
+
+def get_latest_sketch_plan(
+    *,
+    pid: int | None = None,
+    layer_index: int | None = None,
+) -> dict[str, Any] | None:
+    effective_pid = int(pid if pid is not None else os.getpid())
+    with _PLAN_CACHE_LOCK:
+        if layer_index is not None:
+            plan = _LATEST_SKETCH_PLAN_BY_LAYER.get((effective_pid, int(layer_index)))
+            return dict(plan) if plan is not None else None
+        candidates = [
+            dict(plan)
+            for (cached_pid, _), plan in _LATEST_SKETCH_PLAN_BY_LAYER.items()
+            if cached_pid == effective_pid
+        ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: float(item.get("timestamp", 0.0) or 0.0))
+    return candidates[-1]
+
+
 def _sketch_block_tensor(
     block_tensor: torch.Tensor,
     *,
@@ -365,8 +424,10 @@ def build_attention_tensor_record(
     }
 
 
-def build_shadow_kv_block_sketch_record(
+def _build_kv_block_sketch_record(
     *,
+    schema_version: str,
+    policy_name: str,
     hook_point: str,
     layer_name: str | None,
     attn_layer: Any,
@@ -377,7 +438,7 @@ def build_shadow_kv_block_sketch_record(
     attn_metadata: Any,
     slot_mapping: Any,
 ) -> dict[str, Any]:
-    """Build a bounded real KV-cache block sketch record in shadow mode."""
+    """Build a bounded real KV-cache block sketch record."""
     query_info = _safe_tensor_info(query)
     key_info = _safe_tensor_info(key)
     value_info = _safe_tensor_info(value)
@@ -507,10 +568,10 @@ def build_shadow_kv_block_sketch_record(
         caveats.append(f"blocker: {blocker}")
 
     return {
-        "schema_version": S3_3B_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "timestamp": time.time(),
         "sequence_id": _next_sequence_id(),
-        "policy_name": S3_3B_POLICY_NAME,
+        "policy_name": policy_name,
         "hook_point": hook_point,
         "pid": os.getpid(),
         "layer_name": layer_name,
@@ -555,6 +616,60 @@ def build_shadow_kv_block_sketch_record(
     }
 
 
+def build_shadow_kv_block_sketch_record(
+    *,
+    hook_point: str,
+    layer_name: str | None,
+    attn_layer: Any,
+    query: Any,
+    key: Any,
+    value: Any,
+    kv_cache: Any,
+    attn_metadata: Any,
+    slot_mapping: Any,
+) -> dict[str, Any]:
+    return _build_kv_block_sketch_record(
+        schema_version=S3_3B_SCHEMA_VERSION,
+        policy_name=S3_3B_POLICY_NAME,
+        hook_point=hook_point,
+        layer_name=layer_name,
+        attn_layer=attn_layer,
+        query=query,
+        key=key,
+        value=value,
+        kv_cache=kv_cache,
+        attn_metadata=attn_metadata,
+        slot_mapping=slot_mapping,
+    )
+
+
+def build_active_sketch_plan_record(
+    *,
+    hook_point: str,
+    layer_name: str | None,
+    attn_layer: Any,
+    query: Any,
+    key: Any,
+    value: Any,
+    kv_cache: Any,
+    attn_metadata: Any,
+    slot_mapping: Any,
+) -> dict[str, Any]:
+    return _build_kv_block_sketch_record(
+        schema_version=S3_3C_PLAN_SCHEMA_VERSION,
+        policy_name=S3_3C_POLICY_NAME,
+        hook_point=hook_point,
+        layer_name=layer_name,
+        attn_layer=attn_layer,
+        query=query,
+        key=key,
+        value=value,
+        kv_cache=kv_cache,
+        attn_metadata=attn_metadata,
+        slot_mapping=slot_mapping,
+    )
+
+
 def maybe_observe_attention_tensors(
     *,
     hook_point: str,
@@ -575,7 +690,11 @@ def maybe_observe_attention_tensors(
         if os.getenv("KIVO_SOURCE_ENABLE") != "1":
             return None
         policy_name = os.getenv("KIVO_SOURCE_POLICY")
-        if policy_name not in {POLICY_NAME, S3_3B_POLICY_NAME}:
+        if policy_name not in {
+            POLICY_NAME,
+            S3_3B_POLICY_NAME,
+            S3_3C_POLICY_NAME,
+        }:
             return None
         output_path = _observation_path()
         if output_path is None:
@@ -592,7 +711,7 @@ def maybe_observe_attention_tensors(
                 attn_metadata=attn_metadata,
                 slot_mapping=slot_mapping,
             )
-        else:
+        elif policy_name == S3_3B_POLICY_NAME:
             record = build_shadow_kv_block_sketch_record(
                 hook_point=hook_point,
                 layer_name=layer_name,
@@ -604,6 +723,20 @@ def maybe_observe_attention_tensors(
                 attn_metadata=attn_metadata,
                 slot_mapping=slot_mapping,
             )
+        else:
+            record = build_active_sketch_plan_record(
+                hook_point=hook_point,
+                layer_name=layer_name,
+                attn_layer=attn_layer,
+                query=query,
+                key=key,
+                value=value,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                slot_mapping=slot_mapping,
+            )
+            if record.get("sketch_computed") is True:
+                _store_latest_sketch_plan(record)
         _append_jsonl(output_path, record)
         return record
     except Exception:

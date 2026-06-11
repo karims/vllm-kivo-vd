@@ -757,6 +757,7 @@ def unified_attention_with_output(
         in {
             "observe_attention_tensors_for_sketch",
             "shadow_kv_block_sketch",
+            "active_sketch_kv_metadata_alias",
         }
     ):
         try:
