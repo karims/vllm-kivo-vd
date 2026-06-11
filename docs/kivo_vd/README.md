@@ -330,6 +330,7 @@ This phase does not authorize vLLM integration.
 - [Phase S1: Source-Level Selected-Block State Mutation](source_s1_selected_block_state_mutation.md)
 - [Phase S1.3: Source-Level Policy Drift](source_s1_3_policy_drift.md)
 - [Phase S2.0: Block Visibility and Shadow Selection](source_s2_0_block_visibility_shadow.md)
+- [Phase S2.1: Active Block Mask](source_s2_1_active_block_mask.md)
 - [Phase S2: Source-Built vLLM Smoke Run](source_s2_runpod_source_build_smoke.md)
 
 Phase 12 starts a shadow-only vLLM integration design. The event contract
@@ -449,6 +450,11 @@ Phase S2.0 stops slot mutation and observes the real valid slots and visible KV
 block IDs after normal slot mapping completes. It computes a deterministic
 shadow selected-block set and records theoretical visible-block reduction, but
 does not apply the set or claim memory, latency, quality, or selected-attention
+improvement.
+
+Phase S2.1 keeps the same selected-block logic but actively remaps older,
+unselected block visibility in the slot mapping. It is a real source-level
+control path, but it still does not free KV memory or prove latency or quality
 improvement.
 
 Phase S2 is the source-built smoke runbook for S1. It checks whether the

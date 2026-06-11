@@ -272,6 +272,141 @@ def _select_shadow_blocks(
     ]
 
 
+def _choose_remap_block(
+    original_block_id: int,
+    selected_block_ids: list[int],
+) -> int | None:
+    if not selected_block_ids:
+        return None
+    lower_or_equal = [
+        block_id
+        for block_id in selected_block_ids
+        if block_id <= original_block_id
+    ]
+    if lower_or_equal:
+        return max(lower_or_equal)
+    return min(
+        selected_block_ids,
+        key=lambda block_id: (abs(block_id - original_block_id), block_id),
+    )
+
+
+def _apply_active_block_mask(
+    slot_mapping: Any,
+    *,
+    block_size: int,
+    selected_block_ids: list[int],
+    visible_block_ids: list[int],
+    keep_recent_blocks: int,
+) -> tuple[bool, dict[str, Any]]:
+    """Remap older unselected slots to selected blocks when safe."""
+
+    record: dict[str, Any] = {
+        "remapped_slot_count": 0,
+        "remapped_slot_sample": [],
+        "mutation_blocker_reason": None,
+        "keep_recent_blocks": keep_recent_blocks,
+        "budget_ratio": _env_float("KIVO_SOURCE_BUDGET_RATIO", 0.5),
+    }
+    if slot_mapping is None:
+        record["mutation_blocker_reason"] = (
+            "no safe Python-level slot mapping result found"
+        )
+        return False, record
+    if not _is_tensor_like(slot_mapping):
+        record["mutation_blocker_reason"] = (
+            "slot mapping is not tensor-like; active remap not attempted"
+        )
+        return False, record
+    if not _is_int_dtype(getattr(slot_mapping, "dtype", None)):
+        record["mutation_blocker_reason"] = (
+            "tensor-like slot mapping requires integer dtype for remap"
+        )
+        return False, record
+    if not selected_block_ids:
+        record["mutation_blocker_reason"] = "no selected blocks available"
+        return False, record
+    valid_entries = _valid_slot_entries(slot_mapping, _pad_slot_id())
+    observed_max_slot = (
+        max(
+            int(_slot_mapping_item(value))
+            for _, value in valid_entries
+            if int(_slot_mapping_item(value)) >= 0
+        )
+        if valid_entries
+        else -1
+    )
+    slot_limit = max(_tensor_numel(slot_mapping) or 0, observed_max_slot + 1)
+    if slot_limit <= 0:
+        record["mutation_blocker_reason"] = "slot mapping has no capacity"
+        return False, record
+    recent_count = min(max(int(keep_recent_blocks), 1), len(visible_block_ids))
+    recent_block_ids = visible_block_ids[-recent_count:]
+    recent_block_set = set(recent_block_ids)
+    selected_block_set = set(selected_block_ids)
+    unselected_block_ids = [
+        block_id
+        for block_id in visible_block_ids
+        if block_id not in selected_block_set
+    ]
+    if not unselected_block_ids:
+        record["mutation_blocker_reason"] = "no unselected older blocks found"
+        return False, record
+
+    remapped: list[dict[str, Any]] = []
+    for slot_index, slot_value in valid_entries:
+        try:
+            slot_id = int(slot_value)
+        except (TypeError, ValueError):
+            continue
+        if slot_id < 0:
+            continue
+        block_id = slot_id // block_size
+        if block_id in recent_block_set or block_id in selected_block_set:
+            continue
+        target_block_id = _choose_remap_block(block_id, selected_block_ids)
+        if target_block_id is None:
+            continue
+        offset = slot_id % block_size
+        new_slot = target_block_id * block_size + offset
+        if new_slot < 0 or new_slot >= slot_limit:
+            continue
+        if new_slot == slot_id:
+            continue
+        old_value = _slot_mapping_item(slot_mapping[slot_index])
+        try:
+            slot_mapping[slot_index] = int(new_slot)
+        except Exception as exc:
+            record["mutation_blocker_reason"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, record
+        remapped.append(
+            {
+                "slot_index": int(slot_index),
+                "old_value": old_value,
+                "new_value": int(new_slot),
+                "old_block_id": int(block_id),
+                "new_block_id": int(target_block_id),
+            }
+        )
+
+    if not remapped:
+        record["mutation_blocker_reason"] = (
+            "no remappable unselected slots found within observed range"
+        )
+        return False, record
+
+    record.update(
+        {
+            "remapped_slot_count": len(remapped),
+            "remapped_slot_sample": remapped[:32],
+            "mutation_blocker_reason": None,
+        }
+    )
+    return True, record
+
+
 def _build_block_visibility_shadow_record(
     instance: Any,
     *,
@@ -355,6 +490,106 @@ def _build_block_visibility_shadow_record(
             "no scheduler, attention, block table, or KV cache mutation",
         ],
     }
+
+
+def _build_active_block_mask_record(
+    instance: Any,
+    *,
+    function_name: str,
+) -> tuple[bool, dict[str, Any]]:
+    slot_mapping = _slot_mapping_view(instance)
+    block_table = _block_table_view(instance)
+    slot_info = _tensor_info(slot_mapping)
+    block_info = _tensor_info(block_table)
+    block_size = int(getattr(instance, "block_size", 0) or 0)
+    pad_slot_id = _pad_slot_id()
+    budget_ratio = min(
+        max(_env_float("KIVO_SOURCE_BUDGET_RATIO", 0.5), 0.0),
+        1.0,
+    )
+    keep_recent_blocks = max(
+        _env_int("KIVO_SOURCE_KEEP_RECENT_BLOCKS", 1),
+        1,
+    )
+    valid_slots, visible_blocks = _visible_block_ids(
+        slot_mapping,
+        block_size=block_size,
+        pad_slot_id=pad_slot_id,
+    )
+    selected_blocks = _select_shadow_blocks(
+        visible_blocks,
+        budget_ratio=budget_ratio,
+        keep_recent_blocks=keep_recent_blocks,
+    )
+    unselected_blocks = [
+        block_id
+        for block_id in visible_blocks
+        if block_id not in set(selected_blocks)
+    ]
+    attempted = (
+        len(visible_blocks) >= 2
+        and len(selected_blocks) < len(visible_blocks)
+    )
+    mutation_applied, mutation_record = (False, {"remapped_slot_count": 0, "remapped_slot_sample": [], "mutation_blocker_reason": None, "keep_recent_blocks": keep_recent_blocks, "budget_ratio": budget_ratio})
+    if attempted:
+        mutation_applied, mutation_record = _apply_active_block_mask(
+            slot_mapping,
+            block_size=block_size,
+            selected_block_ids=selected_blocks,
+            visible_block_ids=visible_blocks,
+            keep_recent_blocks=keep_recent_blocks,
+        )
+    remapped_count = int(mutation_record.get("remapped_slot_count", 0) or 0)
+    return (
+        mutation_applied,
+        {
+            "schema_version": "kivo_source_s2_1_active_block_mask_v1",
+            "timestamp": time.time(),
+            "pid": os.getpid(),
+            "hook_name": "BlockTable.compute_slot_mapping",
+            "function_name": function_name,
+            "block_size": block_size,
+            "slot_mapping_present": slot_mapping is not None,
+            "slot_mapping_shape": slot_info["shape"],
+            "slot_mapping_dtype": slot_info["dtype"],
+            "slot_mapping_device": slot_info["device"],
+            "block_table_present": block_table is not None,
+            "block_table_shape": block_info["shape"],
+            "block_table_dtype": block_info["dtype"],
+            "block_table_device": block_info["device"],
+            "valid_slot_count": len(valid_slots),
+            "valid_slot_min": min(valid_slots) if valid_slots else None,
+            "valid_slot_max": max(valid_slots) if valid_slots else None,
+            "visible_block_count": len(visible_blocks),
+            "visible_block_ids_sample": visible_blocks[:32],
+            "selected_block_count": len(selected_blocks),
+            "selected_block_ids_sample": selected_blocks[:32],
+            "unselected_block_count": len(unselected_blocks),
+            "unselected_block_ids_sample": unselected_blocks[:32],
+            "policy_name": "active_mask_unselected_blocks",
+            "keep_recent_blocks": keep_recent_blocks,
+            "budget_ratio": budget_ratio,
+            "remapped_slot_count": remapped_count,
+            "remapped_slot_sample": mutation_record.get(
+                "remapped_slot_sample", []
+            ),
+            "mutation_attempted": attempted,
+            "mutation_applied": mutation_applied,
+            "active_routing": mutation_applied,
+            "runtime_behavior_changed": mutation_applied,
+            "measured_runtime_reduction": False,
+            "selected_attention_claim_allowed": False,
+            "performance_claim_allowed": False,
+            "mutation_blocker_reason": mutation_record.get(
+                "mutation_blocker_reason"
+            ),
+            "caveats": [
+                "active remap only; selected blocks are approximated",
+                "no KV cache, scheduler, or attention kernel mutation",
+                "theoretical block control is not measured memory reduction",
+            ],
+        },
+    )
 
 
 def _maybe_mutate_slot_mapping(
@@ -630,6 +865,21 @@ def maybe_observe_compute_slot_mapping(
                     function_name=function_name,
                 ),
             )
+            return
+        if policy == "active_mask_unselected_blocks":
+            applied, record = _build_active_block_mask_record(
+                instance,
+                function_name=function_name,
+            )
+            record["mutation_attempted"] = bool(
+                record.get("visible_block_count", 0) >= 2
+                and record.get("selected_block_count", 0)
+                < record.get("visible_block_count", 0)
+            )
+            record["mutation_applied"] = applied
+            record["active_routing"] = applied
+            record["runtime_behavior_changed"] = applied
+            _append_jsonl(output_path, record)
             return
         slot_mapping = _slot_mapping_view(instance)
         block_table = _block_table_view(instance)
