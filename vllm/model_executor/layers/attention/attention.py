@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -746,7 +747,33 @@ def unified_attention_with_output(
     # attention forward.
     del kv_cache_dummy_dep
     layer_name = _resolve_layer_name(layer_name)
-    attn_metadata, self, kv_cache, _ = get_attention_context(layer_name)
+    attn_metadata, self, kv_cache, layer_slot_mapping = get_attention_context(
+        layer_name
+    )
+
+    if (
+        os.getenv("KIVO_SOURCE_ENABLE") == "1"
+        and os.getenv("KIVO_SOURCE_POLICY")
+        == "observe_attention_tensors_for_sketch"
+    ):
+        try:
+            from vllm.v1.worker.kivo_attention_tensor_observer import (
+                maybe_observe_attention_tensors,
+            )
+
+            maybe_observe_attention_tensors(
+                hook_point="unified_attention_with_output",
+                layer_name=layer_name,
+                attn_layer=self,
+                query=query,
+                key=key,
+                value=value,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                slot_mapping=layer_slot_mapping,
+            )
+        except Exception:
+            pass
 
     self.impl.forward(
         self,
