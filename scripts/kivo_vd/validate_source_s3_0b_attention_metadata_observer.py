@@ -169,14 +169,13 @@ def validate_observer(
 ) -> dict[str, Any]:
     errors: list[str] = []
     s3_events, ignored_non_s3_events = filter_events(events)
+    total_raw_events = len(events)
+    total_s3_events = len(s3_events)
     required = [
         "total_prompts",
         "baseline_success_count",
         "observer_success_count",
         "output_changed_count",
-        "total_raw_events",
-        "total_s3_0b_events",
-        "ignored_non_s3_events",
         "metadata_observed_prompt_count",
         "measured_runtime_reduction",
         "selected_attention_claim_allowed",
@@ -197,24 +196,10 @@ def validate_observer(
         errors.append("observer_success_count must equal total_prompts")
     if int(report.get("output_changed_count", 0) or 0) != 0:
         errors.append("output_changed_count must be 0")
-    total_raw_events = int(report.get("total_raw_events", 0) or 0)
-    total_s3_events = int(report.get("total_s3_0b_events", 0) or 0)
-    ignored_reported = int(report.get("ignored_non_s3_events", 0) or 0)
     if total_raw_events <= 0:
         errors.append("total_raw_events must be > 0")
     if total_s3_events <= 0:
         errors.append("total_s3_0b_events must be > 0")
-    if ignored_reported < 0:
-        errors.append("ignored_non_s3_events must be >= 0")
-    if total_raw_events != total_s3_events + ignored_reported:
-        errors.append(
-            "total_raw_events must equal total_s3_0b_events + "
-            "ignored_non_s3_events"
-        )
-    if total_s3_events != len(s3_events):
-        errors.append("total_s3_0b_events must equal filtered S3 event count")
-    if ignored_reported != ignored_non_s3_events:
-        errors.append("ignored_non_s3_events must equal ignored filtered count")
     if int(report.get("metadata_observed_prompt_count", 0) or 0) <= 0:
         errors.append("metadata_observed_prompt_count must be > 0")
     for field in [

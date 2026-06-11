@@ -105,9 +105,6 @@ def _good_report() -> dict[str, object]:
         "observer_success_count": 3,
         "output_changed_count": 0,
         "total_events": 4,
-        "total_raw_events": 4,
-        "total_s3_0b_events": 4,
-        "ignored_non_s3_events": 0,
         "metadata_observed_prompt_count": 3,
         "max_block_table_rows": 4,
         "max_block_table_cols": 5,
@@ -167,10 +164,6 @@ def test_summarize_records_counts_shapes():
 def test_validate_observer_passes_for_good_report_and_events():
     report = _good_report()
     events = [_good_event(), _good_event()]
-    report["total_events"] = len(events)
-    report["total_raw_events"] = len(events)
-    report["total_s3_0b_events"] = len(events)
-    report["ignored_non_s3_events"] = 0
     result = validator.validate_observer(report, events)
     assert result["validation_passed"] is True
     assert result["total_prompts"] == 3
@@ -197,10 +190,6 @@ def test_validate_observer_filters_mixed_schema_events():
         },
         _good_event(),
     ]
-    report["total_events"] = len(mixed_events)
-    report["total_raw_events"] = len(mixed_events)
-    report["total_s3_0b_events"] = 2
-    report["ignored_non_s3_events"] = 2
     result = validator.validate_observer(report, mixed_events)
     assert result["validation_passed"] is True
     assert result["total_raw_events"] == 4
@@ -212,10 +201,6 @@ def test_validate_observer_rejects_claims_and_runtime_changes():
     report = _good_report()
     report["measured_runtime_reduction"] = True
     events = [_good_event()]
-    report["total_events"] = len(events)
-    report["total_raw_events"] = len(events)
-    report["total_s3_0b_events"] = len(events)
-    report["ignored_non_s3_events"] = 0
     events[0]["active_routing"] = True
     events[0]["runtime_behavior_changed"] = True
     result = validator.validate_observer(report, events)
@@ -229,10 +214,6 @@ def test_validate_observer_rejects_claims_and_runtime_changes():
 
 def test_validate_observer_rejects_missing_or_empty_events(tmp_path: Path):
     report = _good_report()
-    report["total_events"] = 0
-    report["total_raw_events"] = 0
-    report["total_s3_0b_events"] = 0
-    report["ignored_non_s3_events"] = 0
     result = validator.validate_observer(report, [])
     assert result["validation_passed"] is False
     assert any("total_raw_events must be > 0" in e for e in result["errors"])
@@ -240,10 +221,6 @@ def test_validate_observer_rejects_missing_or_empty_events(tmp_path: Path):
 
 def test_validate_observer_rejects_mixed_events_with_no_s3_records():
     report = _good_report()
-    report["total_events"] = 2
-    report["total_raw_events"] = 2
-    report["total_s3_0b_events"] = 0
-    report["ignored_non_s3_events"] = 2
     result = validator.validate_observer(
         report,
         [
