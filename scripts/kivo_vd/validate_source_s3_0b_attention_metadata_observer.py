@@ -62,6 +62,18 @@ def load_events(path: str | Path) -> list[dict[str, Any]]:
     return events
 
 
+def filter_events(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    filtered = [
+        event
+        for event in events
+        if event.get("schema_version") == SCHEMA
+    ]
+    ignored = len(events) - len(filtered)
+    return filtered, ignored
+
+
 def _true_claims(value: Any, path: str = "") -> list[str]:
     found: list[str] = []
     if isinstance(value, dict):
@@ -156,12 +168,15 @@ def validate_observer(
     events: list[dict[str, Any]],
 ) -> dict[str, Any]:
     errors: list[str] = []
+    s3_events, ignored_non_s3_events = filter_events(events)
     required = [
         "total_prompts",
         "baseline_success_count",
         "observer_success_count",
         "output_changed_count",
-        "total_events",
+        "total_raw_events",
+        "total_s3_0b_events",
+        "ignored_non_s3_events",
         "metadata_observed_prompt_count",
         "measured_runtime_reduction",
         "selected_attention_claim_allowed",
@@ -182,8 +197,24 @@ def validate_observer(
         errors.append("observer_success_count must equal total_prompts")
     if int(report.get("output_changed_count", 0) or 0) != 0:
         errors.append("output_changed_count must be 0")
-    if int(report.get("total_events", 0) or 0) <= 0:
-        errors.append("total_events must be > 0")
+    total_raw_events = int(report.get("total_raw_events", 0) or 0)
+    total_s3_events = int(report.get("total_s3_0b_events", 0) or 0)
+    ignored_reported = int(report.get("ignored_non_s3_events", 0) or 0)
+    if total_raw_events <= 0:
+        errors.append("total_raw_events must be > 0")
+    if total_s3_events <= 0:
+        errors.append("total_s3_0b_events must be > 0")
+    if ignored_reported < 0:
+        errors.append("ignored_non_s3_events must be >= 0")
+    if total_raw_events != total_s3_events + ignored_reported:
+        errors.append(
+            "total_raw_events must equal total_s3_0b_events + "
+            "ignored_non_s3_events"
+        )
+    if total_s3_events != len(s3_events):
+        errors.append("total_s3_0b_events must equal filtered S3 event count")
+    if ignored_reported != ignored_non_s3_events:
+        errors.append("ignored_non_s3_events must equal ignored filtered count")
     if int(report.get("metadata_observed_prompt_count", 0) or 0) <= 0:
         errors.append("metadata_observed_prompt_count must be > 0")
     for field in [
@@ -227,13 +258,15 @@ def validate_observer(
         if int(item.get("records_written", 0) or 0) <= 0:
             errors.append(f"prompt result {index} must observe at least one event")
 
-    event_errors = validate_events(events)
+    event_errors = validate_events(s3_events)
     errors.extend(event_errors)
     return {
         "validation_passed": not errors,
         "errors": errors,
         "total_prompts": total_prompts,
-        "total_events": len(events),
+        "total_raw_events": total_raw_events,
+        "total_s3_0b_events": len(s3_events),
+        "ignored_non_s3_events": ignored_non_s3_events,
     }
 
 
@@ -243,7 +276,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Passed: `{report['validation_passed']}`",
         f"- Total prompts: `{report['total_prompts']}`",
-        f"- Total events: `{report['total_events']}`",
+        f"- Total raw events: `{report['total_raw_events']}`",
+        f"- Total S3.0B events: `{report['total_s3_0b_events']}`",
+        f"- Ignored non-S3 events: `{report['ignored_non_s3_events']}`",
         "",
         "## Errors",
         "",
@@ -282,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
             "validation_passed": False,
             "errors": [f"{type(exc).__name__}: {exc}"],
             "total_prompts": 0,
-            "total_events": 0,
+            "total_raw_events": 0,
+            "total_s3_0b_events": 0,
+            "ignored_non_s3_events": 0,
         }
     _write(args.output_json, json.dumps(report, indent=2) + "\n")
     _write(args.output_md, render_markdown(report))
@@ -291,7 +328,9 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "validation_passed": report["validation_passed"],
                 "total_prompts": report["total_prompts"],
-                "total_events": report["total_events"],
+                "total_raw_events": report["total_raw_events"],
+                "total_s3_0b_events": report["total_s3_0b_events"],
+                "ignored_non_s3_events": report["ignored_non_s3_events"],
                 "output_json": args.output_json,
                 "output_md": args.output_md,
             },

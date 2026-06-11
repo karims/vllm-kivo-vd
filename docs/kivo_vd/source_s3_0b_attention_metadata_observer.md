@@ -15,6 +15,11 @@ The fix is conservative: observe both
 `gpu/attn_utils.build_attn_metadata(...)`, and record the `hook_point` in each
 event so the runtime path can be verified explicitly.
 
+The JSONL event stream may also contain records from other Kivo hook schemas in
+the same file. The S3.0B validator filters to
+`schema_version == "kivo_source_s3_0b_attention_metadata_observer_v1"` and
+reports the ignored non-S3 events separately.
+
 This phase records what metadata is visible at `build_attn_metadata(...)`
 without mutating the runtime.
 

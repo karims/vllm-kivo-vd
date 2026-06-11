@@ -172,6 +172,20 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _event_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    total_raw = len(records)
+    total_s3 = sum(
+        record.get("schema_version")
+        == "kivo_source_s3_0b_attention_metadata_observer_v1"
+        for record in records
+    )
+    return {
+        "total_raw_events": total_raw,
+        "total_s3_0b_events": total_s3,
+        "ignored_non_s3_events": total_raw - total_s3,
+    }
+
+
 def _write(path: str | Path, text: str) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +285,7 @@ def build_report(
         _restore_source_env(previous_env)
 
     all_records = _concat_jsonl(all_event_paths, events_path)
+    event_counts = _event_counts(all_records)
     total_prompts = len(prompt_results)
     baseline_success_count = sum(
         result["baseline_status"] == "succeeded" for result in prompt_results
@@ -301,7 +316,7 @@ def build_report(
         and baseline_success_count == total_prompts
         and observer_success_count == total_prompts
         and output_changed_count == 0
-        and len(all_records) > 0
+        and event_counts["total_s3_0b_events"] > 0
     )
     zero_event_debug = None
     if len(all_records) == 0:
@@ -322,7 +337,8 @@ def build_report(
         "baseline_success_count": baseline_success_count,
         "observer_success_count": observer_success_count,
         "output_changed_count": output_changed_count,
-        "total_events": len(all_records),
+        "total_events": event_counts["total_raw_events"],
+        **event_counts,
         "metadata_observed_prompt_count": metadata_observed_prompt_count,
         "max_block_table_rows": max_block_table_rows,
         "max_block_table_cols": max_block_table_cols,
@@ -346,7 +362,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Baseline success count: `{report['baseline_success_count']}`",
         f"- Observer success count: `{report['observer_success_count']}`",
         f"- Output changed count: `{report['output_changed_count']}`",
-        f"- Total events: `{report['total_events']}`",
+        f"- Total raw events: `{report['total_raw_events']}`",
+        f"- Total S3.0B events: `{report['total_s3_0b_events']}`",
+        f"- Ignored non-S3 events: `{report['ignored_non_s3_events']}`",
         (
             "- Metadata observed prompt count: "
             f"`{report['metadata_observed_prompt_count']}`"
@@ -414,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
                 "observer_success_count": report["observer_success_count"],
                 "output_changed_count": report["output_changed_count"],
                 "total_events": report["total_events"],
+                "total_raw_events": report["total_raw_events"],
+                "total_s3_0b_events": report["total_s3_0b_events"],
+                "ignored_non_s3_events": report["ignored_non_s3_events"],
                 "output_json": args.output_json,
                 "output_md": args.output_md,
                 "events_jsonl": args.events_jsonl,
