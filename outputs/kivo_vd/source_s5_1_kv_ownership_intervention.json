@@ -1,0 +1,12 @@
+{
+  "phase": "S5.1",
+  "goal": "minimal_kv_ownership_intervention",
+  "runtime_behavior_changed_by_default": false,
+  "intervention_file": "vllm/v1/core/single_type_kv_cache_manager.py",
+  "intervention_function": "remove_skipped_blocks",
+  "policy_module": "vllm/v1/core/kivo_kv_ownership_policy.py",
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "ready_for_countsketch_policy": true,
+  "next_phase": "S5.2_online_countsketch_kv_retention"
+}

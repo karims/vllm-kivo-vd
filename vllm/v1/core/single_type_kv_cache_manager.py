@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
+from vllm.v1.core.kivo_kv_ownership_policy import decide_kv_ownership
 from vllm.v1.core.kv_cache_utils import (
     BlockHashList,
     BlockHashWithGroupId,
@@ -456,15 +457,21 @@ class SingleTypeKVCacheManager(ABC):
         # this request.
         num_skipped_blocks = min(num_skipped_blocks, len(blocks))
         removed_blocks: list[KVCacheBlock] = []
+        candidate_entries: list[tuple[int, KVCacheBlock]] = [
+            (i, block)
+            for i, block in enumerate(blocks[:num_skipped_blocks])
+            if block != self._null_block
+        ]
+        decision = decide_kv_ownership(
+            [block.block_id for _, block in candidate_entries]
+        )
+        allowed_block_ids = set(decision.allowed_block_ids)
         # Because the block starts from index 0, the num_skipped_block-th block
         # corresponds to index num_skipped_blocks - 1.
-        for i in range(num_skipped_blocks - 1, -1, -1):
-            if blocks[i] == self._null_block:
-                # If the block is already a null block, the blocks before it
-                # should also have been set to null blocks by the previous calls
-                # to this function.
-                break
-            removed_blocks.append(blocks[i])
+        for i, block in reversed(candidate_entries):
+            if block.block_id not in allowed_block_ids:
+                continue
+            removed_blocks.append(block)
             blocks[i] = self._null_block
         self.block_pool.free_blocks(removed_blocks)
 
