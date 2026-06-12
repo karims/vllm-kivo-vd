@@ -15,6 +15,11 @@ from typing import Any
 
 import torch
 
+from vllm.v1.core.kivo_kv_block_score_store import (
+    KivoKVBlockScore,
+    update_block_scores,
+)
+
 SCHEMA_VERSION = "kivo_source_s3_3a_attention_tensor_sketch_observer_v1"
 POLICY_NAME = "observe_attention_tensors_for_sketch"
 S3_3B_SCHEMA_VERSION = "kivo_source_s3_3b_shadow_kv_block_sketch_v1"
@@ -45,6 +50,13 @@ def _observation_path() -> Path | None:
         "KIVO_SOURCE_OBS_PATH"
     )
     return Path(value) if value else None
+
+
+def _retention_score_bridge_enabled() -> bool:
+    return (
+        os.getenv("KIVO_KV_RETENTION_ENABLE") == "1"
+        and os.getenv("KIVO_KV_RETENTION_POLICY") == "countsketch_online"
+    )
 
 
 def _safe_tensor_info(value: Any) -> dict[str, Any]:
@@ -126,6 +138,46 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
         os.write(descriptor, encoded)
     finally:
         os.close(descriptor)
+
+
+def _maybe_update_retention_score_store(record: dict[str, Any]) -> None:
+    if not _retention_score_bridge_enabled():
+        return
+    if record.get("sketch_computed") is not True:
+        return
+    block_rows = record.get("block_sketch_sample")
+    if not isinstance(block_rows, list):
+        return
+
+    scores: list[KivoKVBlockScore] = []
+    layer_index = record.get("layer_index")
+    layer_id = int(layer_index) if isinstance(layer_index, int) else None
+    sequence_id = record.get("sequence_id")
+    step = int(sequence_id) if isinstance(sequence_id, int) else None
+    source = str(record.get("policy_name") or "kivo_tensor_observer")
+
+    for row in block_rows:
+        if not isinstance(row, dict):
+            continue
+        block_id = row.get("block_id")
+        score = row.get("score")
+        if not isinstance(block_id, int):
+            continue
+        try:
+            score_value = float(score)
+        except (TypeError, ValueError):
+            continue
+        scores.append(
+            KivoKVBlockScore(
+                block_id=block_id,
+                score=score_value,
+                source=source,
+                step=step,
+                layer_id=layer_id,
+            )
+        )
+    if scores:
+        update_block_scores(scores)
 
 
 def _can_sketch(info: dict[str, Any]) -> bool:
@@ -697,7 +749,7 @@ def maybe_observe_attention_tensors(
         }:
             return None
         output_path = _observation_path()
-        if output_path is None:
+        if output_path is None and not _retention_score_bridge_enabled():
             return None
         if policy_name == POLICY_NAME:
             record = build_attention_tensor_record(
@@ -737,7 +789,9 @@ def maybe_observe_attention_tensors(
             )
             if record.get("sketch_computed") is True:
                 _store_latest_sketch_plan(record)
-        _append_jsonl(output_path, record)
+        _maybe_update_retention_score_store(record)
+        if output_path is not None:
+            _append_jsonl(output_path, record)
         return record
     except Exception:
         return None

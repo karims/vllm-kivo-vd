@@ -1,0 +1,11 @@
+{
+  "phase": "S5.2",
+  "goal": "online_kv_retention_policy_with_countsketch_score_bridge",
+  "runtime_behavior_changed_by_default": false,
+  "default_action": "plan_only",
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "uses_countsketch_scores": true,
+  "direct_memory_mutation_enabled": false,
+  "next_phase": "S5.3_real_kv_block_free_or_demotion_validation"
+}

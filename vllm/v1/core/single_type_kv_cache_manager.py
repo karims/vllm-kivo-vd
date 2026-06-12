@@ -7,7 +7,15 @@ from collections.abc import Sequence
 
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
+from vllm.v1.core.kivo_kv_block_score_store import (
+    get_block_scores,
+    get_score_store_summary,
+)
 from vllm.v1.core.kivo_kv_ownership_policy import decide_kv_ownership
+from vllm.v1.core.kivo_kv_retention_policy import (
+    KivoKVRetentionDecision,
+    decide_kv_retention,
+)
 from vllm.v1.core.kv_cache_utils import (
     BlockHashList,
     BlockHashWithGroupId,
@@ -82,6 +90,7 @@ class SingleTypeKVCacheManager(ABC):
 
         self.kv_cache_group_id = kv_cache_group_id
         self._null_block = block_pool.null_block
+        self._last_kivo_retention_decision: KivoKVRetentionDecision | None = None
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -456,6 +465,14 @@ class SingleTypeKVCacheManager(ABC):
         # range), so we must cap to the number of blocks that currently exist for
         # this request.
         num_skipped_blocks = min(num_skipped_blocks, len(blocks))
+        current_request_block_ids = [
+            block.block_id for block in blocks if block != self._null_block
+        ]
+        self._last_kivo_retention_decision = decide_kv_retention(
+            current_request_block_ids,
+            get_block_scores(current_request_block_ids),
+            request_id=request_id,
+        )
         removed_blocks: list[KVCacheBlock] = []
         candidate_entries: list[tuple[int, KVCacheBlock]] = [
             (i, block)
@@ -474,6 +491,14 @@ class SingleTypeKVCacheManager(ABC):
             removed_blocks.append(block)
             blocks[i] = self._null_block
         self.block_pool.free_blocks(removed_blocks)
+
+    def get_last_kivo_retention_decision(self) -> KivoKVRetentionDecision | None:
+        """Return the latest plan-only retention decision, if any."""
+        return self._last_kivo_retention_decision
+
+    def get_kivo_block_score_store_summary(self) -> dict[str, object]:
+        """Expose a compact score-store summary for debug and tests."""
+        return get_score_store_summary()
 
     def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
         """
