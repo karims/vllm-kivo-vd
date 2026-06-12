@@ -1,0 +1,12 @@
+{
+  "phase": "S5.3",
+  "goal": "gated_real_kv_free_candidates_action",
+  "runtime_behavior_changed_by_default": false,
+  "default_action": "plan_only",
+  "gated_action": "free_candidates",
+  "acts_only_on_safe_skipped_candidates": true,
+  "arbitrary_live_block_eviction": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.4_block_table_consistent_online_live_block_demotion"
+}

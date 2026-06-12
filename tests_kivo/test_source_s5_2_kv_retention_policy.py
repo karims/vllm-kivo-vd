@@ -195,18 +195,32 @@ def test_integration_light_default_behavior_unchanged(monkeypatch):
     assert manager.get_kivo_block_score_store_summary()["entry_count"] == 0
 
 
-def test_unsupported_action_fails_closed():
+def test_invalid_action_fails_closed():
     decision = decide_kv_retention(
         [1, 2, 3, 4],
         {1: 0.1, 2: 0.2},
         request_id="req",
         config=KivoKVRetentionConfig(
-            True, "countsketch_online", 1, 2, 0, "free_candidates"
+            True, "countsketch_online", 1, 2, 0, "bad_action"
         ),
     )
     assert decision.keep_block_ids == (1, 2, 3, 4)
     assert decision.candidate_drop_block_ids == ()
     assert decision.reason_counts == {"unsupported_action_fail_closed": 1}
+
+
+def test_free_candidates_action_plans_without_mutating():
+    decision = decide_kv_retention(
+        [10, 11, 12, 13],
+        {10: 0.1, 11: 0.8},
+        request_id="req",
+        config=KivoKVRetentionConfig(
+            True, "countsketch_online", 1, 2, 0, "free_candidates"
+        ),
+    )
+    assert decision.action == "free_candidates"
+    assert decision.keep_block_ids == (12, 13)
+    assert decision.candidate_drop_block_ids == (10, 11)
 
 
 def test_tensor_observer_score_bridge_updates_store(monkeypatch):

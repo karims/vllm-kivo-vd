@@ -91,6 +91,7 @@ class SingleTypeKVCacheManager(ABC):
         self.kv_cache_group_id = kv_cache_group_id
         self._null_block = block_pool.null_block
         self._last_kivo_retention_decision: KivoKVRetentionDecision | None = None
+        self._last_kivo_retention_mutation_summary: dict[str, object] | None = None
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -473,24 +474,69 @@ class SingleTypeKVCacheManager(ABC):
             get_block_scores(current_request_block_ids),
             request_id=request_id,
         )
-        removed_blocks: list[KVCacheBlock] = []
         candidate_entries: list[tuple[int, KVCacheBlock]] = [
             (i, block)
             for i, block in enumerate(blocks[:num_skipped_blocks])
             if block != self._null_block
         ]
-        decision = decide_kv_ownership(
+        ownership_decision = decide_kv_ownership(
             [block.block_id for _, block in candidate_entries]
         )
-        allowed_block_ids = set(decision.allowed_block_ids)
-        # Because the block starts from index 0, the num_skipped_block-th block
-        # corresponds to index num_skipped_blocks - 1.
-        for i, block in reversed(candidate_entries):
-            if block.block_id not in allowed_block_ids:
-                continue
-            removed_blocks.append(block)
-            blocks[i] = self._null_block
+        ownership_allowed_block_ids = set(ownership_decision.allowed_block_ids)
+
+        removed_blocks: list[KVCacheBlock] = []
+        actual_freed_candidate_ids: list[int] = []
+        if (
+            self._last_kivo_retention_decision.enabled
+            and self._last_kivo_retention_decision.action != "plan_only"
+        ):
+            allowed_entries: list[tuple[int, KVCacheBlock]] = []
+            if self._last_kivo_retention_decision.action == "free_candidates":
+                retention_allowed_block_ids = set(
+                    self._last_kivo_retention_decision.candidate_drop_block_ids
+                )
+                allowed_entries = [
+                    (i, block)
+                    for i, block in candidate_entries
+                    if block.block_id in ownership_allowed_block_ids
+                    and block.block_id in retention_allowed_block_ids
+                ]
+            for i, _block in reversed(allowed_entries):
+                blocks[i] = self._null_block
+            removed_blocks = [block for _, block in allowed_entries]
+            actual_freed_candidate_ids = [block.block_id for _, block in allowed_entries]
+        else:
+            # Because the block starts from index 0, the num_skipped_block-th block
+            # corresponds to index num_skipped_blocks - 1.
+            for i, block in reversed(candidate_entries):
+                if block.block_id not in ownership_allowed_block_ids:
+                    continue
+                removed_blocks.append(block)
+                blocks[i] = self._null_block
+            actual_freed_candidate_ids = [block.block_id for block in removed_blocks]
         self.block_pool.free_blocks(removed_blocks)
+
+        self._last_kivo_retention_mutation_summary = {
+            "action": self._last_kivo_retention_decision.action,
+            "policy": self._last_kivo_retention_decision.policy,
+            "candidate_count": len(candidate_entries),
+            "allowed_free_count": len(actual_freed_candidate_ids),
+            "protected_count": len(candidate_entries) - len(actual_freed_candidate_ids),
+            "score_available_count": (
+                self._last_kivo_retention_decision.score_available_count
+            ),
+            "score_missing_count": (
+                self._last_kivo_retention_decision.score_missing_count
+            ),
+            "would_reduce_full_blocks_by": (
+                self._last_kivo_retention_decision.would_reduce_full_blocks_by
+            ),
+            "actual_freed_candidate_count": len(actual_freed_candidate_ids),
+            "actual_freed_candidate_ids": actual_freed_candidate_ids,
+            "fail_closed_reason_counts": dict(
+                self._last_kivo_retention_decision.reason_counts
+            ),
+        }
 
     def get_last_kivo_retention_decision(self) -> KivoKVRetentionDecision | None:
         """Return the latest plan-only retention decision, if any."""
@@ -499,6 +545,10 @@ class SingleTypeKVCacheManager(ABC):
     def get_kivo_block_score_store_summary(self) -> dict[str, object]:
         """Expose a compact score-store summary for debug and tests."""
         return get_score_store_summary()
+
+    def get_last_kivo_retention_mutation_summary(self) -> dict[str, object] | None:
+        """Return the latest gated retention mutation summary, if any."""
+        return self._last_kivo_retention_mutation_summary
 
     def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
         """

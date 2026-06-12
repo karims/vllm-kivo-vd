@@ -11,6 +11,7 @@ Recommended reading order:
 - [Phase S5.0: KV Memory Intervention Map](source_s5_0_kv_memory_intervention_map.md)
 - [Phase S5.1: KV Ownership Intervention](source_s5_1_kv_ownership_intervention.md)
 - [Phase S5.2: Online KV Retention Policy](source_s5_2_online_kv_retention_policy.md)
+- [Phase S5.3: KV Free Candidates](source_s5_3_kv_free_candidates.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

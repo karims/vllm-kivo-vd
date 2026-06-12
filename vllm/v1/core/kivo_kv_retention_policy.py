@@ -13,6 +13,7 @@ _DEFAULT_ACTION = "plan_only"
 _DEFAULT_KEEP_RECENT_BLOCKS = 4
 _DEFAULT_MAX_FULL_BLOCKS = 64
 _DEFAULT_MIN_BLOCKS_BEFORE_ACTION = 8
+_SUPPORTED_ACTIONS = {"plan_only", "free_candidates"}
 
 
 @dataclass(frozen=True)
@@ -114,7 +115,7 @@ def decide_kv_retention(
             would_reduce_full_blocks_by=0,
         )
 
-    if config.action != "plan_only":
+    if config.action not in _SUPPORTED_ACTIONS:
         return KivoKVRetentionDecision(
             enabled=True,
             policy=config.policy,
@@ -244,4 +245,3 @@ def decision_summary(decision: KivoKVRetentionDecision) -> dict[str, Any]:
         "would_reduce_full_blocks_by": decision.would_reduce_full_blocks_by,
         "reason_counts": dict(decision.reason_counts),
     }
-
