@@ -13,6 +13,7 @@ Recommended reading order:
 - [Phase S5.2: Online KV Retention Policy](source_s5_2_online_kv_retention_policy.md)
 - [Phase S5.3: KV Free Candidates](source_s5_3_kv_free_candidates.md)
 - [Phase S5.4: Live Block Demotion Plan](source_s5_4_live_block_demotion_plan.md)
+- [Phase S5.5: Block Table Sync Plan](source_s5_5_block_table_sync_plan.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

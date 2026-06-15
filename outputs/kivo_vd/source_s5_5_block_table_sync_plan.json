@@ -1,0 +1,11 @@
+{
+  "phase": "S5.5",
+  "goal": "worker_block_table_sync_plan_for_live_demotion",
+  "runtime_behavior_changed_by_default": false,
+  "default_action": "off",
+  "live_kv_free_enabled": false,
+  "block_table_apply_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.6_apply_filtered_block_table_view_if_safe"
+}

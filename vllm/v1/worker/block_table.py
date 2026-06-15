@@ -223,6 +223,14 @@ class BlockTable:
         """Returns the numpy array of the block table."""
         return self.block_table.np
 
+    def get_row_block_ids(self, row_idx: int) -> tuple[int, ...]:
+        """Return the CPU-side block ids currently stored for one row."""
+        num_blocks = int(self.num_blocks_per_row[row_idx])
+        if num_blocks <= 0:
+            return ()
+        row = self.block_table.np[row_idx, :num_blocks]
+        return tuple(int(block_id) for block_id in row.tolist())
+
     def _make_buffer(
         self, *size: int | torch.SymInt, dtype: torch.dtype
     ) -> CpuGpuBuffer:
@@ -331,6 +339,12 @@ class MultiGroupBlockTable:
     def __getitem__(self, idx: int) -> "BlockTable":
         """Returns the BlockTable for the i-th KV cache group."""
         return self.block_tables[idx]
+
+    def get_row_block_ids(self, row_idx: int) -> tuple[tuple[int, ...], ...]:
+        """Return CPU-side block ids for one row across KV cache groups."""
+        return tuple(
+            block_table.get_row_block_ids(row_idx) for block_table in self.block_tables
+        )
 
 
 @triton.jit
