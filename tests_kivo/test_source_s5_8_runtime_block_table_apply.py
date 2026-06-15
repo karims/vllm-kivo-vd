@@ -59,7 +59,9 @@ def test_disabled_runtime_apply_returns_noop_summary():
     batch = _make_input_batch()
     summary = build_runtime_block_table_apply_summary(
         batch,
-        config=KivoRuntimeBlockTableApplyConfig(False, "off", "recent_only", 4, 64),
+        config=KivoRuntimeBlockTableApplyConfig(
+            False, "off", "recent_only", 4, 64, True
+        ),
     )
     assert summary.enabled is False
     assert summary.attempted_row_count == 0
@@ -74,7 +76,7 @@ def test_enabled_recent_only_can_filter_fake_row_before_slot_mapping():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 2, 2
+            True, "apply_block_table_only", "recent_only", 2, 2, True
         ),
     )
     assert summary.applied_row_count == 1
@@ -89,7 +91,7 @@ def test_filtered_row_preserves_order():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 2, 2
+            True, "apply_block_table_only", "recent_only", 2, 2, True
         ),
     )
     assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
@@ -103,7 +105,7 @@ def test_empty_filtered_row_fails_closed():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 0, 0
+            True, "apply_block_table_only", "recent_only", 0, 0, True
         ),
     )
     assert summary.blocked_row_count == 1
@@ -118,7 +120,7 @@ def test_missing_request_row_mapping_fails_closed():
         req_ids=["missing"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 2, 2
+            True, "apply_block_table_only", "recent_only", 2, 2, True
         ),
     )
     assert summary.blocked_row_count == 1
@@ -133,7 +135,7 @@ def test_block_table_only_apply_does_not_call_ownership_or_free_path():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 2, 2
+            True, "apply_block_table_only", "recent_only", 2, 2, True
         ),
     )
     assert summary.applied_row_count == 1
@@ -156,7 +158,7 @@ def test_countsketch_online_keeps_recent_plus_high_score_blocks():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "countsketch_online", 1, 2
+            True, "apply_block_table_only", "countsketch_online", 1, 2, True
         ),
     )
     assert summary.applied_row_count == 1
@@ -172,7 +174,7 @@ def test_missing_countsketch_scores_are_protected_or_fail_closed():
         req_ids=["req0"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "countsketch_online", 1, 2
+            True, "apply_block_table_only", "countsketch_online", 1, 2, True
         ),
     )
     assert summary.applied_row_count == 1
@@ -187,7 +189,7 @@ def test_summary_reports_attempted_applied_blocked_counts():
         req_ids=["req0", "missing"],
         slot_mapping_refresh_available=True,
         config=KivoRuntimeBlockTableApplyConfig(
-            True, "apply_block_table_only", "recent_only", 2, 2
+            True, "apply_block_table_only", "recent_only", 2, 2, True
         ),
     )
     assert summary.attempted_row_count == 2
@@ -203,7 +205,9 @@ def test_default_behavior_unchanged_when_disabled():
         batch,
         req_ids=["req0"],
         slot_mapping_refresh_available=False,
-        config=KivoRuntimeBlockTableApplyConfig(False, "off", "recent_only", 4, 64),
+        config=KivoRuntimeBlockTableApplyConfig(
+            False, "off", "recent_only", 4, 64, True
+        ),
     )
     assert summary.enabled is False
     assert batch.block_table[0].get_row_block_ids(0) == before

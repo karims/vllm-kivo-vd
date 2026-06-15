@@ -34,6 +34,7 @@ class KivoRuntimeBlockTableApplyConfig:
     policy: str
     keep_recent_blocks: int
     max_full_blocks: int
+    require_slot_mapping_refresh: bool
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,10 @@ def current_kivo_runtime_block_table_apply_config(
         ),
         max_full_blocks=_parse_int_env(
             "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS", default=64, minimum=1
+        ),
+        require_slot_mapping_refresh=_parse_bool_env(
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_REQUIRE_SLOT_MAPPING_REFRESH",
+            default=True,
         ),
     )
 
@@ -187,7 +192,7 @@ def build_runtime_block_table_apply_summary(
                     if config.action != "apply_block_table_only"
                     else "apply_block_table_only"
                 ),
-                require_slot_mapping_refresh=True,
+                require_slot_mapping_refresh=config.require_slot_mapping_refresh,
             ),
         )
         removed_count = len(sync_decision.original_block_ids) - len(
@@ -214,4 +219,21 @@ def build_runtime_block_table_apply_summary(
         blocker_reasons=blocker_reasons,
         max_removed_blocks=max_removed,
         total_removed_blocks=total_removed,
+    )
+
+
+def maybe_apply_runtime_block_table_before_slot_mapping(
+    input_batch: "InputBatch",
+    *,
+    req_ids: Sequence[str] | None = None,
+    kv_cache_gid: int = 0,
+    config: KivoRuntimeBlockTableApplyConfig | None = None,
+) -> KivoRuntimeBlockTableApplySummary:
+    """Apply filtered worker rows only at the pre-slot-mapping hook point."""
+    return build_runtime_block_table_apply_summary(
+        input_batch,
+        req_ids=req_ids,
+        kv_cache_gid=kv_cache_gid,
+        slot_mapping_refresh_available=True,
+        config=config,
     )

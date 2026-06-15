@@ -201,6 +201,10 @@ from vllm.v1.worker.dp_utils import coordinate_batch_across_dp
 from vllm.v1.worker.ec_connector_model_runner_mixin import ECConnectorModelRunnerMixin
 from vllm.v1.worker.gpu.pool.late_interaction_runner import LateInteractionRunner
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
+from vllm.v1.worker.kivo_runtime_block_table_apply import (
+    KivoRuntimeBlockTableApplySummary,
+    maybe_apply_runtime_block_table_before_slot_mapping,
+)
 from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
 from vllm.v1.worker.kivo_attention_metadata_observer import (
     maybe_observe_attention_metadata,
@@ -2098,6 +2102,7 @@ class GPUModelRunner(
         )
         self.seq_lens[num_reqs:].fill_(0)
 
+        self._maybe_apply_kivo_runtime_block_table_before_slot_mapping(num_reqs)
         self.input_batch.block_table.compute_slot_mapping(
             num_reqs,
             self.query_start_loc.gpu[: num_reqs + 1],
@@ -2187,6 +2192,17 @@ class GPUModelRunner(
             logits_indices,
             spec_decode_metadata,
         )
+
+    def _maybe_apply_kivo_runtime_block_table_before_slot_mapping(
+        self, num_reqs: int
+    ) -> KivoRuntimeBlockTableApplySummary:
+        req_ids = self.input_batch.req_ids[:num_reqs]
+        summary = maybe_apply_runtime_block_table_before_slot_mapping(
+            self.input_batch,
+            req_ids=req_ids,
+        )
+        self._last_kivo_runtime_block_table_apply_summary = summary
+        return summary
 
     def _build_attention_metadata(
         self,

@@ -1,0 +1,13 @@
+{
+  "phase": "S5.9",
+  "goal": "runtime_gated_block_table_apply_before_slot_mapping",
+  "runtime_behavior_changed_by_default": false,
+  "hook_file": "vllm/v1/worker/gpu_model_runner.py",
+  "hook_function": "_prepare_inputs",
+  "hook_position": "before input_batch.block_table.compute_slot_mapping",
+  "block_table_apply_enabled": true,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.10_pair_block_table_apply_with_gated_live_ownership_mutation"
+}
