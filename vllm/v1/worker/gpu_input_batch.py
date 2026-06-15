@@ -306,6 +306,17 @@ class InputBatch:
         # while performing state updates to the batch.
         return cast(list[str], self._req_ids)
 
+    def get_req_index(self, req_id: str) -> int | None:
+        return self.req_id_to_index.get(req_id)
+
+    def get_req_block_row_ids(
+        self, req_id: str, kv_cache_gid: int = 0
+    ) -> tuple[int, ...] | None:
+        req_index = self.req_id_to_index.get(req_id)
+        if req_index is None:
+            return None
+        return self.block_table[kv_cache_gid].get_row_block_ids(req_index)
+
     def _register_add_request(self, request: "CachedRequestState") -> int:
         """Track add-request operations for logits processors.
         Not applicable to pooling models.

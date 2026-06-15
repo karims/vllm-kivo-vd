@@ -1,0 +1,10 @@
+{
+  "phase": "S5.8",
+  "goal": "runtime_gated_block_table_only_apply_before_slot_mapping",
+  "runtime_behavior_changed_by_default": false,
+  "block_table_runtime_apply_enabled": true,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.9_pair_runtime_block_table_apply_with_safe_ownership_mutation"
+}
