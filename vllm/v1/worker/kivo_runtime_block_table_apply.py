@@ -8,10 +8,19 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
+from vllm.v1.core.kivo_live_ownership_apply import (
+    KivoLiveOwnershipApplyConfig,
+    build_kivo_live_ownership_apply_decision,
+    current_kivo_live_ownership_apply_config,
+)
 from vllm.v1.core.kivo_kv_block_score_store import get_block_scores
 from vllm.v1.core.kivo_kv_retention_policy import (
     KivoKVRetentionConfig,
     decide_kv_retention,
+)
+from vllm.v1.core.kivo_kv_live_block_plan import (
+    KivoKVLiveBlockPlanConfig,
+    build_kivo_live_block_plan,
 )
 from vllm.v1.worker.kivo_kv_sync_apply import (
     KivoKVSyncApplyConfig,
@@ -47,6 +56,10 @@ class KivoRuntimeBlockTableApplySummary:
     blocker_reasons: dict[str, int]
     max_removed_blocks: int
     total_removed_blocks: int
+    paired_plan_attempted_row_count: int
+    paired_plan_safe_row_count: int
+    paired_plan_blocked_row_count: int
+    paired_plan_blocker_reasons: dict[str, int]
 
 
 def _parse_bool_env(name: str, *, default: bool = False) -> bool:
@@ -115,6 +128,10 @@ def build_runtime_block_table_apply_summary(
             blocker_reasons={"disabled": 1},
             max_removed_blocks=0,
             total_removed_blocks=0,
+            paired_plan_attempted_row_count=0,
+            paired_plan_safe_row_count=0,
+            paired_plan_blocked_row_count=0,
+            paired_plan_blocker_reasons={"disabled": 1},
         )
 
     if config.policy not in _SUPPORTED_POLICIES:
@@ -127,26 +144,24 @@ def build_runtime_block_table_apply_summary(
             blocker_reasons={"invalid_runtime_policy": 1},
             max_removed_blocks=0,
             total_removed_blocks=0,
+            paired_plan_attempted_row_count=0,
+            paired_plan_safe_row_count=0,
+            paired_plan_blocked_row_count=0,
+            paired_plan_blocker_reasons={"invalid_runtime_policy": 1},
         )
 
     target_req_ids = list(req_ids) if req_ids is not None else list(input_batch.req_ids)
-    summary = KivoRuntimeBlockTableApplySummary(
-        enabled=True,
-        action=config.action,
-        attempted_row_count=0,
-        applied_row_count=0,
-        blocked_row_count=0,
-        blocker_reasons={},
-        max_removed_blocks=0,
-        total_removed_blocks=0,
-    )
-
     attempted = 0
     applied = 0
     blocked = 0
     blocker_reasons: dict[str, int] = {}
     max_removed = 0
     total_removed = 0
+    paired_attempted = 0
+    paired_safe = 0
+    paired_blocked = 0
+    paired_blocker_reasons: dict[str, int] = {}
+    live_apply_config = current_kivo_live_ownership_apply_config()
 
     for req_id in target_req_ids:
         attempted += 1
@@ -195,6 +210,7 @@ def build_runtime_block_table_apply_summary(
                 require_slot_mapping_refresh=config.require_slot_mapping_refresh,
             ),
         )
+        block_table_applied = False
         removed_count = len(sync_decision.original_block_ids) - len(
             sync_decision.filtered_block_ids
         )
@@ -205,10 +221,69 @@ def build_runtime_block_table_apply_summary(
                 input_batch.block_table[kv_cache_gid], req_index, sync_decision
             ):
                 applied += 1
-                continue
-        blocked += 1
-        for reason, count in sync_decision.blocker_reasons.items():
-            blocker_reasons[reason] = blocker_reasons.get(reason, 0) + count
+                block_table_applied = True
+            else:
+                blocked += 1
+                blocker_reasons["block_table_replace_failed"] = (
+                    blocker_reasons.get("block_table_replace_failed", 0) + 1
+                )
+        elif config.action != "plan_only":
+            blocked += 1
+            for reason, count in sync_decision.blocker_reasons.items():
+                blocker_reasons[reason] = blocker_reasons.get(reason, 0) + count
+
+        if not live_apply_config.enabled:
+            continue
+
+        paired_attempted += 1
+        live_plan = build_kivo_live_block_plan(
+            original_row,
+            retention_decision,
+            request_id=req_id,
+            shared_block_ids=(),
+            block_table_sync_available=slot_mapping_refresh_available,
+            ownership_mutation_available=False,
+            config=KivoKVLiveBlockPlanConfig(
+                enabled=True,
+                action="plan_live_demotion_only",
+                require_block_table_sync=live_apply_config.require_block_table_applied,
+                protect_recent_blocks=live_apply_config.keep_recent_blocks,
+                min_blocks_before_action=0,
+            ),
+        )
+        live_decision = build_kivo_live_ownership_apply_decision(
+            request_id=req_id,
+            visible_before_block_ids=original_row,
+            visible_after_block_ids=sync_decision.filtered_block_ids,
+            candidate_demote_block_ids=live_plan.candidate_demote_block_ids,
+            protected_block_ids=live_plan.protected_block_ids,
+            block_table_applied=block_table_applied,
+            slot_mapping_refresh_guaranteed=slot_mapping_refresh_available,
+            ownership_mapping_available=False,
+            config=KivoLiveOwnershipApplyConfig(
+                enabled=True,
+                action=live_apply_config.action,
+                policy=live_apply_config.policy,
+                keep_recent_blocks=live_apply_config.keep_recent_blocks,
+                max_full_blocks=live_apply_config.max_full_blocks,
+                require_block_table_applied=live_apply_config.require_block_table_applied,
+                require_slot_mapping_refresh=(
+                    live_apply_config.require_slot_mapping_refresh
+                ),
+            ),
+        )
+        if live_decision.safe_to_mutate_ownership:
+            paired_safe += 1
+        else:
+            paired_blocked += 1
+        for reason, count in live_plan.blocker_reasons.items():
+            paired_blocker_reasons[reason] = (
+                paired_blocker_reasons.get(reason, 0) + count
+            )
+        for reason, count in live_decision.blocker_reasons.items():
+            paired_blocker_reasons[reason] = (
+                paired_blocker_reasons.get(reason, 0) + count
+            )
 
     return KivoRuntimeBlockTableApplySummary(
         enabled=True,
@@ -219,6 +294,10 @@ def build_runtime_block_table_apply_summary(
         blocker_reasons=blocker_reasons,
         max_removed_blocks=max_removed,
         total_removed_blocks=total_removed,
+        paired_plan_attempted_row_count=paired_attempted,
+        paired_plan_safe_row_count=paired_safe,
+        paired_plan_blocked_row_count=paired_blocked,
+        paired_plan_blocker_reasons=paired_blocker_reasons,
     )
 
 

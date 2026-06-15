@@ -81,6 +81,7 @@ def test_enabled_recent_only_can_filter_fake_row_before_slot_mapping():
     )
     assert summary.applied_row_count == 1
     assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
+    assert summary.paired_plan_attempted_row_count == 0
 
 
 def test_filtered_row_preserves_order():
@@ -195,6 +196,32 @@ def test_summary_reports_attempted_applied_blocked_counts():
     assert summary.attempted_row_count == 2
     assert summary.applied_row_count == 1
     assert summary.blocked_row_count == 1
+
+
+def test_live_paired_plan_reports_explicit_blocker_without_mutating_ownership(
+    monkeypatch,
+):
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_ACTION", "plan_paired_apply")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_REQUIRE_BLOCK_TABLE_APPLIED", "1")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_REQUIRE_SLOT_MAPPING_REFRESH", "1")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_POLICY", "recent_only")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_KEEP_RECENT_BLOCKS", "2")
+    monkeypatch.setenv("KIVO_KV_LIVE_APPLY_MAX_FULL_BLOCKS", "2")
+    clear_block_scores()
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "recent_only", 2, 2, True
+        ),
+    )
+    assert summary.paired_plan_attempted_row_count == 1
+    assert summary.paired_plan_safe_row_count == 0
+    assert summary.paired_plan_blocked_row_count == 1
+    assert summary.paired_plan_blocker_reasons["ownership_mapping_unavailable"] == 1
 
 
 def test_default_behavior_unchanged_when_disabled():
