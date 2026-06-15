@@ -11,9 +11,16 @@ from vllm.v1.core.kivo_kv_block_score_store import (
     get_block_scores,
     get_score_store_summary,
 )
+from vllm.v1.core.kivo_kv_live_block_plan import (
+    KivoKVLiveBlockPlan,
+    build_kivo_live_block_plan,
+    current_kivo_live_block_plan_config,
+)
 from vllm.v1.core.kivo_kv_ownership_policy import decide_kv_ownership
 from vllm.v1.core.kivo_kv_retention_policy import (
     KivoKVRetentionDecision,
+    KivoKVRetentionConfig,
+    current_kv_retention_config,
     decide_kv_retention,
 )
 from vllm.v1.core.kv_cache_utils import (
@@ -92,6 +99,7 @@ class SingleTypeKVCacheManager(ABC):
         self._null_block = block_pool.null_block
         self._last_kivo_retention_decision: KivoKVRetentionDecision | None = None
         self._last_kivo_retention_mutation_summary: dict[str, object] | None = None
+        self._last_kivo_live_block_plan: KivoKVLiveBlockPlan | None = None
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -474,6 +482,7 @@ class SingleTypeKVCacheManager(ABC):
             get_block_scores(current_request_block_ids),
             request_id=request_id,
         )
+        self._last_kivo_live_block_plan = self.build_kivo_live_block_plan(request_id)
         candidate_entries: list[tuple[int, KVCacheBlock]] = [
             (i, block)
             for i, block in enumerate(blocks[:num_skipped_blocks])
@@ -549,6 +558,55 @@ class SingleTypeKVCacheManager(ABC):
     def get_last_kivo_retention_mutation_summary(self) -> dict[str, object] | None:
         """Return the latest gated retention mutation summary, if any."""
         return self._last_kivo_retention_mutation_summary
+
+    def get_request_block_ids(self, request_id: str) -> tuple[int, ...]:
+        """Return current non-null physical block ids for the request."""
+        return tuple(
+            block.block_id
+            for block in self.req_to_blocks.get(request_id, ())
+            if block != self._null_block
+        )
+
+    def build_kivo_live_block_plan(self, request_id: str) -> KivoKVLiveBlockPlan:
+        """Build a plan-only live demotion proposal for the request."""
+        all_blocks = self.req_to_blocks.get(request_id, ())
+        live_blocks = [block for block in all_blocks if block != self._null_block]
+        live_block_ids = tuple(block.block_id for block in live_blocks)
+        shared_block_ids = tuple(
+            block.block_id
+            for block in live_blocks
+            if getattr(block, "ref_cnt", 1) > 1
+        )
+
+        live_config = current_kivo_live_block_plan_config()
+        retention_config = current_kv_retention_config()
+        retention_for_live = KivoKVRetentionConfig(
+            enabled=live_config.enabled and retention_config.enabled,
+            policy=retention_config.policy,
+            keep_recent_blocks=live_config.protect_recent_blocks,
+            max_full_blocks=retention_config.max_full_blocks,
+            min_blocks_before_action=live_config.min_blocks_before_action,
+            action="plan_only",
+        )
+        retention_decision = decide_kv_retention(
+            live_block_ids,
+            get_block_scores(live_block_ids),
+            request_id=request_id,
+            config=retention_for_live,
+        )
+        return build_kivo_live_block_plan(
+            live_block_ids,
+            retention_decision,
+            request_id=request_id,
+            shared_block_ids=shared_block_ids,
+            block_table_sync_available=False,
+            ownership_mutation_available=True,
+            config=live_config,
+        )
+
+    def get_last_kivo_live_block_plan(self) -> KivoKVLiveBlockPlan | None:
+        """Return the latest computed live demotion plan, if any."""
+        return self._last_kivo_live_block_plan
 
     def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
         """

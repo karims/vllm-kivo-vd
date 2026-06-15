@@ -1,0 +1,11 @@
+{
+  "phase": "S5.4",
+  "goal": "block_table_consistent_live_block_demotion_plan",
+  "runtime_behavior_changed_by_default": false,
+  "default_action": "plan_live_demotion_only",
+  "live_mutation_enabled": false,
+  "requires_block_table_sync": true,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.5_apply_live_demotion_with_block_table_sync"
+}
