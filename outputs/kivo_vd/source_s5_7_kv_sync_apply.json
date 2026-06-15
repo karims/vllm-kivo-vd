@@ -1,0 +1,11 @@
+{
+  "phase": "S5.7",
+  "goal": "synchronized_kv_live_demotion_apply_decision",
+  "runtime_behavior_changed_by_default": false,
+  "default_action": "plan_only",
+  "block_table_apply_local": true,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.8_runtime_gated_block_table_apply"
+}
