@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from collections.abc import Sequence
+
 import numpy as np
 import torch
 
@@ -11,6 +13,9 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.utils import CpuGpuBuffer
 from vllm.v1.worker.cp_utils import get_total_cp_world_size
+from vllm.v1.worker.kivo_block_table_sync import (
+    apply_filtered_block_row_if_safe,
+)
 from vllm.v1.worker.kivo_selected_blocks import (
     maybe_observe_compute_slot_mapping,
 )
@@ -230,6 +235,28 @@ class BlockTable:
             return ()
         row = self.block_table.np[row_idx, :num_blocks]
         return tuple(int(block_id) for block_id in row.tolist())
+
+    def replace_row_block_ids_if_safe(
+        self, row_idx: int, filtered_block_ids: Sequence[int]
+    ) -> bool:
+        """Replace one CPU-side row with a validated filtered view."""
+        original_row = self.get_row_block_ids(row_idx)
+        result = apply_filtered_block_row_if_safe(
+            original_row,
+            filtered_block_ids,
+            max_row_len=self.max_num_blocks_per_req,
+        )
+        if not result.ok:
+            return False
+
+        old_num_blocks = int(self.num_blocks_per_row[row_idx])
+        if old_num_blocks > 0:
+            self.block_table.np[row_idx, :old_num_blocks] = 0
+        new_num_blocks = len(result.filtered_block_ids)
+        if new_num_blocks > 0:
+            self.block_table.np[row_idx, :new_num_blocks] = result.filtered_block_ids
+        self.num_blocks_per_row[row_idx] = new_num_blocks
+        return True
 
     def _make_buffer(
         self, *size: int | torch.SymInt, dtype: torch.dtype

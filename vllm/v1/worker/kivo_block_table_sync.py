@@ -38,6 +38,13 @@ class KivoBlockTableSyncPlan:
     safe_to_apply: bool
 
 
+@dataclass(frozen=True)
+class KivoBlockTableApplyResult:
+    ok: bool
+    filtered_block_ids: tuple[int, ...]
+    blocker_reasons: dict[str, int]
+
+
 def _parse_bool_env(name: str, *, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -169,4 +176,55 @@ def build_block_table_sync_plan(
         blocker_reasons=blocker_reasons,
         preserves_order=preserves_order,
         safe_to_apply=safe_to_apply,
+    )
+
+
+def apply_filtered_block_row_if_safe(
+    original_row: Sequence[int],
+    filtered_block_ids: Sequence[int],
+    *,
+    max_row_len: int | None = None,
+) -> KivoBlockTableApplyResult:
+    """Validate a filtered row view without mutating the source row."""
+    original = tuple(int(block_id) for block_id in original_row)
+    filtered = tuple(int(block_id) for block_id in filtered_block_ids)
+    blocker_reasons: dict[str, int] = {}
+
+    original_counts: dict[int, int] = {}
+    for block_id in original:
+        original_counts[block_id] = original_counts.get(block_id, 0) + 1
+    if any(count > 1 for count in original_counts.values()):
+        blocker_reasons["duplicate_original_ids"] = sum(
+            count - 1 for count in original_counts.values() if count > 1
+        )
+
+    filtered_counts: dict[int, int] = {}
+    for block_id in filtered:
+        filtered_counts[block_id] = filtered_counts.get(block_id, 0) + 1
+    if any(count > 1 for count in filtered_counts.values()):
+        blocker_reasons["duplicate_filtered_ids"] = sum(
+            count - 1 for count in filtered_counts.values() if count > 1
+        )
+
+    original_set = set(original)
+    missing_ids = [block_id for block_id in filtered if block_id not in original_set]
+    if missing_ids:
+        blocker_reasons["filtered_ids_not_in_original"] = len(missing_ids)
+
+    if not filtered:
+        blocker_reasons["empty_filtered_row"] = 1
+
+    expected_filtered = tuple(
+        block_id for block_id in original if block_id in set(filtered)
+    )
+    if filtered != expected_filtered:
+        blocker_reasons["filtered_order_mismatch"] = 1
+
+    if max_row_len is not None and len(filtered) > max_row_len:
+        blocker_reasons["filtered_row_exceeds_max_len"] = 1
+
+    return KivoBlockTableApplyResult(
+        ok=not blocker_reasons,
+        filtered_block_ids=filtered,
+        blocker_reasons=blocker_reasons,
     )
