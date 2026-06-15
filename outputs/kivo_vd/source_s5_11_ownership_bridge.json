@@ -1,0 +1,10 @@
+{
+  "phase": "S5.11",
+  "goal": "narrow_core_worker_ownership_bridge_for_live_demotion",
+  "runtime_behavior_changed_by_default": false,
+  "ownership_mark_demoted_enabled": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.12_first_gated_free_to_pool_for_demoted_blocks"
+}

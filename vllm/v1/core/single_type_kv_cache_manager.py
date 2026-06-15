@@ -11,6 +11,11 @@ from vllm.v1.core.kivo_kv_block_score_store import (
     get_block_scores,
     get_score_store_summary,
 )
+from vllm.v1.core.kivo_ownership_bridge import (
+    KivoOwnershipBridgeConfig,
+    KivoOwnershipBridgeDecision,
+    build_kivo_ownership_bridge_decision,
+)
 from vllm.v1.core.kivo_kv_live_block_plan import (
     KivoKVLiveBlockPlan,
     build_kivo_live_block_plan,
@@ -100,6 +105,9 @@ class SingleTypeKVCacheManager(ABC):
         self._last_kivo_retention_decision: KivoKVRetentionDecision | None = None
         self._last_kivo_retention_mutation_summary: dict[str, object] | None = None
         self._last_kivo_live_block_plan: KivoKVLiveBlockPlan | None = None
+        self._last_kivo_ownership_bridge_decision: (
+            KivoOwnershipBridgeDecision | None
+        ) = None
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -566,6 +574,48 @@ class SingleTypeKVCacheManager(ABC):
             for block in self.req_to_blocks.get(request_id, ())
             if block != self._null_block
         )
+
+    def get_request_block_ids_for_kivo(self, request_id: str) -> tuple[int, ...]:
+        """Return current ownership-side non-null physical block ids."""
+        return self.get_request_block_ids(request_id)
+
+    def build_kivo_ownership_bridge_decision(
+        self,
+        request_id: str | None,
+        *,
+        demote_block_ids: Sequence[int],
+        visible_after_block_ids: Sequence[int],
+        protected_block_ids: Sequence[int] = (),
+        block_table_applied: bool = False,
+        slot_mapping_refresh_guaranteed: bool = False,
+        config: KivoOwnershipBridgeConfig | None = None,
+    ) -> KivoOwnershipBridgeDecision:
+        """Build a fail-closed ownership bridge decision for one request."""
+        ownership_before_block_ids: tuple[int, ...] = ()
+        ownership_mapping_available = False
+        if request_id is not None and request_id in self.req_to_blocks:
+            ownership_mapping_available = True
+            ownership_before_block_ids = self.get_request_block_ids_for_kivo(request_id)
+
+        decision = build_kivo_ownership_bridge_decision(
+            request_id=request_id,
+            demote_block_ids=demote_block_ids,
+            visible_after_block_ids=visible_after_block_ids,
+            ownership_before_block_ids=ownership_before_block_ids,
+            protected_block_ids=protected_block_ids,
+            block_table_applied=block_table_applied,
+            slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+            ownership_mapping_available=ownership_mapping_available,
+            config=config,
+        )
+        self._last_kivo_ownership_bridge_decision = decision
+        return decision
+
+    def get_last_kivo_ownership_bridge_decision(
+        self,
+    ) -> KivoOwnershipBridgeDecision | None:
+        """Return the latest ownership-bridge decision, if any."""
+        return self._last_kivo_ownership_bridge_decision
 
     def build_kivo_live_block_plan(self, request_id: str) -> KivoKVLiveBlockPlan:
         """Build a plan-only live demotion proposal for the request."""

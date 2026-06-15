@@ -19,6 +19,7 @@ Recommended reading order:
 - [Phase S5.8: Runtime Block Table Apply](source_s5_8_runtime_block_table_apply.md)
 - [Phase S5.9: Prepare Inputs Block Table Hook](source_s5_9_prepare_inputs_block_table_hook.md)
 - [Phase S5.10: Paired Live Apply](source_s5_10_paired_live_apply.md)
+- [Phase S5.11: Ownership Bridge](source_s5_11_ownership_bridge.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 
