@@ -82,6 +82,7 @@ def test_enabled_recent_only_can_filter_fake_row_before_slot_mapping():
     assert summary.applied_row_count == 1
     assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
     assert summary.paired_plan_attempted_row_count == 0
+    assert summary.runtime_demotion_mark_attempted_request_count == 0
 
 
 def test_filtered_row_preserves_order():
@@ -212,6 +213,13 @@ def test_live_paired_plan_reports_explicit_blocker_without_mutating_ownership(
     monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_ACTION", "mark_demoted_if_safe")
     monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_REQUIRE_BLOCK_TABLE_APPLIED", "1")
     monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_REQUIRE_SLOT_MAPPING_REFRESH", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_DEMOTION_MARK_ENABLE", "1")
+    monkeypatch.setenv(
+        "KIVO_KV_RUNTIME_DEMOTION_MARK_ACTION",
+        "mark_demoted_after_block_table_apply",
+    )
+    monkeypatch.setenv("KIVO_KV_RUNTIME_DEMOTION_MARK_REQUIRE_BLOCK_TABLE_APPLIED", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_DEMOTION_MARK_REQUIRE_SLOT_MAPPING_REFRESH", "1")
     clear_block_scores()
     batch = _make_input_batch()
     summary = build_runtime_block_table_apply_summary(
@@ -232,6 +240,10 @@ def test_live_paired_plan_reports_explicit_blocker_without_mutating_ownership(
         ]
         == 1
     )
+    assert summary.runtime_demotion_mark_attempted_request_count == 1
+    assert summary.runtime_demotion_mark_marked_request_count == 0
+    assert summary.runtime_demotion_mark_blocked_request_count == 1
+    assert summary.runtime_demotion_mark_blocker_reasons["kv_cache_manager_unavailable"] == 1
 
 
 def test_default_behavior_unchanged_when_disabled():
