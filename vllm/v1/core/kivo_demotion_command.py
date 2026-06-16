@@ -19,6 +19,12 @@ class KivoCoreDemotionConfig:
 
 
 @dataclass(frozen=True)
+class KivoOwnershipRemoveConfig:
+    enabled: bool
+    action: str
+
+
+@dataclass(frozen=True)
 class KivoDemotionCommand:
     request_id: str
     visible_before_block_ids: tuple[int, ...]
@@ -65,4 +71,15 @@ def current_kivo_core_demotion_config() -> KivoCoreDemotionConfig:
             "KIVO_KV_CORE_DEMOTION_REQUIRE_SLOT_MAPPING_REFRESH",
             default=True,
         ),
+    )
+
+
+def current_kivo_ownership_remove_config() -> KivoOwnershipRemoveConfig:
+    enabled = _parse_bool_env("KIVO_KV_OWNERSHIP_REMOVE_ENABLE", default=False)
+    action = os.getenv("KIVO_KV_OWNERSHIP_REMOVE_ACTION", _DEFAULT_ACTION)
+    if not enabled:
+        action = _DEFAULT_ACTION
+    return KivoOwnershipRemoveConfig(
+        enabled=enabled,
+        action=action,
     )

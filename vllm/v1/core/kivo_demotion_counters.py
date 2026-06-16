@@ -42,7 +42,11 @@ class KivoDemotionCounters:
     manager_mark_demoted_attempted: int = 0
     manager_mark_demoted_succeeded: int = 0
     manager_mark_demoted_rejected: int = 0
+    ownership_remove_attempted: int = 0
+    ownership_remove_succeeded: int = 0
+    ownership_remove_rejected: int = 0
     demoted_blocks_marked: int = 0
+    ownership_removed_blocks: int = 0
     req_to_blocks_removed: int = 0
     free_to_pool_calls: int = 0
     padding_zero_ambiguous: int = 0
@@ -54,9 +58,12 @@ class KivoDemotionCounters:
     last_filtered_drop_count: int = 0
     last_filtered_drop_ids_sample: tuple[int, ...] = ()
     last_filtered_keep_ids_sample: tuple[int, ...] = ()
+    last_removed_block_ids_sample: tuple[int, ...] = ()
+    last_remaining_block_ids_sample: tuple[int, ...] = ()
     last_visible_before_count: int = 0
     last_visible_after_count: int = 0
     last_candidate_demote_count: int = 0
+    ownership_remaining_blocks_last: int = 0
     last_filtered_row_changed: bool | None = None
     last_keep_recent_blocks: int = 0
     last_policy: str | None = None

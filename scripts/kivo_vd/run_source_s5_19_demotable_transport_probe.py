@@ -214,10 +214,33 @@ def build_summary(
         "scheduler_envelope_observed": scheduler_envelope_observed,
         "core_command_observed": core_command_observed,
         "manager_mark_demoted_observed": manager_mark_demoted_observed,
+        "demoted_blocks_marked": int(counters.get("demoted_blocks_marked", 0) or 0),
+        "ownership_remove_attempted": int(
+            counters.get("ownership_remove_attempted", 0) or 0
+        ),
+        "ownership_remove_succeeded": int(
+            counters.get("ownership_remove_succeeded", 0) or 0
+        ),
+        "ownership_remove_rejected": int(
+            counters.get("ownership_remove_rejected", 0) or 0
+        ),
+        "ownership_removed_blocks": int(
+            counters.get("ownership_removed_blocks", 0) or 0
+        ),
+        "ownership_remaining_blocks_last": int(
+            counters.get("ownership_remaining_blocks_last", 0) or 0
+        ),
+        "last_removed_block_ids_sample": list(
+            counters.get("last_removed_block_ids_sample", ()) or ()
+        ),
+        "last_remaining_block_ids_sample": list(
+            counters.get("last_remaining_block_ids_sample", ()) or ()
+        ),
         "req_to_blocks_removed": int(counters.get("req_to_blocks_removed", 0) or 0),
         "free_to_pool_calls": int(counters.get("free_to_pool_calls", 0) or 0),
         "memory_claim_allowed": False,
         "free_to_pool_claim_allowed": False,
+        "ownership_removal_claim_allowed": False,
         "error": error,
     }
 

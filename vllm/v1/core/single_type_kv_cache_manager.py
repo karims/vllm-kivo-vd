@@ -4,6 +4,7 @@ import itertools
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
@@ -15,11 +16,14 @@ from vllm.v1.core.kivo_demotion_command import (
     KivoCoreDemotionConfig,
     KivoDemotionCommand,
     KivoDemotionCommandResult,
+    KivoOwnershipRemoveConfig,
+    current_kivo_ownership_remove_config,
 )
 from vllm.v1.core.kivo_demotion_counters import (
     add_kivo_demotion_blocker_reasons,
     export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
+    set_kivo_demotion_counter_fields,
 )
 from vllm.v1.core.kivo_ownership_bridge import (
     KivoOwnershipBridgeConfig,
@@ -58,6 +62,18 @@ from vllm.v1.kv_cache_interface import (
     TQFullAttentionSpec,
 )
 from vllm.v1.request import Request
+
+
+@dataclass(frozen=True)
+class KivoOwnershipRemoveResult:
+    enabled: bool
+    request_id: str | None
+    accepted: bool
+    removed_block_ids: tuple[int, ...]
+    remaining_block_ids: tuple[int, ...]
+    blocker_reasons: dict[str, int]
+    removes_from_req_to_blocks: bool
+    frees_to_pool: bool
 
 
 class SingleTypeKVCacheManager(ABC):
@@ -600,6 +616,135 @@ class SingleTypeKVCacheManager(ABC):
         """Clear Kivo demoted bookkeeping for one request."""
         self.kivo_req_to_demoted_block_ids.pop(request_id, None)
 
+    def remove_kivo_marked_demoted_blocks_if_safe(
+        self,
+        request_id: str | None,
+        *,
+        config: KivoOwnershipRemoveConfig | None = None,
+    ) -> KivoOwnershipRemoveResult:
+        """Remove already-marked demoted ids from req_to_blocks without freeing."""
+        increment_kivo_demotion_counter("ownership_remove_attempted")
+        if config is None:
+            config = current_kivo_ownership_remove_config()
+
+        def _reject(
+            *,
+            enabled: bool,
+            blocker_reasons: dict[str, int],
+            remaining_block_ids: Sequence[int] = (),
+        ) -> KivoOwnershipRemoveResult:
+            add_kivo_demotion_blocker_reasons(blocker_reasons)
+            increment_kivo_demotion_counter("ownership_remove_rejected")
+            set_kivo_demotion_counter_fields(
+                ownership_remaining_blocks_last=len(tuple(remaining_block_ids)),
+                last_removed_block_ids_sample=(),
+                last_remaining_block_ids_sample=tuple(remaining_block_ids[:8]),
+            )
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_ownership_remove_rejected"
+            )
+            return KivoOwnershipRemoveResult(
+                enabled=enabled,
+                request_id=request_id,
+                accepted=False,
+                removed_block_ids=(),
+                remaining_block_ids=tuple(remaining_block_ids),
+                blocker_reasons=blocker_reasons,
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        if not config.enabled or config.action == "off":
+            return _reject(enabled=False, blocker_reasons={"disabled": 1})
+
+        if config.action != "remove_marked_demoted_only":
+            return _reject(
+                enabled=True,
+                blocker_reasons={"invalid_ownership_remove_action": 1},
+            )
+
+        if request_id is None or request_id not in self.req_to_blocks:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"ownership_mapping_unavailable": 1},
+            )
+
+        req_blocks = self.req_to_blocks[request_id]
+        demoted_ids = set(self.kivo_req_to_demoted_block_ids.get(request_id, ()))
+        owned_blocks = [block for block in req_blocks if block != self._null_block]
+        owned_ids = tuple(block.block_id for block in owned_blocks)
+        if not demoted_ids:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"no_marked_demoted_blocks": 1},
+                remaining_block_ids=owned_ids,
+            )
+
+        owned_id_set = set(owned_ids)
+        if not demoted_ids.issubset(owned_id_set):
+            return _reject(
+                enabled=True,
+                blocker_reasons={"demoted_ids_missing_from_req_to_blocks": 1},
+                remaining_block_ids=owned_ids,
+            )
+
+        removed_ids: list[int] = []
+        retained_blocks: list[KVCacheBlock] = []
+        for block in req_blocks:
+            if block == self._null_block:
+                retained_blocks.append(block)
+                continue
+            if block.block_id in demoted_ids:
+                removed_ids.append(block.block_id)
+            else:
+                retained_blocks.append(block)
+
+        if not removed_ids:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"no_marked_demoted_blocks": 1},
+                remaining_block_ids=owned_ids,
+            )
+
+        remaining_ids = tuple(
+            block.block_id for block in retained_blocks if block != self._null_block
+        )
+        if not remaining_ids:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"would_remove_all_owned_blocks": 1},
+                remaining_block_ids=owned_ids,
+            )
+
+        self.req_to_blocks[request_id] = retained_blocks
+        remaining_demoted = demoted_ids.difference(removed_ids)
+        if remaining_demoted:
+            self.kivo_req_to_demoted_block_ids[request_id] = remaining_demoted
+        else:
+            self.kivo_req_to_demoted_block_ids.pop(request_id, None)
+
+        increment_kivo_demotion_counter("ownership_remove_succeeded")
+        increment_kivo_demotion_counter("ownership_removed_blocks", len(removed_ids))
+        increment_kivo_demotion_counter("req_to_blocks_removed", len(removed_ids))
+        set_kivo_demotion_counter_fields(
+            ownership_remaining_blocks_last=len(remaining_ids),
+            last_removed_block_ids_sample=tuple(removed_ids[:8]),
+            last_remaining_block_ids_sample=tuple(remaining_ids[:8]),
+        )
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="manager_ownership_remove_succeeded"
+        )
+        return KivoOwnershipRemoveResult(
+            enabled=True,
+            request_id=request_id,
+            accepted=True,
+            removed_block_ids=tuple(removed_ids),
+            remaining_block_ids=remaining_ids,
+            blocker_reasons={},
+            removes_from_req_to_blocks=True,
+            frees_to_pool=False,
+        )
+
     def build_kivo_ownership_bridge_decision(
         self,
         request_id: str | None,
@@ -675,7 +820,7 @@ class SingleTypeKVCacheManager(ABC):
         *,
         config: KivoCoreDemotionConfig,
     ) -> KivoDemotionCommandResult:
-        """Apply a core-owned demotion command without freeing or removing."""
+        """Apply a core-owned demotion command without freeing to the pool."""
         increment_kivo_demotion_counter("manager_mark_demoted_attempted")
         if not config.enabled or config.action == "off":
             add_kivo_demotion_blocker_reasons({"disabled": 1})
@@ -749,6 +894,24 @@ class SingleTypeKVCacheManager(ABC):
             "demoted_blocks_marked",
             len(tuple(bridge_decision.demote_block_ids)),
         )
+        ownership_remove_result = KivoOwnershipRemoveResult(
+            enabled=False,
+            request_id=command.request_id,
+            accepted=False,
+            removed_block_ids=(),
+            remaining_block_ids=self.get_request_block_ids_for_kivo(
+                command.request_id
+            ),
+            blocker_reasons={},
+            removes_from_req_to_blocks=False,
+            frees_to_pool=False,
+        )
+        ownership_remove_config = current_kivo_ownership_remove_config()
+        if ownership_remove_config.enabled and ownership_remove_config.action != "off":
+            ownership_remove_result = self.remove_kivo_marked_demoted_blocks_if_safe(
+                command.request_id,
+                config=ownership_remove_config,
+            )
         export_kivo_demotion_counters_snapshot_if_enabled(
             source="manager_mark_demoted_succeeded"
         )
@@ -759,7 +922,9 @@ class SingleTypeKVCacheManager(ABC):
             marked_demoted_block_ids=tuple(bridge_decision.demote_block_ids),
             rejected_block_ids=(),
             blocker_reasons={},
-            removes_from_req_to_blocks=False,
+            removes_from_req_to_blocks=(
+                ownership_remove_result.removes_from_req_to_blocks
+            ),
             frees_to_pool=False,
         )
 

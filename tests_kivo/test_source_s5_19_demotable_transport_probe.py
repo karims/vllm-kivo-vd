@@ -43,10 +43,16 @@ def test_json_summary_schema_contains_required_fields():
         "scheduler_envelope_observed",
         "core_command_observed",
         "manager_mark_demoted_observed",
+        "ownership_remove_attempted",
+        "ownership_remove_succeeded",
+        "ownership_remove_rejected",
+        "ownership_removed_blocks",
+        "ownership_remaining_blocks_last",
         "req_to_blocks_removed",
         "free_to_pool_calls",
         "memory_claim_allowed",
         "free_to_pool_claim_allowed",
+        "ownership_removal_claim_allowed",
     ]:
         assert field in summary
 
@@ -62,6 +68,7 @@ def test_validator_passes_safety_only_case_with_zero_envelopes():
             "free_to_pool_calls": 0,
             "memory_claim_allowed": False,
             "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
             "counters": {},
         }
     )
@@ -81,6 +88,7 @@ def test_validator_passes_observed_transport_case():
             "free_to_pool_calls": 0,
             "memory_claim_allowed": False,
             "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
             "counters": {"worker_envelopes_built": 1},
         }
     )
@@ -99,6 +107,7 @@ def test_validator_fails_generation_failure():
             "free_to_pool_calls": 0,
             "memory_claim_allowed": False,
             "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
             "counters": {},
         }
     )
@@ -116,23 +125,67 @@ def test_validator_fails_if_free_to_pool_calls_positive():
             "free_to_pool_calls": 1,
             "memory_claim_allowed": False,
             "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
             "counters": {},
         }
     )
     assert result["validation_passed"] is False
 
 
-def test_validator_fails_if_req_to_blocks_removed_positive():
+def test_validator_accepts_req_to_blocks_removed_when_ownership_remove_succeeds():
     result = validate_summary(
         {
             "generation_success": True,
             "prompt_count": 1,
-            "transport_observed": False,
-            "counter_export_file_found": False,
-            "req_to_blocks_removed": 1,
+            "transport_observed": True,
+            "counter_export_file_found": True,
+            "req_to_blocks_removed": 2,
             "free_to_pool_calls": 0,
             "memory_claim_allowed": False,
             "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
+            "demoted_blocks_marked": 2,
+            "ownership_remove_attempted": 1,
+            "ownership_remove_succeeded": 1,
+            "counters": {},
+        }
+    )
+    assert result["validation_passed"] is True
+
+
+def test_validator_fails_if_req_to_blocks_removed_without_ownership_remove():
+    result = validate_summary(
+        {
+            "generation_success": True,
+            "prompt_count": 1,
+            "transport_observed": True,
+            "counter_export_file_found": True,
+            "req_to_blocks_removed": 2,
+            "free_to_pool_calls": 0,
+            "memory_claim_allowed": False,
+            "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": False,
+            "demoted_blocks_marked": 0,
+            "ownership_remove_attempted": 0,
+            "ownership_remove_succeeded": 0,
+            "counters": {},
+        }
+    )
+    assert result["validation_passed"] is False
+
+
+def test_validator_fails_if_ownership_removal_claim_allowed():
+    result = validate_summary(
+        {
+            "generation_success": True,
+            "prompt_count": 1,
+            "transport_observed": True,
+            "counter_export_file_found": True,
+            "req_to_blocks_removed": 0,
+            "free_to_pool_calls": 0,
+            "memory_claim_allowed": False,
+            "free_to_pool_claim_allowed": False,
+            "ownership_removal_claim_allowed": True,
             "counters": {},
         }
     )
