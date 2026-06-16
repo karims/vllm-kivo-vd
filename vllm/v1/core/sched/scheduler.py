@@ -33,7 +33,10 @@ from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
 )
-from vllm.v1.core.kivo_demotion_counters import increment_kivo_demotion_counter
+from vllm.v1.core.kivo_demotion_counters import (
+    export_kivo_demotion_counters_snapshot_if_enabled,
+    increment_kivo_demotion_counter,
+)
 from vllm.v1.core.kivo_demotion_transport import (
     apply_kivo_demotion_transport_from_model_runner_output,
 )
@@ -1372,6 +1375,9 @@ class Scheduler(SchedulerInterface):
         apply_kivo_demotion_transport_from_model_runner_output(
             kv_cache_manager=self.kv_cache_manager,
             model_runner_output=model_runner_output,
+        )
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="scheduler_update_from_output"
         )
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs

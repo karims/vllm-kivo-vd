@@ -16,6 +16,7 @@ from vllm.v1.core.kivo_demotion_command import (
 )
 from vllm.v1.core.kivo_demotion_counters import (
     add_kivo_demotion_blocker_reasons,
+    export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
 )
 
@@ -95,6 +96,9 @@ def apply_kivo_demotion_transport_envelopes(
         increment_kivo_demotion_counter("core_transport_batches_received")
         increment_kivo_demotion_counter("core_commands_rejected", envelope_count)
         add_kivo_demotion_blocker_reasons(blocker_reasons)
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="core_transport_batch_rejected"
+        )
         return KivoDemotionTransportResult(
             enabled=True,
             accepted_count=0,
@@ -125,6 +129,9 @@ def apply_kivo_demotion_transport_envelopes(
                 blocker_reasons[reason] = blocker_reasons.get(reason, 0) + count
 
     add_kivo_demotion_blocker_reasons(blocker_reasons)
+    export_kivo_demotion_counters_snapshot_if_enabled(
+        source="core_transport_batch_applied"
+    )
 
     return KivoDemotionTransportResult(
         enabled=True,

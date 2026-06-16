@@ -18,6 +18,7 @@ from vllm.v1.core.kivo_demotion_command import (
 )
 from vllm.v1.core.kivo_demotion_counters import (
     add_kivo_demotion_blocker_reasons,
+    export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
 )
 from vllm.v1.core.kivo_ownership_bridge import (
@@ -679,6 +680,9 @@ class SingleTypeKVCacheManager(ABC):
         if not config.enabled or config.action == "off":
             add_kivo_demotion_blocker_reasons({"disabled": 1})
             increment_kivo_demotion_counter("manager_mark_demoted_rejected")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_mark_demoted_disabled"
+            )
             return KivoDemotionCommandResult(
                 enabled=False,
                 request_id=command.request_id,
@@ -693,6 +697,9 @@ class SingleTypeKVCacheManager(ABC):
         if config.action != "mark_demoted_only":
             add_kivo_demotion_blocker_reasons({"invalid_core_demotion_action": 1})
             increment_kivo_demotion_counter("manager_mark_demoted_rejected")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_mark_demoted_invalid_action"
+            )
             return KivoDemotionCommandResult(
                 enabled=True,
                 request_id=command.request_id,
@@ -723,6 +730,9 @@ class SingleTypeKVCacheManager(ABC):
         if not bridge_decision.safe_to_mark_demoted:
             add_kivo_demotion_blocker_reasons(dict(bridge_decision.blocker_reasons))
             increment_kivo_demotion_counter("manager_mark_demoted_rejected")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_mark_demoted_rejected"
+            )
             return KivoDemotionCommandResult(
                 enabled=True,
                 request_id=command.request_id,
@@ -738,6 +748,9 @@ class SingleTypeKVCacheManager(ABC):
         increment_kivo_demotion_counter(
             "demoted_blocks_marked",
             len(tuple(bridge_decision.demote_block_ids)),
+        )
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="manager_mark_demoted_succeeded"
         )
         return KivoDemotionCommandResult(
             enabled=True,

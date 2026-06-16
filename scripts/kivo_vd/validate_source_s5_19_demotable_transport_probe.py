@@ -29,7 +29,15 @@ def load_summary(path: str | Path) -> dict[str, Any]:
 def validate_summary(summary: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
+    exported_counters = summary.get("exported_counters")
+    parent_counters = summary.get("parent_counters")
     counters = summary.get("counters")
+    if isinstance(exported_counters, dict):
+        counters = exported_counters
+    elif isinstance(counters, dict):
+        pass
+    elif isinstance(parent_counters, dict):
+        counters = parent_counters
     if not isinstance(counters, dict):
         errors.append("counters must exist and be an object")
         counters = {}
@@ -47,13 +55,24 @@ def validate_summary(summary: dict[str, Any]) -> dict[str, Any]:
     if summary.get("free_to_pool_claim_allowed") is not False:
         errors.append("free_to_pool_claim_allowed must be false")
 
-    transport_observed = bool(summary.get("transport_observed"))
+    transport_observed = (
+        bool(summary.get("transport_observed"))
+        or int(counters.get("scheduler_envelopes_received", 0) or 0) > 0
+        or int(counters.get("core_commands_attempted", 0) or 0) > 0
+        or int(counters.get("manager_mark_demoted_attempted", 0) or 0) > 0
+    )
+    counter_export_file_found = bool(summary.get("counter_export_file_found"))
+    if not counter_export_file_found and not transport_observed:
+        warnings.append("no_cross_process_counter_export_observed")
+    if counter_export_file_found and not transport_observed:
+        warnings.append("transport_not_observed_in_engine_core")
     if not transport_observed:
         warnings.append("no_demotable_blocks_or_runtime_policy_did_not_emit")
 
     return {
         "validation_passed": not errors,
         "transport_observed": transport_observed,
+        "counter_export_file_found": counter_export_file_found,
         "reason": None if transport_observed else "no_demotable_blocks_or_runtime_policy_did_not_emit",
         "errors": errors,
         "warnings": warnings,

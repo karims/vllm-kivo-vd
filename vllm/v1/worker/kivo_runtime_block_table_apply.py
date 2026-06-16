@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
-from vllm.v1.core.kivo_demotion_counters import increment_kivo_demotion_counter
+from vllm.v1.core.kivo_demotion_counters import (
+    export_kivo_demotion_counters_snapshot_if_enabled,
+    increment_kivo_demotion_counter,
+)
 from vllm.v1.core.kivo_demotion_transport import (
     KivoDemotionTransportEnvelope,
     current_kivo_demotion_transport_config,
@@ -103,6 +106,7 @@ def build_kivo_demotion_command_for_runtime_row(
 ) -> KivoRuntimeDemotionCommandExport:
     """Build a worker-side demotion command payload when local invariants hold."""
     blocker_reasons: dict[str, int] = {}
+    increment_kivo_demotion_counter("demotion_command_export_attempted")
     before = tuple(int(block_id) for block_id in visible_before_block_ids)
     after = tuple(int(block_id) for block_id in visible_after_block_ids)
     demote = tuple(int(block_id) for block_id in candidate_demote_block_ids)
@@ -140,12 +144,19 @@ def build_kivo_demotion_command_for_runtime_row(
         )
 
     if blocker_reasons or request_id is None:
+        increment_kivo_demotion_counter("demotion_command_export_rejected")
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="worker_demotion_command_export_rejected"
+        )
         return KivoRuntimeDemotionCommandExport(
             command=None,
             blocker_reasons=blocker_reasons,
         )
 
     increment_kivo_demotion_counter("worker_envelopes_built")
+    export_kivo_demotion_counters_snapshot_if_enabled(
+        source="worker_demotion_command_export_built"
+    )
     return KivoRuntimeDemotionCommandExport(
         command=KivoDemotionCommand(
             request_id=request_id,
@@ -294,9 +305,11 @@ def build_runtime_block_table_apply_summary(
 
     for req_id in target_req_ids:
         attempted += 1
+        increment_kivo_demotion_counter("block_table_apply_attempted")
         req_index = input_batch.get_req_index(req_id)
         if req_index is None:
             blocked += 1
+            increment_kivo_demotion_counter("block_table_apply_rejected")
             blocker_reasons["missing_request_row_mapping"] = (
                 blocker_reasons.get("missing_request_row_mapping", 0) + 1
             )
@@ -304,6 +317,7 @@ def build_runtime_block_table_apply_summary(
         original_row = input_batch.get_req_block_row_ids(req_id, kv_cache_gid)
         if original_row is None:
             blocked += 1
+            increment_kivo_demotion_counter("block_table_apply_rejected")
             blocker_reasons["missing_original_row"] = (
                 blocker_reasons.get("missing_original_row", 0) + 1
             )
@@ -351,13 +365,16 @@ def build_runtime_block_table_apply_summary(
             ):
                 applied += 1
                 block_table_applied = True
+                increment_kivo_demotion_counter("block_table_apply_succeeded")
             else:
                 blocked += 1
+                increment_kivo_demotion_counter("block_table_apply_rejected")
                 blocker_reasons["block_table_replace_failed"] = (
                     blocker_reasons.get("block_table_replace_failed", 0) + 1
                 )
         elif config.action != "plan_only":
             blocked += 1
+            increment_kivo_demotion_counter("block_table_apply_rejected")
             for reason, count in sync_decision.blocker_reasons.items():
                 blocker_reasons[reason] = blocker_reasons.get(reason, 0) + count
 
@@ -466,6 +483,9 @@ def build_runtime_block_table_apply_summary(
                         command=command_export.command,
                         source=command_export.command.source,
                     )
+                )
+                export_kivo_demotion_counters_snapshot_if_enabled(
+                    source="worker_transport_envelope_ready"
                 )
 
     return KivoRuntimeBlockTableApplySummary(

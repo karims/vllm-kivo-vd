@@ -209,7 +209,10 @@ from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
 from vllm.v1.worker.kivo_attention_metadata_observer import (
     maybe_observe_attention_metadata,
 )
-from vllm.v1.core.kivo_demotion_counters import increment_kivo_demotion_counter
+from vllm.v1.core.kivo_demotion_counters import (
+    export_kivo_demotion_counters_snapshot_if_enabled,
+    increment_kivo_demotion_counter,
+)
 from vllm.v1.worker.kv_connector_model_runner_mixin import KVConnectorModelRunnerMixin
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
 from vllm.v1.worker.ubatch_utils import (
@@ -4602,6 +4605,9 @@ class GPUModelRunner(
                 increment_kivo_demotion_counter(
                     "worker_envelopes_attached",
                     len(output.kivo_demotion_transport_envelopes),
+                )
+                export_kivo_demotion_counters_snapshot_if_enabled(
+                    source="worker_model_runner_output_attached"
                 )
 
         if not self.use_async_scheduling:

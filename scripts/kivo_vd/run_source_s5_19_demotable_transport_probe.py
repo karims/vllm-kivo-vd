@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -75,9 +76,13 @@ def build_summary(
     prompt_count: int,
     prompt_char_lengths: list[int],
     prompt_token_lengths: list[int | None],
-    counters: dict[str, Any],
+    parent_counters: dict[str, Any],
+    exported_counters: dict[str, Any] | None,
+    counter_export_file_found: bool,
+    counter_export_pid: int | None,
     error: str | None = None,
 ) -> dict[str, Any]:
+    counters = exported_counters if exported_counters is not None else parent_counters
     worker_envelope_observed = int(counters.get("worker_envelopes_built", 0) or 0) > 0
     scheduler_envelope_observed = (
         int(counters.get("scheduler_envelopes_received", 0) or 0) > 0
@@ -98,6 +103,10 @@ def build_summary(
         "prompt_count": prompt_count,
         "prompt_char_lengths": prompt_char_lengths,
         "prompt_token_lengths": prompt_token_lengths,
+        "parent_counters": parent_counters,
+        "exported_counters": exported_counters,
+        "counter_export_file_found": counter_export_file_found,
+        "counter_export_pid": counter_export_pid,
         "counters": counters,
         "transport_observed": transport_observed,
         "worker_envelope_observed": worker_envelope_observed,
@@ -112,6 +121,20 @@ def build_summary(
     }
 
 
+def _load_exported_counters(path: str | None) -> tuple[dict[str, Any] | None, bool, int | None]:
+    if not path:
+        return None, False, None
+    export_path = Path(path)
+    if not export_path.exists():
+        return None, False, None
+    payload = json.loads(export_path.read_text(encoding="utf-8"))
+    exported_counters = payload.get("counters")
+    if not isinstance(exported_counters, dict):
+        exported_counters = None
+    pid = payload.get("pid")
+    return exported_counters, True, pid if isinstance(pid, int) else None
+
+
 def run_generation(args: argparse.Namespace) -> dict[str, Any]:
     from vllm import LLM, SamplingParams
     from vllm.v1.core.kivo_demotion_counters import (
@@ -121,6 +144,11 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
 
     prompts = build_prompts(repeats=args.prompt_repeats, num_prompts=args.num_prompts)
     prompt_char_lengths = [len(prompt) for prompt in prompts]
+    export_file = os.getenv("KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE")
+    if export_file:
+        export_path = Path(export_file)
+        if export_path.exists():
+            export_path.unlink()
     llm = None
     reset_kivo_demotion_counters()
     try:
@@ -137,20 +165,34 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             else None
             for output in outputs
         ]
+        parent_counters = get_kivo_demotion_counters_snapshot()
+        exported_counters, file_found, export_pid = _load_exported_counters(
+            export_file
+        )
         return build_summary(
             generation_success=True,
             prompt_count=len(prompts),
             prompt_char_lengths=prompt_char_lengths,
             prompt_token_lengths=prompt_token_lengths,
-            counters=get_kivo_demotion_counters_snapshot(),
+            parent_counters=parent_counters,
+            exported_counters=exported_counters,
+            counter_export_file_found=file_found,
+            counter_export_pid=export_pid,
         )
     except Exception as exc:
+        parent_counters = get_kivo_demotion_counters_snapshot()
+        exported_counters, file_found, export_pid = _load_exported_counters(
+            export_file
+        )
         return build_summary(
             generation_success=False,
             prompt_count=len(prompts),
             prompt_char_lengths=prompt_char_lengths,
             prompt_token_lengths=[None] * len(prompts),
-            counters=get_kivo_demotion_counters_snapshot(),
+            parent_counters=parent_counters,
+            exported_counters=exported_counters,
+            counter_export_file_found=file_found,
+            counter_export_pid=export_pid,
             error=f"{type(exc).__name__}: {exc}",
         )
     finally:
