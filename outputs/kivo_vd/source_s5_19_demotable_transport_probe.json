@@ -1,0 +1,12 @@
+{
+  "phase": "S5.19",
+  "goal": "demotable_prompt_transport_counter_probe",
+  "runtime_behavior_changed_by_default": false,
+  "uses_long_prompt_probe": true,
+  "removes_from_req_to_blocks": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase_if_observed": "S5.20_gated_req_to_blocks_removal_design",
+  "next_phase_if_not_observed": "inspect_policy_emission_and_block_thresholds"
+}
