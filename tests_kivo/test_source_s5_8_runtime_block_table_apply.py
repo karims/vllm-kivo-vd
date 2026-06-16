@@ -208,6 +208,10 @@ def test_live_paired_plan_reports_explicit_blocker_without_mutating_ownership(
     monkeypatch.setenv("KIVO_KV_LIVE_APPLY_POLICY", "recent_only")
     monkeypatch.setenv("KIVO_KV_LIVE_APPLY_KEEP_RECENT_BLOCKS", "2")
     monkeypatch.setenv("KIVO_KV_LIVE_APPLY_MAX_FULL_BLOCKS", "2")
+    monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_ACTION", "mark_demoted_if_safe")
+    monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_REQUIRE_BLOCK_TABLE_APPLIED", "1")
+    monkeypatch.setenv("KIVO_KV_OWNERSHIP_BRIDGE_REQUIRE_SLOT_MAPPING_REFRESH", "1")
     clear_block_scores()
     batch = _make_input_batch()
     summary = build_runtime_block_table_apply_summary(
@@ -222,6 +226,12 @@ def test_live_paired_plan_reports_explicit_blocker_without_mutating_ownership(
     assert summary.paired_plan_safe_row_count == 0
     assert summary.paired_plan_blocked_row_count == 1
     assert summary.paired_plan_blocker_reasons["ownership_mapping_unavailable"] == 1
+    assert (
+        summary.paired_plan_blocker_reasons[
+            "worker_path_lacks_core_kv_manager_reference"
+        ]
+        == 1
+    )
 
 
 def test_default_behavior_unchanged_when_disabled():

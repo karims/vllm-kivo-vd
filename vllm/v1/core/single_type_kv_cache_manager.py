@@ -15,6 +15,7 @@ from vllm.v1.core.kivo_ownership_bridge import (
     KivoOwnershipBridgeConfig,
     KivoOwnershipBridgeDecision,
     build_kivo_ownership_bridge_decision,
+    current_kivo_ownership_bridge_config,
 )
 from vllm.v1.core.kivo_kv_live_block_plan import (
     KivoKVLiveBlockPlan,
@@ -108,6 +109,7 @@ class SingleTypeKVCacheManager(ABC):
         self._last_kivo_ownership_bridge_decision: (
             KivoOwnershipBridgeDecision | None
         ) = None
+        self.kivo_req_to_demoted_block_ids: dict[str, set[int]] = {}
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -386,6 +388,7 @@ class SingleTypeKVCacheManager(ABC):
 
         self.block_pool.free_blocks(ordered_blocks)
         self.num_cached_block.pop(request_id, None)
+        self.clear_kivo_demoted_blocks(request_id)
 
     @abstractmethod
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
@@ -579,6 +582,14 @@ class SingleTypeKVCacheManager(ABC):
         """Return current ownership-side non-null physical block ids."""
         return self.get_request_block_ids(request_id)
 
+    def get_kivo_demoted_block_ids(self, request_id: str) -> tuple[int, ...]:
+        """Return sorted Kivo demoted block ids tracked for one request."""
+        return tuple(sorted(self.kivo_req_to_demoted_block_ids.get(request_id, ())))
+
+    def clear_kivo_demoted_blocks(self, request_id: str) -> None:
+        """Clear Kivo demoted bookkeeping for one request."""
+        self.kivo_req_to_demoted_block_ids.pop(request_id, None)
+
     def build_kivo_ownership_bridge_decision(
         self,
         request_id: str | None,
@@ -616,6 +627,37 @@ class SingleTypeKVCacheManager(ABC):
     ) -> KivoOwnershipBridgeDecision | None:
         """Return the latest ownership-bridge decision, if any."""
         return self._last_kivo_ownership_bridge_decision
+
+    def mark_kivo_demoted_blocks_if_safe(
+        self,
+        request_id: str | None,
+        block_ids: Sequence[int],
+        *,
+        visible_after_block_ids: Sequence[int],
+        protected_block_ids: Sequence[int] = (),
+        block_table_applied: bool = False,
+        slot_mapping_refresh_guaranteed: bool = False,
+        config: KivoOwnershipBridgeConfig | None = None,
+    ) -> KivoOwnershipBridgeDecision:
+        """Mark Kivo demoted ownership bookkeeping without freeing blocks."""
+        if config is None:
+            config = current_kivo_ownership_bridge_config()
+
+        decision = self.build_kivo_ownership_bridge_decision(
+            request_id,
+            demote_block_ids=block_ids,
+            visible_after_block_ids=visible_after_block_ids,
+            protected_block_ids=protected_block_ids,
+            block_table_applied=block_table_applied,
+            slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+            config=config,
+        )
+        if not decision.safe_to_mark_demoted or request_id is None:
+            return decision
+
+        demoted = self.kivo_req_to_demoted_block_ids.setdefault(request_id, set())
+        demoted.update(decision.demote_block_ids)
+        return decision
 
     def build_kivo_live_block_plan(self, request_id: str) -> KivoKVLiveBlockPlan:
         """Build a plan-only live demotion proposal for the request."""

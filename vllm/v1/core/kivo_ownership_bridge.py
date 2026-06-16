@@ -175,9 +175,9 @@ def build_kivo_ownership_bridge_decision(
     if not ownership_after:
         blocker_reasons["empty_ownership_after"] = 1
 
-    safe_to_mark_demoted = False
-    if config.action == "mark_demoted_if_safe":
-        blocker_reasons["ownership_mark_demoted_not_implemented"] = 1
+    safe_to_mark_demoted = (
+        config.action == "mark_demoted_if_safe" and not blocker_reasons
+    )
 
     return KivoOwnershipBridgeDecision(
         enabled=True,

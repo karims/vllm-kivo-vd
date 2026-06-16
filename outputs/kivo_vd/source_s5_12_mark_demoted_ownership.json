@@ -1,0 +1,11 @@
+{
+  "phase": "S5.12",
+  "goal": "first_gated_mark_demoted_ownership_bookkeeping",
+  "runtime_behavior_changed_by_default": false,
+  "ownership_mark_demoted_enabled": true,
+  "removes_from_req_to_blocks": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.13_wire_runtime_demotion_marking_or_prepare_free_to_pool"
+}

@@ -69,8 +69,8 @@ def test_demote_absent_after_and_present_before_is_eligible_for_mark_only():
         config=_config(action="mark_demoted_if_safe"),
     )
     assert decision.ownership_after_block_ids == (12, 13)
-    assert decision.safe_to_mark_demoted is False
-    assert decision.blocker_reasons["ownership_mark_demoted_not_implemented"] == 1
+    assert decision.safe_to_mark_demoted is True
+    assert decision.safe_to_free is False
 
 
 def test_demote_id_still_visible_after_fails_closed():

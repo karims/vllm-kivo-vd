@@ -22,6 +22,9 @@ from vllm.v1.core.kivo_kv_live_block_plan import (
     KivoKVLiveBlockPlanConfig,
     build_kivo_live_block_plan,
 )
+from vllm.v1.core.kivo_ownership_bridge import (
+    current_kivo_ownership_bridge_config,
+)
 from vllm.v1.worker.kivo_kv_sync_apply import (
     KivoKVSyncApplyConfig,
     apply_block_table_only_if_safe,
@@ -162,6 +165,7 @@ def build_runtime_block_table_apply_summary(
     paired_blocked = 0
     paired_blocker_reasons: dict[str, int] = {}
     live_apply_config = current_kivo_live_ownership_apply_config()
+    ownership_bridge_config = current_kivo_ownership_bridge_config()
 
     for req_id in target_req_ids:
         attempted += 1
@@ -283,6 +287,13 @@ def build_runtime_block_table_apply_summary(
         for reason, count in live_decision.blocker_reasons.items():
             paired_blocker_reasons[reason] = (
                 paired_blocker_reasons.get(reason, 0) + count
+            )
+        if ownership_bridge_config.enabled:
+            paired_blocker_reasons["worker_path_lacks_core_kv_manager_reference"] = (
+                paired_blocker_reasons.get(
+                    "worker_path_lacks_core_kv_manager_reference", 0
+                )
+                + 1
             )
 
     return KivoRuntimeBlockTableApplySummary(
