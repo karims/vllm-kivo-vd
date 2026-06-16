@@ -25,6 +25,12 @@ class KivoOwnershipRemoveConfig:
 
 
 @dataclass(frozen=True)
+class KivoFreeToPoolConfig:
+    enabled: bool
+    action: str
+
+
+@dataclass(frozen=True)
 class KivoDemotionCommand:
     request_id: str
     visible_before_block_ids: tuple[int, ...]
@@ -80,6 +86,17 @@ def current_kivo_ownership_remove_config() -> KivoOwnershipRemoveConfig:
     if not enabled:
         action = _DEFAULT_ACTION
     return KivoOwnershipRemoveConfig(
+        enabled=enabled,
+        action=action,
+    )
+
+
+def current_kivo_free_to_pool_config() -> KivoFreeToPoolConfig:
+    enabled = _parse_bool_env("KIVO_KV_FREE_TO_POOL_ENABLE", default=False)
+    action = os.getenv("KIVO_KV_FREE_TO_POOL_ACTION", _DEFAULT_ACTION)
+    if not enabled:
+        action = _DEFAULT_ACTION
+    return KivoFreeToPoolConfig(
         enabled=enabled,
         action=action,
     )

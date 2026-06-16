@@ -1,0 +1,11 @@
+{
+  "phase": "S5.25",
+  "goal": "first_gated_free_to_pool_for_removed_demoted_blocks",
+  "runtime_behavior_changed_by_default": false,
+  "removes_from_req_to_blocks": true,
+  "live_kv_free_enabled": true,
+  "free_to_pool_succeeded": "pending_pod_validation",
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.26_block_pool_and_memory_counters_or_fail_closed_analysis"
+}

@@ -16,7 +16,9 @@ from vllm.v1.core.kivo_demotion_command import (
     KivoCoreDemotionConfig,
     KivoDemotionCommand,
     KivoDemotionCommandResult,
+    KivoFreeToPoolConfig,
     KivoOwnershipRemoveConfig,
+    current_kivo_free_to_pool_config,
     current_kivo_ownership_remove_config,
 )
 from vllm.v1.core.kivo_demotion_counters import (
@@ -74,6 +76,19 @@ class KivoOwnershipRemoveResult:
     blocker_reasons: dict[str, int]
     removes_from_req_to_blocks: bool
     frees_to_pool: bool
+
+
+@dataclass(frozen=True)
+class KivoFreeToPoolResult:
+    enabled: bool
+    request_id: str | None
+    attempted: bool
+    succeeded: bool
+    freed_block_ids: tuple[int, ...]
+    rejected_block_ids: tuple[int, ...]
+    blocker_reasons: dict[str, int]
+    block_pool_free_called: bool
+    double_free_prevented: bool
 
 
 class SingleTypeKVCacheManager(ABC):
@@ -136,6 +151,8 @@ class SingleTypeKVCacheManager(ABC):
             KivoOwnershipBridgeDecision | None
         ) = None
         self.kivo_req_to_demoted_block_ids: dict[str, set[int]] = {}
+        self.kivo_req_to_removed_demoted_blocks: dict[str, list[KVCacheBlock]] = {}
+        self.kivo_freed_demoted_block_ids: set[int] = set()
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -615,6 +632,7 @@ class SingleTypeKVCacheManager(ABC):
     def clear_kivo_demoted_blocks(self, request_id: str) -> None:
         """Clear Kivo demoted bookkeeping for one request."""
         self.kivo_req_to_demoted_block_ids.pop(request_id, None)
+        self.kivo_req_to_removed_demoted_blocks.pop(request_id, None)
 
     def remove_kivo_marked_demoted_blocks_if_safe(
         self,
@@ -695,6 +713,7 @@ class SingleTypeKVCacheManager(ABC):
             )
 
         removed_ids: list[int] = []
+        removed_blocks: list[KVCacheBlock] = []
         retained_blocks: list[KVCacheBlock] = []
         for block in req_blocks:
             if block == self._null_block:
@@ -702,6 +721,7 @@ class SingleTypeKVCacheManager(ABC):
                 continue
             if block.block_id in demoted_ids:
                 removed_ids.append(block.block_id)
+                removed_blocks.append(block)
             else:
                 retained_blocks.append(block)
 
@@ -762,6 +782,9 @@ class SingleTypeKVCacheManager(ABC):
             )
 
         self.req_to_blocks[request_id] = retained_blocks
+        self.kivo_req_to_removed_demoted_blocks.setdefault(request_id, []).extend(
+            removed_blocks
+        )
         if remaining_demoted:
             self.kivo_req_to_demoted_block_ids[request_id] = remaining_demoted
         else:
@@ -793,6 +816,126 @@ class SingleTypeKVCacheManager(ABC):
             blocker_reasons={},
             removes_from_req_to_blocks=True,
             frees_to_pool=False,
+        )
+
+    def free_kivo_removed_demoted_blocks_to_pool_if_safe(
+        self,
+        request_id: str | None,
+        *,
+        config: KivoFreeToPoolConfig | None = None,
+    ) -> KivoFreeToPoolResult:
+        """Free already-removed demoted blocks back to the pool if safe."""
+        increment_kivo_demotion_counter("free_to_pool_attempted")
+        if config is None:
+            config = current_kivo_free_to_pool_config()
+
+        def _reject(
+            *,
+            enabled: bool,
+            blocker_reasons: dict[str, int],
+            rejected_block_ids: Sequence[int] = (),
+            double_free_prevented: bool = False,
+        ) -> KivoFreeToPoolResult:
+            add_kivo_demotion_blocker_reasons(blocker_reasons)
+            increment_kivo_demotion_counter("free_to_pool_rejected")
+            set_kivo_demotion_counter_fields(
+                last_freed_block_ids_sample=(),
+                last_free_rejected_block_ids_sample=tuple(rejected_block_ids[:8]),
+            )
+            if double_free_prevented:
+                increment_kivo_demotion_counter("free_to_pool_double_free_prevented")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_free_to_pool_rejected"
+            )
+            return KivoFreeToPoolResult(
+                enabled=enabled,
+                request_id=request_id,
+                attempted=True,
+                succeeded=False,
+                freed_block_ids=(),
+                rejected_block_ids=tuple(rejected_block_ids),
+                blocker_reasons=blocker_reasons,
+                block_pool_free_called=False,
+                double_free_prevented=double_free_prevented,
+            )
+
+        if not config.enabled or config.action == "off":
+            return _reject(enabled=False, blocker_reasons={"disabled": 1})
+
+        if config.action != "free_removed_demoted_only":
+            return _reject(
+                enabled=True,
+                blocker_reasons={"invalid_free_to_pool_action": 1},
+            )
+
+        if request_id is None or request_id not in self.req_to_blocks:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"ownership_mapping_unavailable": 1},
+            )
+
+        removed_blocks = list(self.kivo_req_to_removed_demoted_blocks.get(request_id, ()))
+        if not removed_blocks:
+            return _reject(
+                enabled=True,
+                blocker_reasons={"no_removed_demoted_blocks": 1},
+            )
+
+        removed_ids = tuple(block.block_id for block in removed_blocks)
+        current_owned_ids = set(self.get_request_block_ids_for_kivo(request_id))
+        if any(block_id in current_owned_ids for block_id in removed_ids):
+            return _reject(
+                enabled=True,
+                blocker_reasons={"removed_block_still_owned_by_request": 1},
+                rejected_block_ids=removed_ids,
+            )
+
+        for other_request_id, other_blocks in self.req_to_blocks.items():
+            if other_request_id == request_id:
+                continue
+            other_owned_ids = {
+                block.block_id
+                for block in other_blocks
+                if block != self._null_block
+            }
+            if any(block_id in other_owned_ids for block_id in removed_ids):
+                return _reject(
+                    enabled=True,
+                    blocker_reasons={"removed_block_still_owned_by_other_request": 1},
+                    rejected_block_ids=removed_ids,
+                )
+
+        if any(block.block_id in self.kivo_freed_demoted_block_ids for block in removed_blocks):
+            return _reject(
+                enabled=True,
+                blocker_reasons={"double_free_prevented": 1},
+                rejected_block_ids=removed_ids,
+                double_free_prevented=True,
+            )
+
+        self.block_pool.free_blocks(removed_blocks)
+        increment_kivo_demotion_counter("free_to_pool_succeeded")
+        increment_kivo_demotion_counter("free_to_pool_blocks", len(removed_blocks))
+        increment_kivo_demotion_counter("free_to_pool_calls")
+        self.kivo_freed_demoted_block_ids.update(removed_ids)
+        self.kivo_req_to_removed_demoted_blocks.pop(request_id, None)
+        set_kivo_demotion_counter_fields(
+            last_freed_block_ids_sample=tuple(removed_ids[:8]),
+            last_free_rejected_block_ids_sample=(),
+        )
+        export_kivo_demotion_counters_snapshot_if_enabled(
+            source="manager_free_to_pool_succeeded"
+        )
+        return KivoFreeToPoolResult(
+            enabled=True,
+            request_id=request_id,
+            attempted=True,
+            succeeded=True,
+            freed_block_ids=removed_ids,
+            rejected_block_ids=(),
+            blocker_reasons={},
+            block_pool_free_called=True,
+            double_free_prevented=False,
         )
 
     def build_kivo_ownership_bridge_decision(
@@ -961,6 +1104,15 @@ class SingleTypeKVCacheManager(ABC):
             ownership_remove_result = self.remove_kivo_marked_demoted_blocks_if_safe(
                 command.request_id,
                 config=ownership_remove_config,
+            )
+        if (
+            ownership_remove_result.accepted
+            and current_kivo_free_to_pool_config().enabled
+            and current_kivo_free_to_pool_config().action != "off"
+        ):
+            self.free_kivo_removed_demoted_blocks_to_pool_if_safe(
+                command.request_id,
+                config=current_kivo_free_to_pool_config(),
             )
         export_kivo_demotion_counters_snapshot_if_enabled(
             source="manager_mark_demoted_succeeded"

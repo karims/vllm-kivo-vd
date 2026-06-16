@@ -254,6 +254,19 @@ def build_summary(
         "ownership_removed_blocks_total": int(
             counters.get("ownership_removed_blocks_total", 0) or 0
         ),
+        "free_to_pool_attempted": int(
+            counters.get("free_to_pool_attempted", 0) or 0
+        ),
+        "free_to_pool_succeeded": int(
+            counters.get("free_to_pool_succeeded", 0) or 0
+        ),
+        "free_to_pool_rejected": int(
+            counters.get("free_to_pool_rejected", 0) or 0
+        ),
+        "free_to_pool_blocks": int(counters.get("free_to_pool_blocks", 0) or 0),
+        "free_to_pool_double_free_prevented": int(
+            counters.get("free_to_pool_double_free_prevented", 0) or 0
+        ),
         "ownership_remaining_blocks_last": int(
             counters.get("ownership_remaining_blocks_last", 0) or 0
         ),
@@ -272,6 +285,12 @@ def build_summary(
         ),
         "last_remaining_block_ids_sample": list(
             counters.get("last_remaining_block_ids_sample", ()) or ()
+        ),
+        "last_freed_block_ids_sample": list(
+            counters.get("last_freed_block_ids_sample", ()) or ()
+        ),
+        "last_free_rejected_block_ids_sample": list(
+            counters.get("last_free_rejected_block_ids_sample", ()) or ()
         ),
         "req_to_blocks_removed": int(counters.get("req_to_blocks_removed", 0) or 0),
         "free_to_pool_calls": int(counters.get("free_to_pool_calls", 0) or 0),

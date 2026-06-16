@@ -57,6 +57,11 @@ class KivoDemotionCounters:
     ownership_removed_blocks: int = 0
     ownership_removed_blocks_total: int = 0
     req_to_blocks_removed: int = 0
+    free_to_pool_attempted: int = 0
+    free_to_pool_succeeded: int = 0
+    free_to_pool_rejected: int = 0
+    free_to_pool_blocks: int = 0
+    free_to_pool_double_free_prevented: int = 0
     free_to_pool_calls: int = 0
     padding_zero_ambiguous: int = 0
     last_worker_row_raw_count: int = 0
@@ -69,6 +74,8 @@ class KivoDemotionCounters:
     last_filtered_keep_ids_sample: tuple[int, ...] = ()
     last_removed_block_ids_sample: tuple[int, ...] = ()
     last_remaining_block_ids_sample: tuple[int, ...] = ()
+    last_freed_block_ids_sample: tuple[int, ...] = ()
+    last_free_rejected_block_ids_sample: tuple[int, ...] = ()
     last_owned_before_remove_count: int = 0
     last_owned_after_remove_count: int = 0
     last_marked_demoted_before_remove_count: int = 0

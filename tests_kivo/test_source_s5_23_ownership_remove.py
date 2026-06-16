@@ -39,6 +39,8 @@ class DummySingleTypeManager(SingleTypeKVCacheManager):
         self.num_cached_block = {}
         self._null_block = self.block_pool.null_block
         self.kivo_req_to_demoted_block_ids = {}
+        self.kivo_req_to_removed_demoted_blocks = {}
+        self.kivo_freed_demoted_block_ids = set()
         self._last_kivo_ownership_bridge_decision = None
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
