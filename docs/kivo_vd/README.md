@@ -31,6 +31,7 @@ Recommended reading order:
 - [Phase S5.20: Cross-Process Counter Export](source_s5_20_cross_process_counter_export.md)
 - [Phase S5.21: Command Export Trigger](source_s5_21_command_export_trigger.md)
 - [Phase S5.23: Ownership Remove](source_s5_23_ownership_remove.md)
+- [Phase S5.24: Ownership Remove Validation](source_s5_24_ownership_remove_validation.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

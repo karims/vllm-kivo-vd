@@ -227,9 +227,46 @@ def build_summary(
         "ownership_removed_blocks": int(
             counters.get("ownership_removed_blocks", 0) or 0
         ),
+        "ownership_remove_invariant_checked": int(
+            counters.get("ownership_remove_invariant_checked", 0) or 0
+        ),
+        "ownership_remove_invariant_failed": int(
+            counters.get("ownership_remove_invariant_failed", 0) or 0
+        ),
+        "ownership_removed_subset_of_marked": int(
+            counters.get("ownership_removed_subset_of_marked", 0) or 0
+        ),
+        "ownership_removed_subset_of_owned": int(
+            counters.get("ownership_removed_subset_of_owned", 0) or 0
+        ),
+        "ownership_removed_absent_after": int(
+            counters.get("ownership_removed_absent_after", 0) or 0
+        ),
+        "ownership_remaining_nonempty": int(
+            counters.get("ownership_remaining_nonempty", 0) or 0
+        ),
+        "ownership_removed_reintroduced": int(
+            counters.get("ownership_removed_reintroduced", 0) or 0
+        ),
+        "ownership_demoted_bookkeeping_cleared": int(
+            counters.get("ownership_demoted_bookkeeping_cleared", 0) or 0
+        ),
+        "ownership_removed_blocks_total": int(
+            counters.get("ownership_removed_blocks_total", 0) or 0
+        ),
         "ownership_remaining_blocks_last": int(
             counters.get("ownership_remaining_blocks_last", 0) or 0
         ),
+        "last_owned_before_remove_count": int(
+            counters.get("last_owned_before_remove_count", 0) or 0
+        ),
+        "last_owned_after_remove_count": int(
+            counters.get("last_owned_after_remove_count", 0) or 0
+        ),
+        "last_marked_demoted_before_remove_count": int(
+            counters.get("last_marked_demoted_before_remove_count", 0) or 0
+        ),
+        "last_removed_after_absent": counters.get("last_removed_after_absent"),
         "last_removed_block_ids_sample": list(
             counters.get("last_removed_block_ids_sample", ()) or ()
         ),

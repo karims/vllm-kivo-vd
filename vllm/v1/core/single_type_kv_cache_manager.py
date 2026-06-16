@@ -637,8 +637,10 @@ class SingleTypeKVCacheManager(ABC):
             increment_kivo_demotion_counter("ownership_remove_rejected")
             set_kivo_demotion_counter_fields(
                 ownership_remaining_blocks_last=len(tuple(remaining_block_ids)),
+                last_owned_after_remove_count=len(tuple(remaining_block_ids)),
                 last_removed_block_ids_sample=(),
                 last_remaining_block_ids_sample=tuple(remaining_block_ids[:8]),
+                last_removed_after_absent=None,
             )
             export_kivo_demotion_counters_snapshot_if_enabled(
                 source="manager_ownership_remove_rejected"
@@ -673,6 +675,10 @@ class SingleTypeKVCacheManager(ABC):
         demoted_ids = set(self.kivo_req_to_demoted_block_ids.get(request_id, ()))
         owned_blocks = [block for block in req_blocks if block != self._null_block]
         owned_ids = tuple(block.block_id for block in owned_blocks)
+        set_kivo_demotion_counter_fields(
+            last_owned_before_remove_count=len(owned_ids),
+            last_marked_demoted_before_remove_count=len(demoted_ids),
+        )
         if not demoted_ids:
             return _reject(
                 enabled=True,
@@ -716,8 +722,46 @@ class SingleTypeKVCacheManager(ABC):
                 remaining_block_ids=owned_ids,
             )
 
-        self.req_to_blocks[request_id] = retained_blocks
+        remaining_id_set = set(remaining_ids)
+        removed_id_set = set(removed_ids)
+        invariant_failures: dict[str, int] = {}
+        increment_kivo_demotion_counter("ownership_remove_invariant_checked")
+        if not removed_id_set.issubset(demoted_ids):
+            invariant_failures["removed_ids_not_subset_of_marked_demoted"] = 1
+        else:
+            increment_kivo_demotion_counter("ownership_removed_subset_of_marked")
+        if not removed_id_set.issubset(owned_id_set):
+            invariant_failures["removed_ids_not_subset_of_owned"] = 1
+        else:
+            increment_kivo_demotion_counter("ownership_removed_subset_of_owned")
+        if removed_id_set & remaining_id_set:
+            invariant_failures["removed_ids_still_present_after_removal"] = 1
+            increment_kivo_demotion_counter("ownership_removed_reintroduced")
+        else:
+            increment_kivo_demotion_counter("ownership_removed_absent_after")
+        if not remaining_ids:
+            invariant_failures["remaining_owned_blocks_empty"] = 1
+        else:
+            increment_kivo_demotion_counter("ownership_remaining_nonempty")
+        if len(remaining_ids) != len(remaining_id_set):
+            invariant_failures["duplicate_remaining_block_ids_after_removal"] = 1
+
         remaining_demoted = demoted_ids.difference(removed_ids)
+        bookkeeping_cleared = removed_id_set.isdisjoint(remaining_demoted)
+        if bookkeeping_cleared:
+            increment_kivo_demotion_counter("ownership_demoted_bookkeeping_cleared")
+        else:
+            invariant_failures["removed_ids_still_marked_demoted_after_removal"] = 1
+
+        if invariant_failures:
+            increment_kivo_demotion_counter("ownership_remove_invariant_failed")
+            return _reject(
+                enabled=True,
+                blocker_reasons=invariant_failures,
+                remaining_block_ids=owned_ids,
+            )
+
+        self.req_to_blocks[request_id] = retained_blocks
         if remaining_demoted:
             self.kivo_req_to_demoted_block_ids[request_id] = remaining_demoted
         else:
@@ -725,11 +769,17 @@ class SingleTypeKVCacheManager(ABC):
 
         increment_kivo_demotion_counter("ownership_remove_succeeded")
         increment_kivo_demotion_counter("ownership_removed_blocks", len(removed_ids))
+        increment_kivo_demotion_counter(
+            "ownership_removed_blocks_total",
+            len(removed_ids),
+        )
         increment_kivo_demotion_counter("req_to_blocks_removed", len(removed_ids))
         set_kivo_demotion_counter_fields(
             ownership_remaining_blocks_last=len(remaining_ids),
             last_removed_block_ids_sample=tuple(removed_ids[:8]),
             last_remaining_block_ids_sample=tuple(remaining_ids[:8]),
+            last_owned_after_remove_count=len(remaining_ids),
+            last_removed_after_absent=not bool(removed_id_set & remaining_id_set),
         )
         export_kivo_demotion_counters_snapshot_if_enabled(
             source="manager_ownership_remove_succeeded"
