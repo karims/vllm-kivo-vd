@@ -26,6 +26,7 @@ from vllm.v1.core.kivo_live_ownership_apply import (
 )
 from vllm.v1.core.kivo_kv_block_score_store import get_block_scores
 from vllm.v1.core.kivo_kv_retention_policy import (
+    KivoKVRetentionDecision,
     KivoKVRetentionConfig,
     decide_kv_retention,
 )
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_ACTION = "off"
 _SUPPORTED_POLICIES = {"recent_only", "countsketch_online"}
+_COUNTER_SAMPLE_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,17 @@ class KivoRuntimeDemotionCommandExport:
     visible_before_block_ids: tuple[int, ...]
     visible_after_block_ids: tuple[int, ...]
     candidate_demote_block_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class KivoRuntimeFilteredRowPlan:
+    visible_before_block_ids: tuple[int, ...]
+    visible_after_block_ids: tuple[int, ...]
+    candidate_demote_block_ids: tuple[int, ...]
+    protected_block_ids: tuple[int, ...]
+    filtered_row_changed: bool
+    noop_reason: str | None
+    blocker_reasons: dict[str, int]
 
 
 def build_kivo_demotion_command_for_runtime_row(
@@ -328,6 +341,130 @@ def _parse_int_env(name: str, *, default: int, minimum: int = 0) -> int:
     return max(minimum, parsed)
 
 
+def _sample_block_ids(block_ids: Sequence[int]) -> tuple[int, ...]:
+    return tuple(int(block_id) for block_id in block_ids[:_COUNTER_SAMPLE_LIMIT])
+
+
+def _plan_runtime_filtered_row(
+    *,
+    original_row: Sequence[int],
+    policy: str,
+    keep_recent_blocks: int,
+    max_full_blocks: int,
+) -> KivoRuntimeFilteredRowPlan:
+    increment_kivo_demotion_counter("filtered_row_plan_attempted")
+    row = tuple(int(block_id) for block_id in original_row)
+    nonzero_row = tuple(block_id for block_id in row if block_id != 0)
+    zero_count = len(row) - len(nonzero_row)
+    set_kivo_demotion_counter_fields(
+        last_worker_row_raw_count=len(row),
+        last_worker_row_nonzero_count=len(nonzero_row),
+        last_worker_row_unique_count=len(set(nonzero_row)),
+        last_worker_row_trailing_zero_count=zero_count,
+    )
+
+    if zero_count > 0:
+        increment_kivo_demotion_counter("filtered_row_plan_rejected")
+        increment_kivo_demotion_counter("padding_zero_ambiguous", zero_count)
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=row,
+            candidate_demote_block_ids=(),
+            protected_block_ids=(),
+            filtered_row_changed=False,
+            noop_reason="filtered_row_noop_padding_ambiguity",
+            blocker_reasons={"padding_zero_ambiguous": zero_count},
+        )
+
+    if policy == "recent_only":
+        keep_recent = min(max(0, keep_recent_blocks), len(row))
+        protected_recent = tuple(row[-keep_recent:]) if keep_recent > 0 else ()
+        visible_after = protected_recent
+        candidate_drop = tuple(row[:-keep_recent]) if keep_recent > 0 else row
+        if len(row) <= keep_recent:
+            visible_after = row
+            candidate_drop = ()
+            noop_reason = "filtered_row_noop_no_blocks_above_budget"
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+        elif not visible_after:
+            noop_reason = "filtered_row_noop_no_blocks_above_budget"
+        else:
+            noop_reason = None
+        changed = tuple(row) != tuple(visible_after)
+        if changed:
+            increment_kivo_demotion_counter("filtered_row_changed_count")
+            increment_kivo_demotion_counter(
+                "filtered_row_candidate_drop_count", len(candidate_drop)
+            )
+        elif noop_reason is None:
+            noop_reason = "filtered_row_noop_all_blocks_protected"
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(visible_after),
+            last_filtered_drop_count=len(candidate_drop),
+            last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+            last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+        )
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=tuple(visible_after),
+            candidate_demote_block_ids=tuple(candidate_drop),
+            protected_block_ids=tuple(protected_recent),
+            filtered_row_changed=changed,
+            noop_reason=noop_reason,
+            blocker_reasons=(
+                {noop_reason: 1}
+                if noop_reason is not None and not changed
+                else {}
+            ),
+        )
+
+    retention_decision = decide_kv_retention(
+        row,
+        get_block_scores(row),
+        config=KivoKVRetentionConfig(
+            enabled=True,
+            policy=policy,
+            keep_recent_blocks=keep_recent_blocks,
+            max_full_blocks=max_full_blocks,
+            min_blocks_before_action=0,
+            action="plan_only",
+        ),
+    )
+    visible_after = tuple(retention_decision.keep_block_ids)
+    candidate_drop = tuple(retention_decision.candidate_drop_block_ids)
+    changed = tuple(row) != visible_after
+    if changed:
+        increment_kivo_demotion_counter("filtered_row_changed_count")
+        increment_kivo_demotion_counter(
+            "filtered_row_candidate_drop_count", len(candidate_drop)
+        )
+    else:
+        increment_kivo_demotion_counter("filtered_row_apply_noop")
+    increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+    set_kivo_demotion_counter_fields(
+        last_filtered_keep_count=len(visible_after),
+        last_filtered_drop_count=len(candidate_drop),
+        last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+        last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+    )
+    noop_reason = None if changed else "filtered_row_noop_no_blocks_above_budget"
+    return KivoRuntimeFilteredRowPlan(
+        visible_before_block_ids=row,
+        visible_after_block_ids=visible_after,
+        candidate_demote_block_ids=candidate_drop,
+        protected_block_ids=tuple(retention_decision.protected_block_ids),
+        filtered_row_changed=changed,
+        noop_reason=noop_reason,
+        blocker_reasons=(
+            {noop_reason: 1}
+            if noop_reason is not None
+            else {}
+        ),
+    )
+
+
 def current_kivo_runtime_block_table_apply_config(
     *,
     action_default: str = _DEFAULT_ACTION,
@@ -462,25 +599,18 @@ def build_runtime_block_table_apply_summary(
             )
             continue
 
-        retention_decision = decide_kv_retention(
-            original_row,
-            get_block_scores(original_row),
-            request_id=req_id,
-            config=KivoKVRetentionConfig(
-                enabled=True,
-                policy=config.policy,
-                keep_recent_blocks=config.keep_recent_blocks,
-                max_full_blocks=config.max_full_blocks,
-                min_blocks_before_action=0,
-                action="plan_only",
-            ),
+        filtered_row_plan = _plan_runtime_filtered_row(
+            original_row=original_row,
+            policy=config.policy,
+            keep_recent_blocks=config.keep_recent_blocks,
+            max_full_blocks=config.max_full_blocks,
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,
             original_row,
-            retention_decision.keep_block_ids,
-            retention_decision.candidate_drop_block_ids,
-            protected_block_ids=retention_decision.protected_block_ids,
+            filtered_row_plan.visible_after_block_ids,
+            filtered_row_plan.candidate_demote_block_ids,
+            protected_block_ids=filtered_row_plan.protected_block_ids,
             slot_mapping_refresh_available=slot_mapping_refresh_available,
             config=KivoKVSyncApplyConfig(
                 enabled=True,
@@ -519,7 +649,24 @@ def build_runtime_block_table_apply_summary(
 
         live_plan = build_kivo_live_block_plan(
             original_row,
-            retention_decision,
+            KivoKVRetentionDecision(
+                enabled=True,
+                policy=config.policy,
+                action="plan_only",
+                request_id=req_id,
+                all_block_ids=filtered_row_plan.visible_before_block_ids,
+                keep_block_ids=filtered_row_plan.visible_after_block_ids,
+                candidate_drop_block_ids=(
+                    filtered_row_plan.candidate_demote_block_ids
+                ),
+                protected_block_ids=filtered_row_plan.protected_block_ids,
+                reason_counts=dict(filtered_row_plan.blocker_reasons),
+                score_available_count=0,
+                score_missing_count=0,
+                would_reduce_full_blocks_by=len(
+                    filtered_row_plan.candidate_demote_block_ids
+                ),
+            ),
             request_id=req_id,
             shared_block_ids=(),
             block_table_sync_available=slot_mapping_refresh_available,
@@ -542,10 +689,7 @@ def build_runtime_block_table_apply_summary(
                 apply_summary_present=True,
                 block_table_applied=block_table_applied,
                 slot_mapping_refresh_guaranteed=slot_mapping_refresh_available,
-                filtered_row_changed=(
-                    tuple(sync_decision.original_block_ids)
-                    != tuple(sync_decision.filtered_block_ids)
-                ),
+                filtered_row_changed=filtered_row_plan.filtered_row_changed,
                 keep_recent_blocks=config.keep_recent_blocks,
                 policy=config.policy,
             )

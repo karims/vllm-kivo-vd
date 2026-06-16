@@ -147,6 +147,24 @@ def build_summary(
         "block_table_apply_rejected": int(
             counters.get("block_table_apply_rejected", 0) or 0
         ),
+        "filtered_row_plan_attempted": int(
+            counters.get("filtered_row_plan_attempted", 0) or 0
+        ),
+        "filtered_row_plan_succeeded": int(
+            counters.get("filtered_row_plan_succeeded", 0) or 0
+        ),
+        "filtered_row_plan_rejected": int(
+            counters.get("filtered_row_plan_rejected", 0) or 0
+        ),
+        "filtered_row_apply_noop": int(
+            counters.get("filtered_row_apply_noop", 0) or 0
+        ),
+        "filtered_row_changed_count": int(
+            counters.get("filtered_row_changed_count", 0) or 0
+        ),
+        "filtered_row_candidate_drop_count": int(
+            counters.get("filtered_row_candidate_drop_count", 0) or 0
+        ),
         "demotion_command_export_path_entered": int(
             counters.get("demotion_command_export_path_entered", 0) or 0
         ),
@@ -163,6 +181,30 @@ def build_summary(
         "visible_after_count": int(counters.get("last_visible_after_count", 0) or 0),
         "candidate_demote_count": int(
             counters.get("last_candidate_demote_count", 0) or 0
+        ),
+        "last_worker_row_raw_count": int(
+            counters.get("last_worker_row_raw_count", 0) or 0
+        ),
+        "last_worker_row_nonzero_count": int(
+            counters.get("last_worker_row_nonzero_count", 0) or 0
+        ),
+        "last_worker_row_unique_count": int(
+            counters.get("last_worker_row_unique_count", 0) or 0
+        ),
+        "last_worker_row_trailing_zero_count": int(
+            counters.get("last_worker_row_trailing_zero_count", 0) or 0
+        ),
+        "last_filtered_keep_count": int(
+            counters.get("last_filtered_keep_count", 0) or 0
+        ),
+        "last_filtered_drop_count": int(
+            counters.get("last_filtered_drop_count", 0) or 0
+        ),
+        "last_filtered_drop_ids_sample": list(
+            counters.get("last_filtered_drop_ids_sample", ()) or ()
+        ),
+        "last_filtered_keep_ids_sample": list(
+            counters.get("last_filtered_keep_ids_sample", ()) or ()
         ),
         "filtered_row_changed": counters.get("last_filtered_row_changed"),
         "keep_recent_blocks": int(counters.get("last_keep_recent_blocks", 0) or 0),
