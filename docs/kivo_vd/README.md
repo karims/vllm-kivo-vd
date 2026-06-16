@@ -22,6 +22,7 @@ Recommended reading order:
 - [Phase S5.11: Ownership Bridge](source_s5_11_ownership_bridge.md)
 - [Phase S5.12: Mark Demoted Ownership](source_s5_12_mark_demoted_ownership.md)
 - [Phase S5.13: Runtime Demotion Mark](source_s5_13_runtime_demotion_mark.md)
+- [Phase S5.14: Manager Handoff Discovery](source_s5_14_manager_handoff.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

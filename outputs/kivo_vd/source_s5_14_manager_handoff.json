@@ -1,0 +1,11 @@
+{
+  "phase": "S5.14",
+  "goal": "runtime_to_core_kv_manager_handoff_discovery",
+  "safe_manager_reference_found": false,
+  "recommended_bridge": "explicit_core_to_worker_manager_or_callback_handoff",
+  "runtime_behavior_changed_by_default": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.15"
+}
