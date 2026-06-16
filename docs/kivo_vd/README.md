@@ -29,6 +29,7 @@ Recommended reading order:
 - [Phase S5.18: Transport Counters](source_s5_18_transport_counters.md)
 - [Phase S5.19: Demotable Transport Probe](source_s5_19_demotable_transport_probe.md)
 - [Phase S5.20: Cross-Process Counter Export](source_s5_20_cross_process_counter_export.md)
+- [Phase S5.21: Command Export Trigger](source_s5_21_command_export_trigger.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

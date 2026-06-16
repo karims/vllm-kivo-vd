@@ -15,8 +15,17 @@ class KivoDemotionCounters:
     block_table_apply_attempted: int = 0
     block_table_apply_succeeded: int = 0
     block_table_apply_rejected: int = 0
+    demotion_command_export_path_entered: int = 0
+    demotion_command_export_skipped_no_apply_summary: int = 0
+    demotion_command_export_skipped_apply_not_successful: int = 0
+    demotion_command_export_skipped_no_request_id: int = 0
+    demotion_command_export_skipped_no_visible_before: int = 0
+    demotion_command_export_skipped_no_visible_after: int = 0
+    demotion_command_export_skipped_no_candidate_demote_ids: int = 0
+    demotion_command_export_skipped_empty_after_filter: int = 0
     demotion_command_export_attempted: int = 0
     demotion_command_export_rejected: int = 0
+    demotion_command_export_succeeded: int = 0
     worker_envelopes_built: int = 0
     worker_envelopes_attached: int = 0
     scheduler_envelopes_received: int = 0
@@ -30,6 +39,12 @@ class KivoDemotionCounters:
     demoted_blocks_marked: int = 0
     req_to_blocks_removed: int = 0
     free_to_pool_calls: int = 0
+    last_visible_before_count: int = 0
+    last_visible_after_count: int = 0
+    last_candidate_demote_count: int = 0
+    last_filtered_row_changed: bool | None = None
+    last_keep_recent_blocks: int = 0
+    last_policy: str | None = None
     blocker_reasons: dict[str, int] = field(default_factory=dict)
 
 
@@ -82,6 +97,15 @@ def add_kivo_demotion_blocker_reasons(blocker_reasons: dict[str, int]) -> None:
         _COUNTERS.blocker_reasons[reason] = (
             _COUNTERS.blocker_reasons.get(reason, 0) + count
         )
+
+
+def set_kivo_demotion_counter_fields(**kwargs: object) -> None:
+    if not kivo_demotion_counters_enabled():
+        return
+    for name, value in kwargs.items():
+        if not hasattr(_COUNTERS, name):
+            continue
+        setattr(_COUNTERS, name, value)
 
 
 def export_kivo_demotion_counters_snapshot_if_enabled(

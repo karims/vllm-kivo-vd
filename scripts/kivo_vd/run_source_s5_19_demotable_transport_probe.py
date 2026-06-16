@@ -83,6 +83,36 @@ def build_summary(
     error: str | None = None,
 ) -> dict[str, Any]:
     counters = exported_counters if exported_counters is not None else parent_counters
+    export_blocker_reasons = {
+        "no_apply_summary": int(
+            counters.get("demotion_command_export_skipped_no_apply_summary", 0) or 0
+        ),
+        "apply_not_successful": int(
+            counters.get(
+                "demotion_command_export_skipped_apply_not_successful", 0
+            )
+            or 0
+        ),
+        "missing_request_id": int(
+            counters.get("demotion_command_export_skipped_no_request_id", 0) or 0
+        ),
+        "missing_visible_before_blocks": int(
+            counters.get("demotion_command_export_skipped_no_visible_before", 0) or 0
+        ),
+        "missing_visible_after_blocks": int(
+            counters.get("demotion_command_export_skipped_no_visible_after", 0) or 0
+        ),
+        "empty_candidate_demote_ids": int(
+            counters.get(
+                "demotion_command_export_skipped_no_candidate_demote_ids", 0
+            )
+            or 0
+        ),
+        "empty_after_filter": int(
+            counters.get("demotion_command_export_skipped_empty_after_filter", 0)
+            or 0
+        ),
+    }
     worker_envelope_observed = int(counters.get("worker_envelopes_built", 0) or 0) > 0
     scheduler_envelope_observed = (
         int(counters.get("scheduler_envelopes_received", 0) or 0) > 0
@@ -108,6 +138,35 @@ def build_summary(
         "counter_export_file_found": counter_export_file_found,
         "counter_export_pid": counter_export_pid,
         "counters": counters,
+        "block_table_apply_attempted": int(
+            counters.get("block_table_apply_attempted", 0) or 0
+        ),
+        "block_table_apply_succeeded": int(
+            counters.get("block_table_apply_succeeded", 0) or 0
+        ),
+        "block_table_apply_rejected": int(
+            counters.get("block_table_apply_rejected", 0) or 0
+        ),
+        "demotion_command_export_path_entered": int(
+            counters.get("demotion_command_export_path_entered", 0) or 0
+        ),
+        "demotion_command_export_attempted": int(
+            counters.get("demotion_command_export_attempted", 0) or 0
+        ),
+        "demotion_command_export_succeeded": int(
+            counters.get("demotion_command_export_succeeded", 0) or 0
+        ),
+        "demotion_command_export_blocker_reasons": export_blocker_reasons,
+        "visible_before_count": int(
+            counters.get("last_visible_before_count", 0) or 0
+        ),
+        "visible_after_count": int(counters.get("last_visible_after_count", 0) or 0),
+        "candidate_demote_count": int(
+            counters.get("last_candidate_demote_count", 0) or 0
+        ),
+        "filtered_row_changed": counters.get("last_filtered_row_changed"),
+        "keep_recent_blocks": int(counters.get("last_keep_recent_blocks", 0) or 0),
+        "policy": counters.get("last_policy"),
         "transport_observed": transport_observed,
         "worker_envelope_observed": worker_envelope_observed,
         "scheduler_envelope_observed": scheduler_envelope_observed,
