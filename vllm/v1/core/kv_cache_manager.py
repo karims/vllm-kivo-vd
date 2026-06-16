@@ -8,6 +8,12 @@ from typing import Literal, overload
 
 from vllm.distributed.kv_events import BlockStored, KVCacheEvent
 from vllm.logger import init_logger
+from vllm.v1.core.kivo_demotion_command import (
+    KivoCoreDemotionConfig,
+    KivoDemotionCommand,
+    KivoDemotionCommandResult,
+    current_kivo_core_demotion_config,
+)
 from vllm.v1.core.kv_cache_coordinator import get_kv_cache_coordinator
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
@@ -178,6 +184,20 @@ class KVCacheManager:
             The KV cache usage (between 0.0 and 1.0).
         """
         return self.block_pool.get_usage()
+
+    def apply_kivo_demotion_command(
+        self,
+        command: KivoDemotionCommand,
+        *,
+        config: KivoCoreDemotionConfig | None = None,
+    ) -> KivoDemotionCommandResult:
+        """Apply a core-owned Kivo demotion command via the coordinator."""
+        if config is None:
+            config = current_kivo_core_demotion_config()
+        return self.coordinator.apply_kivo_demotion_command(
+            command,
+            config=config,
+        )
 
     def make_prefix_cache_stats(self) -> PrefixCacheStats | None:
         """Get (and reset) the prefix cache stats.

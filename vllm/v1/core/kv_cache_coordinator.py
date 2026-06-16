@@ -5,6 +5,11 @@ from collections.abc import Sequence
 from math import lcm
 
 from vllm.v1.core.block_pool import BlockPool
+from vllm.v1.core.kivo_demotion_command import (
+    KivoCoreDemotionConfig,
+    KivoDemotionCommand,
+    KivoDemotionCommandResult,
+)
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import (
     BlockHash,
@@ -217,6 +222,42 @@ class KVCacheCoordinator(ABC):
         """
         for manager in self.single_type_managers:
             manager.free(request_id)
+
+    def apply_kivo_demotion_command(
+        self,
+        command: KivoDemotionCommand,
+        *,
+        config: KivoCoreDemotionConfig,
+    ) -> KivoDemotionCommandResult:
+        """Apply a core-owned Kivo demotion command conservatively."""
+        if not config.enabled or config.action == "off":
+            return KivoDemotionCommandResult(
+                enabled=False,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=command.candidate_demote_block_ids,
+                blocker_reasons={"disabled": 1},
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        if len(self.single_type_managers) != 1:
+            return KivoDemotionCommandResult(
+                enabled=True,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=command.candidate_demote_block_ids,
+                blocker_reasons={"ambiguous_single_type_manager_count": 1},
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        return self.single_type_managers[0].apply_kivo_demotion_command(
+            command,
+            config=config,
+        )
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> list[int]:
         """

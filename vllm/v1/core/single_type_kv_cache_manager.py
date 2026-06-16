@@ -11,6 +11,11 @@ from vllm.v1.core.kivo_kv_block_score_store import (
     get_block_scores,
     get_score_store_summary,
 )
+from vllm.v1.core.kivo_demotion_command import (
+    KivoCoreDemotionConfig,
+    KivoDemotionCommand,
+    KivoDemotionCommandResult,
+)
 from vllm.v1.core.kivo_ownership_bridge import (
     KivoOwnershipBridgeConfig,
     KivoOwnershipBridgeDecision,
@@ -658,6 +663,76 @@ class SingleTypeKVCacheManager(ABC):
         demoted = self.kivo_req_to_demoted_block_ids.setdefault(request_id, set())
         demoted.update(decision.demote_block_ids)
         return decision
+
+    def apply_kivo_demotion_command(
+        self,
+        command: KivoDemotionCommand,
+        *,
+        config: KivoCoreDemotionConfig,
+    ) -> KivoDemotionCommandResult:
+        """Apply a core-owned demotion command without freeing or removing."""
+        if not config.enabled or config.action == "off":
+            return KivoDemotionCommandResult(
+                enabled=False,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=command.candidate_demote_block_ids,
+                blocker_reasons={"disabled": 1},
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        if config.action != "mark_demoted_only":
+            return KivoDemotionCommandResult(
+                enabled=True,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=command.candidate_demote_block_ids,
+                blocker_reasons={"invalid_core_demotion_action": 1},
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        bridge_decision = self.mark_kivo_demoted_blocks_if_safe(
+            command.request_id,
+            command.candidate_demote_block_ids,
+            visible_after_block_ids=command.visible_after_block_ids,
+            protected_block_ids=command.protected_block_ids,
+            block_table_applied=command.block_table_applied,
+            slot_mapping_refresh_guaranteed=(
+                command.slot_mapping_refresh_guaranteed
+            ),
+            config=KivoOwnershipBridgeConfig(
+                enabled=True,
+                action="mark_demoted_if_safe",
+                require_block_table_applied=config.require_block_table_applied,
+                require_slot_mapping_refresh=config.require_slot_mapping_refresh,
+            ),
+        )
+        if not bridge_decision.safe_to_mark_demoted:
+            return KivoDemotionCommandResult(
+                enabled=True,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=tuple(command.candidate_demote_block_ids),
+                blocker_reasons=dict(bridge_decision.blocker_reasons),
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
+        return KivoDemotionCommandResult(
+            enabled=True,
+            request_id=command.request_id,
+            accepted=True,
+            marked_demoted_block_ids=tuple(bridge_decision.demote_block_ids),
+            rejected_block_ids=(),
+            blocker_reasons={},
+            removes_from_req_to_blocks=False,
+            frees_to_pool=False,
+        )
 
     def build_kivo_live_block_plan(self, request_id: str) -> KivoKVLiveBlockPlan:
         """Build a plan-only live demotion proposal for the request."""
