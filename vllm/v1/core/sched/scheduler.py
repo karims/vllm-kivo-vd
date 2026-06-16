@@ -33,6 +33,9 @@ from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
 )
+from vllm.v1.core.kivo_demotion_transport import (
+    apply_kivo_demotion_transport_from_model_runner_output,
+)
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
 from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kivo_vd_observer import create_kivo_vd_observer
@@ -1354,6 +1357,10 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
+        apply_kivo_demotion_transport_from_model_runner_output(
+            kv_cache_manager=self.kv_cache_manager,
+            model_runner_output=model_runner_output,
+        )
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict

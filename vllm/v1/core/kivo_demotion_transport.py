@@ -118,3 +118,22 @@ def apply_kivo_demotion_transport_envelopes(
         rejected_count=rejected,
         blocker_reasons=blocker_reasons,
     )
+
+
+def apply_kivo_demotion_transport_from_model_runner_output(
+    *,
+    kv_cache_manager: object | None,
+    model_runner_output: object,
+    config: KivoDemotionTransportConfig | None = None,
+    core_config: KivoCoreDemotionConfig | None = None,
+) -> KivoDemotionTransportResult:
+    """Apply demotion envelopes attached to a model-runner output object."""
+    envelopes = tuple(
+        getattr(model_runner_output, "kivo_demotion_transport_envelopes", ()) or ()
+    )
+    return apply_kivo_demotion_transport_envelopes(
+        kv_cache_manager=kv_cache_manager,
+        envelopes=envelopes,
+        config=config,
+        core_config=core_config,
+    )

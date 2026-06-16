@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from vllm.compilation.cuda_graph import CUDAGraphStat
+from vllm.v1.core.kivo_demotion_transport import KivoDemotionTransportEnvelope
 from vllm.v1.core.sched.output import SchedulerOutput
 
 if TYPE_CHECKING:
@@ -279,6 +280,11 @@ class ModelRunnerOutput:
     # its slot buffer via ``slot_buffer[slot_mapping] = routing_data``.
     # ``None`` when ``enable_return_routed_experts`` is off.
     routed_experts: RoutedExpertsLists | None = None
+
+    # Optional Kivo worker->core demotion command sidecar.
+    kivo_demotion_transport_envelopes: tuple[
+        KivoDemotionTransportEnvelope, ...
+    ] = ()
 
     @staticmethod
     def with_kv_conn_output_only(

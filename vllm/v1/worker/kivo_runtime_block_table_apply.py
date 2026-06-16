@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
+from vllm.v1.core.kivo_demotion_transport import (
+    KivoDemotionTransportEnvelope,
+    current_kivo_demotion_transport_config,
+)
 from vllm.v1.core.kivo_live_ownership_apply import (
     KivoLiveOwnershipApplyConfig,
     build_kivo_live_ownership_apply_decision,
@@ -74,6 +78,10 @@ class KivoRuntimeBlockTableApplySummary:
     runtime_demotion_mark_blocked_request_count: int
     runtime_demotion_mark_marked_block_count: int
     runtime_demotion_mark_blocker_reasons: dict[str, int]
+    demotion_transport_exported_count: int
+    demotion_transport_blocked_count: int
+    demotion_transport_blocker_reasons: dict[str, int]
+    demotion_transport_envelopes: tuple[KivoDemotionTransportEnvelope, ...]
 
 
 @dataclass(frozen=True)
@@ -226,6 +234,10 @@ def build_runtime_block_table_apply_summary(
             runtime_demotion_mark_blocked_request_count=0,
             runtime_demotion_mark_marked_block_count=0,
             runtime_demotion_mark_blocker_reasons={"disabled": 1},
+            demotion_transport_exported_count=0,
+            demotion_transport_blocked_count=0,
+            demotion_transport_blocker_reasons={"disabled": 1},
+            demotion_transport_envelopes=(),
         )
 
     if config.policy not in _SUPPORTED_POLICIES:
@@ -247,6 +259,10 @@ def build_runtime_block_table_apply_summary(
             runtime_demotion_mark_blocked_request_count=0,
             runtime_demotion_mark_marked_block_count=0,
             runtime_demotion_mark_blocker_reasons={"invalid_runtime_policy": 1},
+            demotion_transport_exported_count=0,
+            demotion_transport_blocked_count=0,
+            demotion_transport_blocker_reasons={"invalid_runtime_policy": 1},
+            demotion_transport_envelopes=(),
         )
 
     target_req_ids = list(req_ids) if req_ids is not None else list(input_batch.req_ids)
@@ -265,9 +281,14 @@ def build_runtime_block_table_apply_summary(
     runtime_mark_blocked = 0
     runtime_mark_blocks = 0
     runtime_mark_blocker_reasons: dict[str, int] = {}
+    transport_exported = 0
+    transport_blocked = 0
+    transport_blocker_reasons: dict[str, int] = {}
+    transport_envelopes: list[KivoDemotionTransportEnvelope] = []
     live_apply_config = current_kivo_live_ownership_apply_config()
     ownership_bridge_config = current_kivo_ownership_bridge_config()
     runtime_demotion_mark_config = current_kivo_runtime_demotion_mark_config()
+    transport_config = current_kivo_demotion_transport_config()
 
     for req_id in target_req_ids:
         attempted += 1
@@ -419,6 +440,32 @@ def build_runtime_block_table_apply_summary(
                     runtime_mark_blocker_reasons.get(reason, 0) + count
                 )
 
+        if transport_config.enabled and transport_config.action != "off":
+            command_export = build_kivo_demotion_command_for_runtime_row(
+                request_id=req_id,
+                visible_before_block_ids=original_row,
+                visible_after_block_ids=sync_decision.filtered_block_ids,
+                candidate_demote_block_ids=live_plan.candidate_demote_block_ids,
+                protected_block_ids=live_plan.protected_block_ids,
+                block_table_applied=block_table_applied,
+                slot_mapping_refresh_guaranteed=slot_mapping_refresh_available,
+            )
+            if command_export.command is None:
+                transport_blocked += 1
+                for reason, count in command_export.blocker_reasons.items():
+                    transport_blocker_reasons[reason] = (
+                        transport_blocker_reasons.get(reason, 0) + count
+                    )
+            else:
+                transport_exported += 1
+                transport_envelopes.append(
+                    KivoDemotionTransportEnvelope(
+                        request_id=req_id,
+                        command=command_export.command,
+                        source=command_export.command.source,
+                    )
+                )
+
     return KivoRuntimeBlockTableApplySummary(
         enabled=True,
         action=config.action,
@@ -437,6 +484,10 @@ def build_runtime_block_table_apply_summary(
         runtime_demotion_mark_blocked_request_count=runtime_mark_blocked,
         runtime_demotion_mark_marked_block_count=runtime_mark_blocks,
         runtime_demotion_mark_blocker_reasons=runtime_mark_blocker_reasons,
+        demotion_transport_exported_count=transport_exported,
+        demotion_transport_blocked_count=transport_blocked,
+        demotion_transport_blocker_reasons=transport_blocker_reasons,
+        demotion_transport_envelopes=tuple(transport_envelopes),
     )
 
 

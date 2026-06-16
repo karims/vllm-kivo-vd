@@ -508,6 +508,7 @@ class GPUModelRunner(
 
         # Async scheduling
         self.use_async_scheduling = self.scheduler_config.async_scheduling
+        self._last_kivo_runtime_block_table_apply_summary = None
 
         # Sampler
         self.sampler = Sampler(logprobs_mode=self.model_config.logprobs_mode)
@@ -4030,6 +4031,7 @@ class GPUModelRunner(
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: IntermediateTensors | None = None,
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
+        self._last_kivo_runtime_block_table_apply_summary = None
         if self.execute_model_state is not None:
             raise RuntimeError(
                 "State error: sample_tokens() must be called "
@@ -4591,6 +4593,11 @@ class GPUModelRunner(
                 cudagraph_stats=cudagraph_stats,
                 routed_experts=None,
             )
+            runtime_apply_summary = self._last_kivo_runtime_block_table_apply_summary
+            if runtime_apply_summary is not None:
+                output.kivo_demotion_transport_envelopes = (
+                    runtime_apply_summary.demotion_transport_envelopes
+                )
 
         if not self.use_async_scheduling:
             if self.routed_experts_initialized:

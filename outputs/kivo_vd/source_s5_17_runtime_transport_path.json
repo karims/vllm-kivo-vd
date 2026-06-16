@@ -1,0 +1,13 @@
+{
+  "phase": "S5.17",
+  "goal": "runtime_worker_to_core_demotion_transport",
+  "runtime_behavior_changed_by_default": false,
+  "runtime_transport_enabled": true,
+  "core_command_application_enabled": true,
+  "transport_path": "GPUModelRunner.execute_model -> ModelRunnerOutput -> GPUWorker.execute_model -> EngineCore.step -> Scheduler.update_from_output",
+  "removes_from_req_to_blocks": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.18_pod_sanity_for_gated_transport"
+}
