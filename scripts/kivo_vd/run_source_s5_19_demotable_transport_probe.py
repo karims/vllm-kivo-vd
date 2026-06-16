@@ -267,6 +267,36 @@ def build_summary(
         "free_to_pool_double_free_prevented": int(
             counters.get("free_to_pool_double_free_prevented", 0) or 0
         ),
+        "block_pool_free_capacity_before": int(
+            counters.get("block_pool_free_capacity_before", 0) or 0
+        ),
+        "block_pool_free_capacity_after": int(
+            counters.get("block_pool_free_capacity_after", 0) or 0
+        ),
+        "block_pool_free_capacity_delta": int(
+            counters.get("block_pool_free_capacity_delta", 0) or 0
+        ),
+        "block_pool_num_free_blocks_before": int(
+            counters.get("block_pool_num_free_blocks_before", 0) or 0
+        ),
+        "block_pool_num_free_blocks_after": int(
+            counters.get("block_pool_num_free_blocks_after", 0) or 0
+        ),
+        "block_pool_num_free_blocks_delta": int(
+            counters.get("block_pool_num_free_blocks_delta", 0) or 0
+        ),
+        "block_pool_free_accounting_observed": int(
+            counters.get("block_pool_free_accounting_observed", 0) or 0
+        ),
+        "block_pool_free_accounting_increased": int(
+            counters.get("block_pool_free_accounting_increased", 0) or 0
+        ),
+        "block_pool_free_accounting_rejected": int(
+            counters.get("block_pool_free_accounting_rejected", 0) or 0
+        ),
+        "block_pool_free_accounting_blocker_reasons": dict(
+            counters.get("block_pool_free_accounting_blocker_reasons", {}) or {}
+        ),
         "ownership_remaining_blocks_last": int(
             counters.get("ownership_remaining_blocks_last", 0) or 0
         ),

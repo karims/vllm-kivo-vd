@@ -22,6 +22,7 @@ from vllm.v1.core.kivo_demotion_command import (
     current_kivo_ownership_remove_config,
 )
 from vllm.v1.core.kivo_demotion_counters import (
+    add_kivo_block_pool_accounting_blocker_reasons,
     add_kivo_demotion_blocker_reasons,
     export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
@@ -829,6 +830,20 @@ class SingleTypeKVCacheManager(ABC):
         if config is None:
             config = current_kivo_free_to_pool_config()
 
+        def _snapshot_block_pool_free_count() -> tuple[int | None, dict[str, int]]:
+            if not hasattr(self.block_pool, "get_num_free_blocks"):
+                return None, {"block_pool_free_count_api_unavailable": 1}
+            getter = getattr(self.block_pool, "get_num_free_blocks")
+            if not callable(getter):
+                return None, {"block_pool_free_count_api_unavailable": 1}
+            try:
+                value = getter()
+            except Exception:
+                return None, {"block_pool_free_count_snapshot_failed": 1}
+            if not isinstance(value, int):
+                return None, {"block_pool_free_count_not_integer": 1}
+            return value, {}
+
         def _reject(
             *,
             enabled: bool,
@@ -913,10 +928,44 @@ class SingleTypeKVCacheManager(ABC):
                 double_free_prevented=True,
             )
 
+        before_free_blocks, before_blockers = _snapshot_block_pool_free_count()
+        if before_blockers:
+            increment_kivo_demotion_counter("block_pool_free_accounting_rejected")
+            add_kivo_block_pool_accounting_blocker_reasons(before_blockers)
+        elif before_free_blocks is not None:
+            set_kivo_demotion_counter_fields(
+                block_pool_free_capacity_before=before_free_blocks,
+                block_pool_num_free_blocks_before=before_free_blocks,
+            )
+
         self.block_pool.free_blocks(removed_blocks)
         increment_kivo_demotion_counter("free_to_pool_succeeded")
         increment_kivo_demotion_counter("free_to_pool_blocks", len(removed_blocks))
         increment_kivo_demotion_counter("free_to_pool_calls")
+
+        after_free_blocks, after_blockers = _snapshot_block_pool_free_count()
+        if after_blockers:
+            increment_kivo_demotion_counter("block_pool_free_accounting_rejected")
+            add_kivo_block_pool_accounting_blocker_reasons(after_blockers)
+        elif before_free_blocks is not None and after_free_blocks is not None:
+            delta = after_free_blocks - before_free_blocks
+            increment_kivo_demotion_counter("block_pool_free_accounting_observed")
+            if delta > 0:
+                increment_kivo_demotion_counter("block_pool_free_accounting_increased")
+            elif delta < 0:
+                increment_kivo_demotion_counter("block_pool_free_accounting_rejected")
+                add_kivo_block_pool_accounting_blocker_reasons(
+                    {"block_pool_free_count_negative_delta": 1}
+                )
+            set_kivo_demotion_counter_fields(
+                block_pool_free_capacity_before=before_free_blocks,
+                block_pool_free_capacity_after=after_free_blocks,
+                block_pool_free_capacity_delta=delta,
+                block_pool_num_free_blocks_before=before_free_blocks,
+                block_pool_num_free_blocks_after=after_free_blocks,
+                block_pool_num_free_blocks_delta=delta,
+            )
+
         self.kivo_freed_demoted_block_ids.update(removed_ids)
         self.kivo_req_to_removed_demoted_blocks.pop(request_id, None)
         set_kivo_demotion_counter_fields(

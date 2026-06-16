@@ -63,6 +63,18 @@ class KivoDemotionCounters:
     free_to_pool_blocks: int = 0
     free_to_pool_double_free_prevented: int = 0
     free_to_pool_calls: int = 0
+    block_pool_free_capacity_before: int = 0
+    block_pool_free_capacity_after: int = 0
+    block_pool_free_capacity_delta: int = 0
+    block_pool_num_free_blocks_before: int = 0
+    block_pool_num_free_blocks_after: int = 0
+    block_pool_num_free_blocks_delta: int = 0
+    block_pool_free_accounting_observed: int = 0
+    block_pool_free_accounting_increased: int = 0
+    block_pool_free_accounting_rejected: int = 0
+    block_pool_free_accounting_blocker_reasons: dict[str, int] = field(
+        default_factory=dict
+    )
     padding_zero_ambiguous: int = 0
     last_worker_row_raw_count: int = 0
     last_worker_row_nonzero_count: int = 0
@@ -138,6 +150,20 @@ def add_kivo_demotion_blocker_reasons(blocker_reasons: dict[str, int]) -> None:
             continue
         _COUNTERS.blocker_reasons[reason] = (
             _COUNTERS.blocker_reasons.get(reason, 0) + count
+        )
+
+
+def add_kivo_block_pool_accounting_blocker_reasons(
+    blocker_reasons: dict[str, int],
+) -> None:
+    if not kivo_demotion_counters_enabled():
+        return
+    for reason, count in blocker_reasons.items():
+        if count <= 0:
+            continue
+        _COUNTERS.block_pool_free_accounting_blocker_reasons[reason] = (
+            _COUNTERS.block_pool_free_accounting_blocker_reasons.get(reason, 0)
+            + count
         )
 
 

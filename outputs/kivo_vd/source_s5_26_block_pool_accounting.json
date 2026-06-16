@@ -1,0 +1,13 @@
+{
+  "phase": "S5.26",
+  "goal": "observe_block_pool_accounting_after_gated_free_to_pool",
+  "runtime_behavior_changed_by_default": false,
+  "removes_from_req_to_blocks": true,
+  "live_kv_free_enabled": true,
+  "block_pool_accounting_observed": null,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "performance_claim_allowed": false,
+  "next_phase_if_accounting_observed": "S5.27_reuse_and_quality_sanity_probe",
+  "next_phase_if_accounting_unavailable": "S5.27_block_pool_accounting_api_bridge"
+}
