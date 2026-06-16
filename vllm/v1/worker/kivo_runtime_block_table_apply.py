@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
+from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
 from vllm.v1.core.kivo_live_ownership_apply import (
     KivoLiveOwnershipApplyConfig,
     build_kivo_live_ownership_apply_decision,
@@ -73,6 +74,80 @@ class KivoRuntimeBlockTableApplySummary:
     runtime_demotion_mark_blocked_request_count: int
     runtime_demotion_mark_marked_block_count: int
     runtime_demotion_mark_blocker_reasons: dict[str, int]
+
+
+@dataclass(frozen=True)
+class KivoRuntimeDemotionCommandExport:
+    command: KivoDemotionCommand | None
+    blocker_reasons: dict[str, int]
+
+
+def build_kivo_demotion_command_for_runtime_row(
+    *,
+    request_id: str | None,
+    visible_before_block_ids: Sequence[int],
+    visible_after_block_ids: Sequence[int],
+    candidate_demote_block_ids: Sequence[int],
+    protected_block_ids: Sequence[int] = (),
+    block_table_applied: bool,
+    slot_mapping_refresh_guaranteed: bool,
+) -> KivoRuntimeDemotionCommandExport:
+    """Build a worker-side demotion command payload when local invariants hold."""
+    blocker_reasons: dict[str, int] = {}
+    before = tuple(int(block_id) for block_id in visible_before_block_ids)
+    after = tuple(int(block_id) for block_id in visible_after_block_ids)
+    demote = tuple(int(block_id) for block_id in candidate_demote_block_ids)
+    protected = tuple(int(block_id) for block_id in protected_block_ids)
+
+    if request_id is None:
+        blocker_reasons["missing_request_id"] = 1
+    if not block_table_applied:
+        blocker_reasons["block_table_not_applied"] = 1
+    if not slot_mapping_refresh_guaranteed:
+        blocker_reasons["slot_mapping_refresh_not_guaranteed"] = 1
+    if not demote:
+        blocker_reasons["empty_candidate_demote_ids"] = 1
+    if not after:
+        blocker_reasons["empty_visible_after_blocks"] = 1
+
+    before_set = set(before)
+    after_set = set(after)
+    protected_set = set(protected)
+    if any(block_id not in before_set for block_id in demote):
+        blocker_reasons["candidate_demote_not_visible_before"] = sum(
+            1 for block_id in demote if block_id not in before_set
+        )
+    if any(block_id in after_set for block_id in demote):
+        blocker_reasons["candidate_demote_still_visible_after"] = sum(
+            1 for block_id in demote if block_id in after_set
+        )
+    if any(block_id not in before_set for block_id in after):
+        blocker_reasons["visible_after_not_subset_of_visible_before"] = sum(
+            1 for block_id in after if block_id not in before_set
+        )
+    if any(block_id in protected_set for block_id in demote):
+        blocker_reasons["candidate_demote_overlaps_protected"] = sum(
+            1 for block_id in demote if block_id in protected_set
+        )
+
+    if blocker_reasons or request_id is None:
+        return KivoRuntimeDemotionCommandExport(
+            command=None,
+            blocker_reasons=blocker_reasons,
+        )
+
+    return KivoRuntimeDemotionCommandExport(
+        command=KivoDemotionCommand(
+            request_id=request_id,
+            visible_before_block_ids=before,
+            visible_after_block_ids=after,
+            candidate_demote_block_ids=demote,
+            protected_block_ids=protected,
+            block_table_applied=block_table_applied,
+            slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+        ),
+        blocker_reasons={},
+    )
 
 
 def _parse_bool_env(name: str, *, default: bool = False) -> bool:
