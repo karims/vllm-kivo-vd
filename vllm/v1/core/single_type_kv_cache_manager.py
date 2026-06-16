@@ -16,6 +16,10 @@ from vllm.v1.core.kivo_demotion_command import (
     KivoDemotionCommand,
     KivoDemotionCommandResult,
 )
+from vllm.v1.core.kivo_demotion_counters import (
+    add_kivo_demotion_blocker_reasons,
+    increment_kivo_demotion_counter,
+)
 from vllm.v1.core.kivo_ownership_bridge import (
     KivoOwnershipBridgeConfig,
     KivoOwnershipBridgeDecision,
@@ -671,7 +675,10 @@ class SingleTypeKVCacheManager(ABC):
         config: KivoCoreDemotionConfig,
     ) -> KivoDemotionCommandResult:
         """Apply a core-owned demotion command without freeing or removing."""
+        increment_kivo_demotion_counter("manager_mark_demoted_attempted")
         if not config.enabled or config.action == "off":
+            add_kivo_demotion_blocker_reasons({"disabled": 1})
+            increment_kivo_demotion_counter("manager_mark_demoted_rejected")
             return KivoDemotionCommandResult(
                 enabled=False,
                 request_id=command.request_id,
@@ -684,6 +691,8 @@ class SingleTypeKVCacheManager(ABC):
             )
 
         if config.action != "mark_demoted_only":
+            add_kivo_demotion_blocker_reasons({"invalid_core_demotion_action": 1})
+            increment_kivo_demotion_counter("manager_mark_demoted_rejected")
             return KivoDemotionCommandResult(
                 enabled=True,
                 request_id=command.request_id,
@@ -712,6 +721,8 @@ class SingleTypeKVCacheManager(ABC):
             ),
         )
         if not bridge_decision.safe_to_mark_demoted:
+            add_kivo_demotion_blocker_reasons(dict(bridge_decision.blocker_reasons))
+            increment_kivo_demotion_counter("manager_mark_demoted_rejected")
             return KivoDemotionCommandResult(
                 enabled=True,
                 request_id=command.request_id,
@@ -723,6 +734,11 @@ class SingleTypeKVCacheManager(ABC):
                 frees_to_pool=False,
             )
 
+        increment_kivo_demotion_counter("manager_mark_demoted_succeeded")
+        increment_kivo_demotion_counter(
+            "demoted_blocks_marked",
+            len(tuple(bridge_decision.demote_block_ids)),
+        )
         return KivoDemotionCommandResult(
             enabled=True,
             request_id=command.request_id,

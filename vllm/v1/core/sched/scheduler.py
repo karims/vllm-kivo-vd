@@ -33,6 +33,7 @@ from vllm.v1.core.encoder_cache_manager import (
     EncoderCacheManager,
     EncoderDecoderCacheManager,
 )
+from vllm.v1.core.kivo_demotion_counters import increment_kivo_demotion_counter
 from vllm.v1.core.kivo_demotion_transport import (
     apply_kivo_demotion_transport_from_model_runner_output,
 )
@@ -1357,6 +1358,17 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
+        increment_kivo_demotion_counter(
+            "scheduler_envelopes_received",
+            len(
+                getattr(
+                    model_runner_output,
+                    "kivo_demotion_transport_envelopes",
+                    (),
+                )
+                or ()
+            ),
+        )
         apply_kivo_demotion_transport_from_model_runner_output(
             kv_cache_manager=self.kv_cache_manager,
             model_runner_output=model_runner_output,

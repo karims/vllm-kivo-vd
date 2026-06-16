@@ -26,6 +26,7 @@ Recommended reading order:
 - [Phase S5.15: Core Demotion Command](source_s5_15_core_demotion_command.md)
 - [Phase S5.16: Demotion Transport](source_s5_16_demotion_transport.md)
 - [Phase S5.17: Runtime Transport Path](source_s5_17_runtime_transport_path.md)
+- [Phase S5.18: Transport Counters](source_s5_18_transport_counters.md)
 - [Phase 5.1: Linux Runtime Validation Result](phase5_1_linux_runtime_validation_result.md)
 - [Phase 5.2: RunPod Benchmark Results](phase5_2_runpod_benchmark_results.md)
 

@@ -14,6 +14,10 @@ from vllm.v1.core.kivo_demotion_command import (
     KivoDemotionCommandResult,
     current_kivo_core_demotion_config,
 )
+from vllm.v1.core.kivo_demotion_counters import (
+    add_kivo_demotion_blocker_reasons,
+    increment_kivo_demotion_counter,
+)
 
 _DEFAULT_ACTION = "off"
 
@@ -68,6 +72,7 @@ def apply_kivo_demotion_transport_envelopes(
         config = current_kivo_demotion_transport_config()
     if core_config is None:
         core_config = current_kivo_core_demotion_config()
+    envelope_count = len(tuple(envelopes))
 
     if not config.enabled or config.action == "off":
         return KivoDemotionTransportResult(
@@ -87,29 +92,39 @@ def apply_kivo_demotion_transport_envelopes(
         blocker_reasons["kv_cache_manager_missing_command_api"] = 1
 
     if blocker_reasons:
+        increment_kivo_demotion_counter("core_transport_batches_received")
+        increment_kivo_demotion_counter("core_commands_rejected", envelope_count)
+        add_kivo_demotion_blocker_reasons(blocker_reasons)
         return KivoDemotionTransportResult(
             enabled=True,
             accepted_count=0,
             applied_count=0,
-            rejected_count=len(tuple(envelopes)),
+            rejected_count=envelope_count,
             blocker_reasons=blocker_reasons,
         )
 
+    if envelope_count > 0:
+        increment_kivo_demotion_counter("core_transport_batches_received")
     accepted = 0
     applied = 0
     rejected = 0
     for envelope in envelopes:
         accepted += 1
+        increment_kivo_demotion_counter("core_commands_attempted")
         result: KivoDemotionCommandResult = kv_cache_manager.apply_kivo_demotion_command(
             envelope.command,
             config=core_config,
         )
         if result.accepted:
             applied += 1
+            increment_kivo_demotion_counter("core_commands_accepted")
         else:
             rejected += 1
+            increment_kivo_demotion_counter("core_commands_rejected")
             for reason, count in result.blocker_reasons.items():
                 blocker_reasons[reason] = blocker_reasons.get(reason, 0) + count
+
+    add_kivo_demotion_blocker_reasons(blocker_reasons)
 
     return KivoDemotionTransportResult(
         enabled=True,

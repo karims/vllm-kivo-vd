@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
+from vllm.v1.core.kivo_demotion_counters import increment_kivo_demotion_counter
 from vllm.v1.core.kivo_demotion_transport import (
     KivoDemotionTransportEnvelope,
     current_kivo_demotion_transport_config,
@@ -144,6 +145,7 @@ def build_kivo_demotion_command_for_runtime_row(
             blocker_reasons=blocker_reasons,
         )
 
+    increment_kivo_demotion_counter("worker_envelopes_built")
     return KivoRuntimeDemotionCommandExport(
         command=KivoDemotionCommand(
             request_id=request_id,

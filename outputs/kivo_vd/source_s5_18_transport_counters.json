@@ -1,0 +1,15 @@
+{
+  "phase": "S5.18",
+  "goal": "lightweight_runtime_demotion_transport_counters",
+  "runtime_behavior_changed_by_default": false,
+  "counters_enabled_by_default": false,
+  "worker_envelope_counter": true,
+  "scheduler_receive_counter": true,
+  "core_command_counter": true,
+  "manager_mark_demoted_counter": true,
+  "removes_from_req_to_blocks": false,
+  "live_kv_free_enabled": false,
+  "memory_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "next_phase": "S5.19_transport_observed_pod_run_or_demotable_prompt_probe"
+}
