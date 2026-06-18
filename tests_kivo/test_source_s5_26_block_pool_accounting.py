@@ -9,6 +9,7 @@ from scripts.kivo_vd.run_source_s5_26_block_pool_accounting_probe import (
     _supports_enable_prefix_caching,
     build_prompts,
     build_summary,
+    build_targeted_prompt,
     parse_args as parse_run_args,
 )
 from scripts.kivo_vd.validate_source_s5_26_block_pool_accounting_probe import (
@@ -26,6 +27,17 @@ class _FakeLLMWithPrefixCaching:
 class _FakeLLMWithoutPrefixCaching:
     def __init__(self, **kwargs):
         del kwargs
+
+
+class _FakeTokenizer:
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = False,
+    ) -> list[int]:
+        del add_special_tokens
+        return text.split()
 
 
 def test_build_prompts_repeated_mode_reuses_same_prompt():
@@ -46,6 +58,45 @@ def test_build_prompts_varied_length_mode_changes_lengths():
     lengths = [len(prompt) for prompt in prompts]
     assert len(prompts) == 4
     assert len(set(lengths)) > 1
+
+
+def test_build_targeted_prompt_reaches_target_tokens():
+    prompt = build_targeted_prompt(
+        _FakeTokenizer(),
+        target_prompt_tokens=30,
+        prompt_index=0,
+        prompt_mode="repeated",
+        max_model_len=64,
+    )
+    assert len(prompt.split()) >= 30
+
+
+def test_build_prompts_varied_target_tokens_keep_unique_suffixes():
+    prompts = build_prompts(
+        repeats=2,
+        num_prompts=3,
+        prompt_mode="varied",
+        target_prompt_tokens=24,
+        tokenizer=_FakeTokenizer(),
+        max_model_len=64,
+    )
+    assert len(prompts) == 3
+    assert len(set(prompts)) == 3
+    assert all(len(prompt.split()) >= 24 for prompt in prompts)
+
+
+def test_build_prompts_varied_length_target_tokens_vary_around_target():
+    prompts = build_prompts(
+        repeats=2,
+        num_prompts=4,
+        prompt_mode="varied-length",
+        target_prompt_tokens=40,
+        tokenizer=_FakeTokenizer(),
+        max_model_len=64,
+    )
+    lengths = [len(prompt.split()) for prompt in prompts]
+    assert min(lengths) >= 30
+    assert max(lengths) > min(lengths)
 
 
 def test_supports_enable_prefix_caching_detection():
@@ -83,6 +134,9 @@ def test_build_summary_reports_compact_fields_and_totals():
         prompt_repeats=8,
         num_prompts=2,
         disable_prefix_caching=True,
+        max_output_tokens=12,
+        max_num_seqs=3,
+        target_prompt_tokens=48,
     )
     summary = build_summary(
         args=args,
@@ -117,11 +171,18 @@ def test_build_summary_reports_compact_fields_and_totals():
         wall_time_seconds=1.25,
     )
     assert summary["avg_prompt_tokens"] == 22.0
+    assert summary["requested_max_output_tokens"] == 12
+    assert summary["estimated_max_active_prompt_tokens"] == 66.0
+    assert summary["estimated_max_active_total_tokens"] == 102.0
     assert summary["req_to_blocks_removed_total"] == 8
     assert summary["free_to_pool_blocks_total"] == 8
+    assert summary["free_to_pool_blocks_total_or_last"] == 8
     assert summary["free_to_pool_calls_total"] == 2
+    assert summary["invariant_failed"] == 0
     assert summary["summary"]["free_to_pool_observed"] is True
     assert summary["summary"]["block_pool_accounting_observed"] is True
+    assert summary["summary"]["requested_max_output_tokens"] == 12
+    assert summary["summary"]["estimated_max_active_total_tokens"] == 102.0
     assert summary["summary"]["wall_time_seconds"] == 1.25
     assert "worker_envelopes_built" in summary["cumulative_counters"]
     assert "last_freed_block_ids_sample" in summary["last_snapshot_counters"]
@@ -349,11 +410,17 @@ def test_cli_help_includes_expected_args():
             str(Path("/tmp/out.json")),
             "--prompt-mode",
             "varied",
+            "--target-prompt-tokens",
+            "64",
+            "--max-output-tokens",
+            "12",
             "--disable-prefix-caching",
         ]
     )
     validate_args = parse_validate_args(["--input", str(Path("/tmp/out.json"))])
     assert run_args.output.endswith("out.json")
     assert run_args.prompt_mode == "varied"
+    assert run_args.target_prompt_tokens == 64
+    assert run_args.max_output_tokens == 12
     assert run_args.disable_prefix_caching is True
     assert validate_args.input.endswith("out.json")

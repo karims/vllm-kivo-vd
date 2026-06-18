@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -29,6 +29,15 @@ VARIED_SENTENCE_BANK = (
     "A reminder that counters can move without proving GPU memory reduction.",
     "A compact benchmark line about prompt variety and pool accounting.",
 )
+
+
+class TokenizerLike(Protocol):
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = False,
+    ) -> list[int]: ...
 
 
 def build_long_context_prompt(*, repeats: int = 200) -> str:
@@ -54,13 +63,78 @@ def build_varied_prompt(*, repeats: int, prompt_index: int) -> str:
     )
 
 
+def _count_tokens(tokenizer: TokenizerLike, text: str) -> int:
+    return len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def _load_tokenizer(model_name: str) -> TokenizerLike | None:
+    try:
+        from transformers import AutoTokenizer
+    except Exception:
+        return None
+    return AutoTokenizer.from_pretrained(model_name)
+
+
+def _target_tokens_for_index(
+    *,
+    target_prompt_tokens: int,
+    prompt_index: int,
+    prompt_mode: str,
+    max_model_len: int,
+) -> int:
+    if prompt_mode != "varied-length":
+        return min(target_prompt_tokens, max_model_len)
+    multipliers = (0.75, 0.9, 1.0, 1.15)
+    target = int(round(target_prompt_tokens * multipliers[prompt_index % len(multipliers)]))
+    return min(max(1, target), max_model_len)
+
+
+def build_targeted_prompt(
+    tokenizer: TokenizerLike,
+    *,
+    target_prompt_tokens: int,
+    prompt_index: int,
+    prompt_mode: str,
+    max_model_len: int,
+) -> str:
+    target_tokens = _target_tokens_for_index(
+        target_prompt_tokens=target_prompt_tokens,
+        prompt_index=prompt_index,
+        prompt_mode=prompt_mode,
+        max_model_len=max_model_len,
+    )
+    if prompt_mode == "repeated":
+        prompt = build_long_context_prompt(repeats=1)
+        filler = DEFAULT_SENTENCE
+    else:
+        prompt = build_varied_prompt(repeats=1, prompt_index=prompt_index)
+        filler = VARIED_SENTENCE_BANK[prompt_index % len(VARIED_SENTENCE_BANK)]
+    while _count_tokens(tokenizer, prompt) < target_tokens:
+        prompt += f" {filler}"
+    return prompt
+
+
 def build_prompts(
     *,
     repeats: int,
     num_prompts: int,
     prompt_mode: str = "repeated",
+    target_prompt_tokens: int | None = None,
+    tokenizer: TokenizerLike | None = None,
+    max_model_len: int = 1024,
 ) -> list[str]:
     num_prompts = max(1, num_prompts)
+    if target_prompt_tokens is not None and tokenizer is not None:
+        return [
+            build_targeted_prompt(
+                tokenizer,
+                target_prompt_tokens=target_prompt_tokens,
+                prompt_index=idx,
+                prompt_mode=prompt_mode,
+                max_model_len=max_model_len,
+            )
+            for idx in range(num_prompts)
+        ]
     if prompt_mode == "repeated":
         prompt = build_long_context_prompt(repeats=repeats)
         return [prompt for _ in range(num_prompts)]
@@ -89,7 +163,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Run an S5.26 vLLM probe for block-pool accounting."
     )
     parser.add_argument("--model", default="facebook/opt-125m")
-    parser.add_argument("--max-tokens", type=int, default=16)
+    parser.add_argument(
+        "--max-output-tokens",
+        "--max-tokens",
+        dest="max_output_tokens",
+        type=int,
+        default=16,
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.35)
     parser.add_argument("--max-model-len", type=int, default=1024)
     parser.add_argument("--max-num-batched-tokens", type=int, default=1024)
@@ -99,6 +179,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--prompt-repeats", type=int, default=200)
     parser.add_argument("--num-prompts", type=int, default=1)
+    parser.add_argument("--target-prompt-tokens", type=int, default=None)
     parser.add_argument(
         "--prompt-mode",
         choices=("repeated", "varied", "varied-length"),
@@ -192,6 +273,20 @@ def _average_prompt_tokens(prompt_token_lengths: list[int | None]) -> float | No
     return sum(valid) / len(valid)
 
 
+def _sum_prompt_tokens(prompt_token_lengths: list[int | None]) -> int | None:
+    valid = [length for length in prompt_token_lengths if isinstance(length, int)]
+    if not valid:
+        return None
+    return sum(valid)
+
+
+def _max_prompt_tokens(prompt_token_lengths: list[int | None]) -> int | None:
+    valid = [length for length in prompt_token_lengths if isinstance(length, int)]
+    if not valid:
+        return None
+    return max(valid)
+
+
 def _build_counter_views(counters: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     cumulative_keys = (
         "worker_envelopes_built",
@@ -258,6 +353,14 @@ def _build_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "generation_success": bool(summary.get("generation_success")),
         "prompt_count": int(summary.get("prompt_count", 0) or 0),
         "avg_prompt_tokens": summary.get("avg_prompt_tokens"),
+        "max_prompt_tokens": summary.get("max_prompt_tokens"),
+        "requested_max_output_tokens": summary.get("requested_max_output_tokens"),
+        "max_num_seqs": summary.get("max_num_seqs"),
+        "estimated_max_active_total_tokens": summary.get(
+            "estimated_max_active_total_tokens"
+        ),
+        "gpu_kv_cache_size_tokens": summary.get("gpu_kv_cache_size_tokens"),
+        "estimated_pressure_ratio": summary.get("estimated_pressure_ratio"),
         "transport_observed": bool(summary.get("transport_observed")),
         "ownership_remove_observed": bool(summary.get("ownership_remove_observed")),
         "free_to_pool_observed": bool(
@@ -277,6 +380,12 @@ def _build_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         ),
         "free_to_pool_calls_total": int(
             summary.get("free_to_pool_calls_total", 0) or 0
+        ),
+        "removed_but_not_freed_block_ids_count": int(
+            summary.get("removed_but_not_freed_block_ids_count", 0) or 0
+        ),
+        "free_attempt_duplicate_block_ids_count": int(
+            summary.get("free_attempt_duplicate_block_ids_count", 0) or 0
         ),
         "invariant_failed": int(
             summary.get("ownership_remove_invariant_failed", 0) or 0
@@ -322,6 +431,81 @@ def build_summary(
         counters = {}
     cumulative_counters, last_snapshot_counters = _build_counter_views(counters)
     avg_prompt_tokens = _average_prompt_tokens(prompt_token_lengths)
+    total_prompt_tokens = _sum_prompt_tokens(prompt_token_lengths)
+    max_prompt_tokens = _max_prompt_tokens(prompt_token_lengths)
+    requested_max_output_tokens = int(
+        getattr(args, "max_output_tokens", getattr(args, "max_tokens", 16))
+    )
+    max_num_seqs = int(getattr(args, "max_num_seqs", 1))
+    estimated_max_active_prompt_tokens = (
+        avg_prompt_tokens * max_num_seqs
+        if avg_prompt_tokens is not None
+        else None
+    )
+    estimated_max_active_total_tokens = (
+        (avg_prompt_tokens + requested_max_output_tokens) * max_num_seqs
+        if avg_prompt_tokens is not None
+        else None
+    )
+    gpu_kv_cache_size_tokens = None
+    estimated_pressure_ratio = (
+        estimated_max_active_total_tokens / gpu_kv_cache_size_tokens
+        if (
+            estimated_max_active_total_tokens is not None
+            and gpu_kv_cache_size_tokens not in (None, 0)
+        )
+        else None
+    )
+    req_to_blocks_removed_total = int(counters.get("req_to_blocks_removed", 0) or 0)
+    ownership_removed_blocks_total = int(
+        counters.get("ownership_removed_blocks_total", 0)
+        or counters.get("ownership_removed_blocks", 0)
+        or 0
+    )
+    free_to_pool_blocks_total = int(counters.get("free_to_pool_blocks", 0) or 0)
+    last_removed_sample = tuple(
+        last_snapshot_counters.get("last_removed_block_ids_sample") or ()
+    )[:20]
+    last_freed_sample = tuple(
+        last_snapshot_counters.get("last_freed_block_ids_sample") or ()
+    )[:20]
+    last_rejected_sample = tuple(
+        last_snapshot_counters.get("last_free_rejected_block_ids_sample") or ()
+    )[:20]
+    removed_but_not_freed_sample = tuple(
+        block_id for block_id in last_removed_sample if block_id not in set(last_freed_sample)
+    )[:20]
+    blocker_reasons = dict(counters.get("blocker_reasons", {}) or {})
+    free_to_pool_rejected_reason_counts = {
+        "already_freed_or_duplicate": int(
+            blocker_reasons.get("double_free_prevented", 0) or 0
+        ),
+        "not_removed": int(
+            blocker_reasons.get("no_removed_demoted_blocks", 0) or 0
+        ),
+        "not_marked_demoted": int(
+            blocker_reasons.get("not_marked_demoted", 0) or 0
+        ),
+        "still_owned": int(
+            (blocker_reasons.get("removed_block_still_owned_by_request", 0) or 0)
+            + (blocker_reasons.get("removed_block_still_owned_by_other_request", 0) or 0)
+        ),
+    }
+    total_known_blockers = sum(
+        count
+        for reason, count in blocker_reasons.items()
+        if reason in {
+            "double_free_prevented",
+            "no_removed_demoted_blocks",
+            "not_marked_demoted",
+            "removed_block_still_owned_by_request",
+            "removed_block_still_owned_by_other_request",
+        }
+    )
+    free_to_pool_rejected_reason_counts["unknown"] = max(
+        sum(blocker_reasons.values()) - total_known_blockers,
+        0,
+    )
 
     summary = dict(base_summary)
     summary["phase"] = "S5.26"
@@ -329,7 +513,20 @@ def build_summary(
     summary["prompt_mode"] = args.prompt_mode
     summary["prompt_repeats"] = args.prompt_repeats
     summary["num_prompts"] = max(1, args.num_prompts)
+    summary["target_prompt_tokens"] = args.target_prompt_tokens
+    summary["requested_max_output_tokens"] = requested_max_output_tokens
+    summary["max_num_seqs"] = max_num_seqs
+    summary["total_prompt_tokens"] = total_prompt_tokens
     summary["avg_prompt_tokens"] = avg_prompt_tokens
+    summary["max_prompt_tokens"] = max_prompt_tokens
+    summary["estimated_max_active_prompt_tokens"] = (
+        estimated_max_active_prompt_tokens
+    )
+    summary["estimated_max_active_total_tokens"] = (
+        estimated_max_active_total_tokens
+    )
+    summary["gpu_kv_cache_size_tokens"] = gpu_kv_cache_size_tokens
+    summary["estimated_pressure_ratio"] = estimated_pressure_ratio
     summary["prefix_caching_disable_requested"] = bool(
         getattr(args, "disable_prefix_caching", False)
     )
@@ -365,21 +562,18 @@ def build_summary(
         cuda_before.get("cuda_memory_snapshot_blocker")
         or cuda_after.get("cuda_memory_snapshot_blocker")
     )
-    summary["req_to_blocks_removed_total"] = int(
-        counters.get("req_to_blocks_removed", 0) or 0
-    )
-    summary["ownership_removed_blocks_total"] = int(
-        counters.get("ownership_removed_blocks_total", 0)
-        or counters.get("ownership_removed_blocks", 0)
-        or 0
-    )
-    summary["free_to_pool_blocks_total"] = int(
-        counters.get("free_to_pool_blocks", 0) or 0
-    )
+    summary["req_to_blocks_removed_total"] = req_to_blocks_removed_total
+    summary["ownership_removed_blocks_total"] = ownership_removed_blocks_total
+    summary["free_to_pool_blocks_total"] = free_to_pool_blocks_total
     summary["free_to_pool_blocks_last"] = (
         len(last_snapshot_counters.get("last_freed_block_ids_sample") or [])
         if last_snapshot_counters.get("last_freed_block_ids_sample") is not None
         else None
+    )
+    summary["free_to_pool_blocks_total_or_last"] = (
+        free_to_pool_blocks_total
+        if free_to_pool_blocks_total > 0
+        else summary["free_to_pool_blocks_last"]
     )
     summary["free_to_pool_calls_total"] = int(
         counters.get("free_to_pool_calls", 0) or 0
@@ -392,6 +586,21 @@ def build_summary(
     )
     summary["block_pool_num_free_blocks_delta"] = int(
         counters.get("block_pool_num_free_blocks_delta", 0) or 0
+    )
+    summary["unique_removed_block_ids_count"] = req_to_blocks_removed_total
+    summary["unique_free_to_pool_block_ids_count"] = free_to_pool_blocks_total
+    summary["removed_but_not_freed_block_ids_count"] = max(
+        req_to_blocks_removed_total - free_to_pool_blocks_total,
+        0,
+    )
+    summary["free_attempt_duplicate_block_ids_count"] = int(
+        counters.get("free_to_pool_double_free_prevented", 0) or 0
+    )
+    summary["free_to_pool_rejected_reason_counts"] = free_to_pool_rejected_reason_counts
+    summary["removed_but_not_freed_block_ids_sample"] = list(removed_but_not_freed_sample)
+    summary["duplicate_free_block_ids_sample"] = list(last_rejected_sample)
+    summary["invariant_failed"] = int(
+        summary.get("ownership_remove_invariant_failed", 0) or 0
     )
     summary["cumulative_counters"] = cumulative_counters
     summary["last_snapshot_counters"] = last_snapshot_counters
@@ -413,6 +622,9 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
         repeats=args.prompt_repeats,
         num_prompts=args.num_prompts,
         prompt_mode=args.prompt_mode,
+        target_prompt_tokens=args.target_prompt_tokens,
+        tokenizer=_load_tokenizer(args.model) if args.target_prompt_tokens else None,
+        max_model_len=args.max_model_len,
     )
     prompt_char_lengths = [len(prompt) for prompt in prompts]
     export_file = os.getenv("KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE")
@@ -432,7 +644,7 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
         llm = LLM(**llm_kwargs)
         sampling_params = SamplingParams(
             temperature=0.0,
-            max_tokens=args.max_tokens,
+            max_tokens=args.max_output_tokens,
             seed=args.seed,
         )
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
