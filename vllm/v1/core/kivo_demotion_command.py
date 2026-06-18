@@ -39,6 +39,9 @@ class KivoDemotionCommand:
     protected_block_ids: tuple[int, ...]
     block_table_applied: bool
     slot_mapping_refresh_guaranteed: bool
+    sketch_gated: bool = False
+    sketch_backend: str | None = None
+    sketch_block_count: int = 0
     source: str = "worker_pre_slot_mapping"
 
 

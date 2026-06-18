@@ -76,6 +76,7 @@ def test_free_enabled_but_no_removed_blocks_fails_closed():
 
 def test_free_enabled_frees_only_removed_blocks(monkeypatch):
     monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_SKETCH_ENABLE", "1")
     monkeypatch.setenv("KIVO_KV_OWNERSHIP_REMOVE_ENABLE", "1")
     monkeypatch.setenv(
         "KIVO_KV_OWNERSHIP_REMOVE_ACTION", "remove_marked_demoted_only"
@@ -94,6 +95,7 @@ def test_free_enabled_frees_only_removed_blocks(monkeypatch):
     assert snapshot["free_to_pool_succeeded"] == 1
     assert snapshot["free_to_pool_calls"] == 1
     assert snapshot["free_to_pool_blocks"] == 2
+    assert snapshot["freed_after_sketch_blocks_total"] == 2
 
 
 def test_block_still_owned_is_never_freed():
@@ -198,6 +200,28 @@ def test_free_prefilter_skips_duplicate_removed_blocks(monkeypatch):
     assert snapshot["free_prefilter_input_blocks"] == 2
     assert snapshot["free_prefilter_dropped_already_freed"] == 1
     assert snapshot["free_prefilter_output_blocks"] == 1
+
+
+def test_sketch_enabled_free_rejects_removed_blocks_without_sketch_gate(
+    monkeypatch,
+):
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_SKETCH_ENABLE", "1")
+    reset_kivo_demotion_counters()
+    manager = _manager()
+    removed_block = manager.req_to_blocks["req0"][0]
+    manager.req_to_blocks["req0"] = manager.req_to_blocks["req0"][1:]
+    manager.kivo_req_to_removed_demoted_blocks["req0"] = [removed_block]
+
+    result = manager.free_kivo_removed_demoted_blocks_to_pool_if_safe(
+        "req0",
+        config=_free_config(),
+    )
+    snapshot = get_kivo_demotion_counters_snapshot()
+
+    assert result.succeeded is False
+    assert result.blocker_reasons["sketch_gating_missing_for_free"] == 1
+    assert snapshot["sketch_missing_prevented_free"] == 1
 
 
 def test_validator_accepts_success_case():

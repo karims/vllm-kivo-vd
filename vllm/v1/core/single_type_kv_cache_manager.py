@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import itertools
+import os
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -156,6 +157,14 @@ class SingleTypeKVCacheManager(ABC):
         self.kivo_req_to_demoted_block_ids: dict[str, set[int]] = {}
         self.kivo_req_to_removed_demoted_blocks: dict[str, list[KVCacheBlock]] = {}
         self.kivo_freed_demoted_block_ids: set[int] = set()
+        self.kivo_req_to_sketch_gated_demoted_block_ids: dict[str, set[int]] = {}
+
+    @staticmethod
+    def _kivo_kv_sketch_enabled() -> bool:
+        value = os.getenv("KIVO_KV_SKETCH_ENABLE")
+        if value is None:
+            return False
+        return value.strip() == "1"
 
     @classmethod
     def _get_num_evictable_blocks(cls, blocks: Sequence[KVCacheBlock]):
@@ -994,6 +1003,17 @@ class SingleTypeKVCacheManager(ABC):
             ))
 
         removed_ids = tuple(block.block_id for block in removed_blocks)
+        if self._kivo_kv_sketch_enabled():
+            sketch_gated_ids = self.kivo_req_to_sketch_gated_demoted_block_ids.get(
+                request_id, set()
+            )
+            if any(block_id not in sketch_gated_ids for block_id in removed_ids):
+                increment_kivo_demotion_counter("sketch_missing_prevented_free")
+                return _finish(_reject(
+                    enabled=True,
+                    blocker_reasons={"sketch_gating_missing_for_free": 1},
+                    rejected_block_ids=removed_ids,
+                ))
         current_owned_ids = set(self.get_request_block_ids_for_kivo(request_id))
         if any(block_id in current_owned_ids for block_id in removed_ids):
             return _finish(_reject(
@@ -1039,6 +1059,11 @@ class SingleTypeKVCacheManager(ABC):
         increment_kivo_demotion_counter("free_to_pool_succeeded")
         increment_kivo_demotion_counter("free_to_pool_blocks", len(removed_blocks))
         increment_kivo_demotion_counter("free_to_pool_calls")
+        if self._kivo_kv_sketch_enabled():
+            increment_kivo_demotion_counter(
+                "freed_after_sketch_blocks_total",
+                len(removed_blocks),
+            )
 
         after_free_blocks, after_blockers = _snapshot_block_pool_free_count()
         if after_blockers:
@@ -1065,6 +1090,19 @@ class SingleTypeKVCacheManager(ABC):
 
         self.kivo_freed_demoted_block_ids.update(removed_ids)
         self.kivo_req_to_removed_demoted_blocks.pop(request_id, None)
+        if self._kivo_kv_sketch_enabled():
+            remaining_sketch_ids = (
+                self.kivo_req_to_sketch_gated_demoted_block_ids.get(request_id, set())
+                .difference(removed_ids)
+            )
+            if remaining_sketch_ids:
+                self.kivo_req_to_sketch_gated_demoted_block_ids[request_id] = (
+                    remaining_sketch_ids
+                )
+            else:
+                self.kivo_req_to_sketch_gated_demoted_block_ids.pop(
+                    request_id, None
+                )
         set_kivo_demotion_counter_fields(
             last_freed_block_ids_sample=tuple(removed_ids[:8]),
             last_free_rejected_block_ids_sample=(),
@@ -1195,6 +1233,28 @@ class SingleTypeKVCacheManager(ABC):
                 frees_to_pool=False,
             )
 
+        if (
+            self._kivo_kv_sketch_enabled()
+            and command.candidate_demote_block_ids
+            and not command.sketch_gated
+        ):
+            blocker = {"sketch_gating_metadata_missing": 1}
+            add_kivo_demotion_blocker_reasons(blocker)
+            increment_kivo_demotion_counter("manager_mark_demoted_rejected")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="manager_mark_demoted_missing_sketch_metadata"
+            )
+            return KivoDemotionCommandResult(
+                enabled=True,
+                request_id=command.request_id,
+                accepted=False,
+                marked_demoted_block_ids=(),
+                rejected_block_ids=tuple(command.candidate_demote_block_ids),
+                blocker_reasons=blocker,
+                removes_from_req_to_blocks=False,
+                frees_to_pool=False,
+            )
+
         bridge_decision = self.mark_kivo_demoted_blocks_if_safe(
             command.request_id,
             command.candidate_demote_block_ids,
@@ -1233,6 +1293,11 @@ class SingleTypeKVCacheManager(ABC):
             "demoted_blocks_marked",
             len(tuple(bridge_decision.demote_block_ids)),
         )
+        if command.sketch_gated and command.request_id is not None:
+            self.kivo_req_to_sketch_gated_demoted_block_ids.setdefault(
+                command.request_id, set()
+            ).update(int(block_id) for block_id in bridge_decision.demote_block_ids)
+            set_kivo_demotion_counter_fields(sketch_backend=command.sketch_backend)
         ownership_remove_result = KivoOwnershipRemoveResult(
             enabled=False,
             request_id=command.request_id,

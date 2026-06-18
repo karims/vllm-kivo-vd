@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import torch
 import pytest
@@ -446,3 +447,33 @@ def test_summary_reports_sketch_gating_stats(monkeypatch):
     assert summary.sketch_missing_prevented_demotion == 0
     assert summary.sketch_backend == "random_projection"
     assert summary.sketch_bytes_total > 0
+
+
+def test_counter_export_file_includes_sketch_fields(monkeypatch, tmp_path):
+    export_path = tmp_path / "kivo_counters.json"
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE", str(export_path))
+    monkeypatch.setenv("KIVO_KV_DEMOTION_TRANSPORT_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_DEMOTION_TRANSPORT_ACTION", "export_only")
+
+    batch = _make_input_batch()
+    build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=_make_sketch_runtime(),
+        kv_cache_tensor=_make_kv_cache(32),
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "recent_only", 2, 2, True
+        ),
+    )
+
+    payload = json.loads(export_path.read_text(encoding="utf-8"))
+    counters = payload["counters"]
+    assert counters["sketch_build_attempted"] == 2
+    assert counters["sketch_build_succeeded"] == 2
+    assert counters["sketch_build_failed"] == 0
+    assert counters["sketch_missing_prevented_demotion"] == 0
+    assert counters["sketched_blocks_total"] == 2
+    assert counters["sketch_bytes_total"] > 0
+    assert counters["sketch_backend"] == "random_projection"

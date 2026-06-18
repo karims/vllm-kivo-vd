@@ -41,6 +41,7 @@ class DummySingleTypeManager(SingleTypeKVCacheManager):
         self.kivo_req_to_demoted_block_ids = {}
         self.kivo_req_to_removed_demoted_blocks = {}
         self.kivo_freed_demoted_block_ids = set()
+        self.kivo_req_to_sketch_gated_demoted_block_ids = {}
         self._last_kivo_ownership_bridge_decision = None
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
@@ -73,6 +74,9 @@ def _command() -> KivoDemotionCommand:
         protected_block_ids=(12, 13),
         block_table_applied=True,
         slot_mapping_refresh_guaranteed=True,
+        sketch_gated=True,
+        sketch_backend="random_projection",
+        sketch_block_count=2,
     )
 
 

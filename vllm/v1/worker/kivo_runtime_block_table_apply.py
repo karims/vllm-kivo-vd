@@ -161,6 +161,8 @@ def build_kivo_demotion_command_for_runtime_row(
     protected_block_ids: Sequence[int] = (),
     block_table_applied: bool,
     slot_mapping_refresh_guaranteed: bool,
+    sketch_gated: bool = False,
+    sketch_backend: str | None = None,
 ) -> KivoRuntimeDemotionCommandExport:
     """Build a worker-side demotion command payload when local invariants hold."""
     started_at = time.perf_counter()
@@ -263,6 +265,9 @@ def build_kivo_demotion_command_for_runtime_row(
                 protected_block_ids=protected,
                 block_table_applied=block_table_applied,
                 slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+                sketch_gated=sketch_gated,
+                sketch_backend=sketch_backend,
+                sketch_block_count=len(demote),
             ),
             blocker_reason=None,
             blocker_reasons={},
@@ -421,6 +426,12 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
         protected_block_ids=protected_block_ids,
         block_table_applied=block_table_applied,
         slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+        sketch_gated=(
+            kv_sketch_runtime is not None
+            and kv_sketch_runtime.config.enabled
+            and bool(demote)
+        ),
+        sketch_backend=sketch_gate.sketch_backend,
     )
     if result.command is None:
         combined = dict(result.blocker_reasons)
@@ -485,6 +496,9 @@ def _gate_candidate_demote_blocks_by_sketch(
             sketch_bytes_total=0,
         )
 
+    set_kivo_demotion_counter_fields(
+        sketch_backend=kv_sketch_runtime.backend.backend_name
+    )
     blocker_reasons: dict[str, int] = {}
     kept_block_ids: list[int] = []
     attempted = 0
@@ -493,6 +507,9 @@ def _gate_candidate_demote_blocks_by_sketch(
     sketch_bytes_total = 0
 
     if kv_cache_tensor is None:
+        set_kivo_demotion_counter_fields(
+            sketch_backend=kv_sketch_runtime.backend.backend_name
+        )
         blocker_reasons["sketch_kv_cache_unavailable"] = len(candidate_ids) or 1
         increment_kivo_demotion_counter(
             "sketch_missing_prevented_demotion", len(candidate_ids)

@@ -36,6 +36,14 @@ class KivoDemotionCounters:
     demotion_command_dedupe_dropped_blocks: int = 0
     demotion_command_dedupe_output_blocks: int = 0
     demotion_command_dedupe_empty_after_drop: int = 0
+    sketch_build_attempted: int = 0
+    sketch_build_succeeded: int = 0
+    sketch_build_failed: int = 0
+    sketched_blocks_total: int = 0
+    sketch_missing_prevented_demotion: int = 0
+    sketch_missing_prevented_free: int = 0
+    freed_after_sketch_blocks_total: int = 0
+    sketch_bytes_total: int = 0
     decode_only_requested: int = 0
     decode_only_supported: int = 0
     demotion_skipped_not_decode_phase: int = 0
@@ -120,6 +128,7 @@ class KivoDemotionCounters:
     last_filtered_row_changed: bool | None = None
     last_keep_recent_blocks: int = 0
     last_policy: str | None = None
+    sketch_backend: str | None = None
     blocker_reasons: dict[str, int] = field(default_factory=dict)
 
 
