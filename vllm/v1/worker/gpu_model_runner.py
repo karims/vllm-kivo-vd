@@ -205,6 +205,7 @@ from vllm.v1.worker.kivo_runtime_block_table_apply import (
     KivoRuntimeBlockTableApplySummary,
     maybe_apply_runtime_block_table_before_slot_mapping,
 )
+from vllm.v1.worker.kivo_kv_sketch_runtime import KivoKVSketchRuntime
 from vllm.v1.worker.gpu_ubatch_wrapper import UBatchWrapper
 from vllm.v1.worker.kivo_attention_metadata_observer import (
     maybe_observe_attention_metadata,
@@ -513,6 +514,8 @@ class GPUModelRunner(
         # Async scheduling
         self.use_async_scheduling = self.scheduler_config.async_scheduling
         self._last_kivo_runtime_block_table_apply_summary = None
+        self._kivo_kv_sketch_runtime = KivoKVSketchRuntime.from_env()
+        self._kivo_kv_caches_by_layer: dict[str, torch.Tensor] = {}
 
         # Sampler
         self.sampler = Sampler(logprobs_mode=self.model_config.logprobs_mode)
@@ -2205,9 +2208,26 @@ class GPUModelRunner(
         summary = maybe_apply_runtime_block_table_before_slot_mapping(
             self.input_batch,
             req_ids=req_ids,
+            kv_sketch_runtime=self._kivo_kv_sketch_runtime,
+            kv_cache_tensor=self._get_kivo_runtime_sketch_kv_cache(0),
         )
         self._last_kivo_runtime_block_table_apply_summary = summary
         return summary
+
+    def _get_kivo_runtime_sketch_kv_cache(
+        self, kv_cache_gid: int
+    ) -> torch.Tensor | None:
+        if not self._kivo_kv_caches_by_layer:
+            return None
+        if not hasattr(self, "kv_cache_config") or self.kv_cache_config is None:
+            return None
+        if kv_cache_gid < 0 or kv_cache_gid >= len(self.kv_cache_config.kv_cache_groups):
+            return None
+        layer_names = self.kv_cache_config.kv_cache_groups[kv_cache_gid].layer_names
+        if not layer_names:
+            return None
+        layer_name = layer_names[0]
+        return self._kivo_kv_caches_by_layer.get(layer_name)
 
     def _build_attention_metadata(
         self,
@@ -6320,6 +6340,8 @@ class GPUModelRunner(
             for i in range(len(self.kv_caches)):
                 self.kv_caches[i] = None  # type: ignore
             self.kv_caches.clear()
+        if hasattr(self, "_kivo_kv_caches_by_layer"):
+            self._kivo_kv_caches_by_layer.clear()
         if hasattr(self, "cross_layers_kv_cache"):
             self.cross_layers_kv_cache = None
             self.cross_layers_attn_backend = None
@@ -7199,6 +7221,8 @@ class GPUModelRunner(
         for layer_name, target_layer_name in self.shared_kv_cache_layers.items():
             logger.debug("%s reuses KV cache of %s", layer_name, target_layer_name)
             kv_caches[layer_name] = kv_caches[target_layer_name]
+
+        self._kivo_kv_caches_by_layer = dict(kv_caches)
 
         num_attn_module = (
             2 if self.model_config.hf_config.model_type == "longcat_flash" else 1

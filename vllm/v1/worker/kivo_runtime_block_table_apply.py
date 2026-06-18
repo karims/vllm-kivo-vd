@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
 from vllm.v1.core.kivo_demotion_counters import (
@@ -48,6 +48,10 @@ from vllm.v1.worker.kivo_runtime_demotion_mark import (
     KivoRuntimeDemotionMarkSummary,
     current_kivo_runtime_demotion_mark_config,
     maybe_mark_demoted_blocks_after_block_table_apply,
+)
+from vllm.v1.worker.kivo_kv_sketch_runtime import (
+    KivoKVSketchRuntime,
+    extract_kv_block_tensor,
 )
 
 if TYPE_CHECKING:
@@ -97,6 +101,13 @@ class KivoRuntimeBlockTableApplySummary:
     demotion_transport_blocked_count: int
     demotion_transport_blocker_reasons: dict[str, int]
     demotion_transport_envelopes: tuple[KivoDemotionTransportEnvelope, ...]
+    sketch_build_attempted: int
+    sketch_build_succeeded: int
+    sketch_build_failed: int
+    sketched_blocks_total: int
+    sketch_missing_prevented_demotion: int
+    sketch_backend: str | None
+    sketch_bytes_total: int
 
 
 @dataclass(frozen=True)
@@ -108,6 +119,26 @@ class KivoRuntimeDemotionCommandExport:
     visible_before_block_ids: tuple[int, ...]
     visible_after_block_ids: tuple[int, ...]
     candidate_demote_block_ids: tuple[int, ...]
+    sketch_build_attempted: int = 0
+    sketch_build_succeeded: int = 0
+    sketch_build_failed: int = 0
+    sketched_blocks_total: int = 0
+    sketch_missing_prevented_demotion: int = 0
+    sketch_backend: str | None = None
+    sketch_bytes_total: int = 0
+
+
+@dataclass(frozen=True)
+class KivoRuntimeSketchGateResult:
+    candidate_demote_block_ids: tuple[int, ...]
+    blocker_reasons: dict[str, int]
+    sketch_build_attempted: int
+    sketch_build_succeeded: int
+    sketch_build_failed: int
+    sketched_blocks_total: int
+    sketch_missing_prevented_demotion: int
+    sketch_backend: str | None
+    sketch_bytes_total: int
 
 
 @dataclass(frozen=True)
@@ -259,11 +290,19 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
     filtered_row_changed: bool,
     keep_recent_blocks: int,
     policy: str,
+    kv_sketch_runtime: KivoKVSketchRuntime | None = None,
+    kv_cache_tensor: Any | None = None,
 ) -> KivoRuntimeDemotionCommandExport:
     increment_kivo_demotion_counter("demotion_command_export_path_entered")
     before = tuple(int(block_id) for block_id in (visible_before_block_ids or ()))
     after = tuple(int(block_id) for block_id in (visible_after_block_ids or ()))
     demote = tuple(int(block_id) for block_id in (candidate_demote_block_ids or ()))
+    sketch_gate = _gate_candidate_demote_blocks_by_sketch(
+        candidate_demote_block_ids=demote,
+        kv_sketch_runtime=kv_sketch_runtime,
+        kv_cache_tensor=kv_cache_tensor,
+    )
+    demote = sketch_gate.candidate_demote_block_ids
     set_kivo_demotion_counter_fields(
         last_visible_before_count=len(before),
         last_visible_after_count=len(after),
@@ -289,6 +328,7 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_backend=sketch_gate.sketch_backend,
         )
     if not block_table_applied:
         increment_kivo_demotion_counter(
@@ -302,6 +342,7 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_backend=sketch_gate.sketch_backend,
         )
     if request_id is None:
         increment_kivo_demotion_counter("demotion_command_export_skipped_no_request_id")
@@ -313,6 +354,7 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_backend=sketch_gate.sketch_backend,
         )
     if not before:
         increment_kivo_demotion_counter(
@@ -326,6 +368,7 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_backend=sketch_gate.sketch_backend,
         )
     if not after:
         counter_name = "demotion_command_export_skipped_empty_after_filter"
@@ -342,19 +385,32 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_backend=sketch_gate.sketch_backend,
         )
     if not demote:
         increment_kivo_demotion_counter(
             "demotion_command_export_skipped_no_candidate_demote_ids"
         )
+        blocker_reasons = {"empty_candidate_demote_ids": 1}
+        if sketch_gate.blocker_reasons:
+            blocker_reasons.update(sketch_gate.blocker_reasons)
         return KivoRuntimeDemotionCommandExport(
             attempted=False,
             command=None,
             blocker_reason="empty_candidate_demote_ids",
-            blocker_reasons={"empty_candidate_demote_ids": 1},
+            blocker_reasons=blocker_reasons,
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
+            sketch_build_attempted=sketch_gate.sketch_build_attempted,
+            sketch_build_succeeded=sketch_gate.sketch_build_succeeded,
+            sketch_build_failed=sketch_gate.sketch_build_failed,
+            sketched_blocks_total=sketch_gate.sketched_blocks_total,
+            sketch_missing_prevented_demotion=(
+                sketch_gate.sketch_missing_prevented_demotion
+            ),
+            sketch_backend=sketch_gate.sketch_backend,
+            sketch_bytes_total=sketch_gate.sketch_bytes_total,
         )
 
     result = build_kivo_demotion_command_for_runtime_row(
@@ -367,8 +423,136 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
         slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
     )
     if result.command is None:
-        add_kivo_demotion_blocker_reasons(result.blocker_reasons)
-    return result
+        combined = dict(result.blocker_reasons)
+        for reason, count in sketch_gate.blocker_reasons.items():
+            combined[reason] = combined.get(reason, 0) + count
+        add_kivo_demotion_blocker_reasons(combined)
+        return KivoRuntimeDemotionCommandExport(
+            attempted=result.attempted,
+            command=None,
+            blocker_reason=result.blocker_reason,
+            blocker_reasons=combined,
+            visible_before_block_ids=result.visible_before_block_ids,
+            visible_after_block_ids=result.visible_after_block_ids,
+            candidate_demote_block_ids=result.candidate_demote_block_ids,
+            sketch_build_attempted=sketch_gate.sketch_build_attempted,
+            sketch_build_succeeded=sketch_gate.sketch_build_succeeded,
+            sketch_build_failed=sketch_gate.sketch_build_failed,
+            sketched_blocks_total=sketch_gate.sketched_blocks_total,
+            sketch_missing_prevented_demotion=(
+                sketch_gate.sketch_missing_prevented_demotion
+            ),
+            sketch_backend=sketch_gate.sketch_backend,
+            sketch_bytes_total=sketch_gate.sketch_bytes_total,
+        )
+    return KivoRuntimeDemotionCommandExport(
+        attempted=result.attempted,
+        command=result.command,
+        blocker_reason=result.blocker_reason,
+        blocker_reasons=result.blocker_reasons,
+        visible_before_block_ids=result.visible_before_block_ids,
+        visible_after_block_ids=result.visible_after_block_ids,
+        candidate_demote_block_ids=result.candidate_demote_block_ids,
+        sketch_build_attempted=sketch_gate.sketch_build_attempted,
+        sketch_build_succeeded=sketch_gate.sketch_build_succeeded,
+        sketch_build_failed=sketch_gate.sketch_build_failed,
+        sketched_blocks_total=sketch_gate.sketched_blocks_total,
+        sketch_missing_prevented_demotion=(
+            sketch_gate.sketch_missing_prevented_demotion
+        ),
+        sketch_backend=sketch_gate.sketch_backend,
+        sketch_bytes_total=sketch_gate.sketch_bytes_total,
+    )
+
+
+def _gate_candidate_demote_blocks_by_sketch(
+    *,
+    candidate_demote_block_ids: Sequence[int],
+    kv_sketch_runtime: KivoKVSketchRuntime | None,
+    kv_cache_tensor: Any | None,
+) -> KivoRuntimeSketchGateResult:
+    candidate_ids = tuple(int(block_id) for block_id in candidate_demote_block_ids)
+    if kv_sketch_runtime is None or not kv_sketch_runtime.config.enabled:
+        return KivoRuntimeSketchGateResult(
+            candidate_demote_block_ids=candidate_ids,
+            blocker_reasons={},
+            sketch_build_attempted=0,
+            sketch_build_succeeded=0,
+            sketch_build_failed=0,
+            sketched_blocks_total=0,
+            sketch_missing_prevented_demotion=0,
+            sketch_backend=None,
+            sketch_bytes_total=0,
+        )
+
+    blocker_reasons: dict[str, int] = {}
+    kept_block_ids: list[int] = []
+    attempted = 0
+    succeeded = 0
+    failed = 0
+    sketch_bytes_total = 0
+
+    if kv_cache_tensor is None:
+        blocker_reasons["sketch_kv_cache_unavailable"] = len(candidate_ids) or 1
+        increment_kivo_demotion_counter(
+            "sketch_missing_prevented_demotion", len(candidate_ids)
+        )
+        return KivoRuntimeSketchGateResult(
+            candidate_demote_block_ids=(),
+            blocker_reasons=blocker_reasons,
+            sketch_build_attempted=0,
+            sketch_build_succeeded=0,
+            sketch_build_failed=len(candidate_ids),
+            sketched_blocks_total=0,
+            sketch_missing_prevented_demotion=len(candidate_ids),
+            sketch_backend=kv_sketch_runtime.backend.backend_name,
+            sketch_bytes_total=0,
+        )
+
+    for block_id in candidate_ids:
+        attempted += 1
+        increment_kivo_demotion_counter("sketch_build_attempted")
+        block_tensor, extract_error = extract_kv_block_tensor(kv_cache_tensor, block_id)
+        if block_tensor is None:
+            failed += 1
+            increment_kivo_demotion_counter("sketch_build_failed")
+            increment_kivo_demotion_counter("sketch_missing_prevented_demotion")
+            reason = extract_error or "sketch_block_extraction_failed"
+            blocker_reasons[reason] = blocker_reasons.get(reason, 0) + 1
+            continue
+
+        result = kv_sketch_runtime.build_and_store_block_sketch(
+            block_id=block_id,
+            block_tensor=block_tensor,
+            kv_kind="kv",
+        )
+        if result.success:
+            succeeded += 1
+            sketch_bytes_total += int(result.sketch_bytes)
+            kept_block_ids.append(block_id)
+            increment_kivo_demotion_counter("sketch_build_succeeded")
+            increment_kivo_demotion_counter("sketched_blocks_total")
+            increment_kivo_demotion_counter(
+                "sketch_bytes_total", int(result.sketch_bytes)
+            )
+        else:
+            failed += 1
+            increment_kivo_demotion_counter("sketch_build_failed")
+            increment_kivo_demotion_counter("sketch_missing_prevented_demotion")
+            reason = result.blocker_reason or "sketch_build_failed"
+            blocker_reasons[reason] = blocker_reasons.get(reason, 0) + 1
+
+    return KivoRuntimeSketchGateResult(
+        candidate_demote_block_ids=tuple(kept_block_ids),
+        blocker_reasons=blocker_reasons,
+        sketch_build_attempted=attempted,
+        sketch_build_succeeded=succeeded,
+        sketch_build_failed=failed,
+        sketched_blocks_total=succeeded,
+        sketch_missing_prevented_demotion=len(candidate_ids) - len(kept_block_ids),
+        sketch_backend=kv_sketch_runtime.backend.backend_name,
+        sketch_bytes_total=sketch_bytes_total,
+    )
 
 
 def _parse_bool_env(name: str, *, default: bool = False) -> bool:
@@ -547,6 +731,8 @@ def build_runtime_block_table_apply_summary(
     kv_cache_gid: int = 0,
     slot_mapping_refresh_available: bool = False,
     kv_cache_manager: object | None = None,
+    kv_sketch_runtime: KivoKVSketchRuntime | None = None,
+    kv_cache_tensor: Any | None = None,
     config: KivoRuntimeBlockTableApplyConfig | None = None,
 ) -> KivoRuntimeBlockTableApplySummary:
     if config is None:
@@ -575,6 +761,13 @@ def build_runtime_block_table_apply_summary(
             demotion_transport_blocked_count=0,
             demotion_transport_blocker_reasons={"disabled": 1},
             demotion_transport_envelopes=(),
+            sketch_build_attempted=0,
+            sketch_build_succeeded=0,
+            sketch_build_failed=0,
+            sketched_blocks_total=0,
+            sketch_missing_prevented_demotion=0,
+            sketch_backend=None,
+            sketch_bytes_total=0,
         )
 
     if config.policy not in _SUPPORTED_POLICIES:
@@ -600,6 +793,17 @@ def build_runtime_block_table_apply_summary(
             demotion_transport_blocked_count=0,
             demotion_transport_blocker_reasons={"invalid_runtime_policy": 1},
             demotion_transport_envelopes=(),
+            sketch_build_attempted=0,
+            sketch_build_succeeded=0,
+            sketch_build_failed=0,
+            sketched_blocks_total=0,
+            sketch_missing_prevented_demotion=0,
+            sketch_backend=(
+                kv_sketch_runtime.backend.backend_name
+                if kv_sketch_runtime is not None
+                else None
+            ),
+            sketch_bytes_total=0,
         )
 
     target_req_ids = list(req_ids) if req_ids is not None else list(input_batch.req_ids)
@@ -622,6 +826,12 @@ def build_runtime_block_table_apply_summary(
     transport_blocked = 0
     transport_blocker_reasons: dict[str, int] = {}
     transport_envelopes: list[KivoDemotionTransportEnvelope] = []
+    sketch_build_attempted = 0
+    sketch_build_succeeded = 0
+    sketch_build_failed = 0
+    sketched_blocks_total = 0
+    sketch_missing_prevented_demotion = 0
+    sketch_bytes_total = 0
     live_apply_config = current_kivo_live_ownership_apply_config()
     ownership_bridge_config = current_kivo_ownership_bridge_config()
     runtime_demotion_mark_config = current_kivo_runtime_demotion_mark_config()
@@ -740,7 +950,17 @@ def build_runtime_block_table_apply_summary(
                 filtered_row_changed=filtered_row_plan.filtered_row_changed,
                 keep_recent_blocks=config.keep_recent_blocks,
                 policy=config.policy,
+                kv_sketch_runtime=kv_sketch_runtime,
+                kv_cache_tensor=kv_cache_tensor,
             )
+            sketch_build_attempted += command_export.sketch_build_attempted
+            sketch_build_succeeded += command_export.sketch_build_succeeded
+            sketch_build_failed += command_export.sketch_build_failed
+            sketched_blocks_total += command_export.sketched_blocks_total
+            sketch_missing_prevented_demotion += (
+                command_export.sketch_missing_prevented_demotion
+            )
+            sketch_bytes_total += command_export.sketch_bytes_total
             if command_export.command is None:
                 transport_blocked += 1
                 for reason, count in command_export.blocker_reasons.items():
@@ -848,6 +1068,18 @@ def build_runtime_block_table_apply_summary(
         demotion_transport_blocked_count=transport_blocked,
         demotion_transport_blocker_reasons=transport_blocker_reasons,
         demotion_transport_envelopes=tuple(transport_envelopes),
+        sketch_build_attempted=sketch_build_attempted,
+        sketch_build_succeeded=sketch_build_succeeded,
+        sketch_build_failed=sketch_build_failed,
+        sketched_blocks_total=sketched_blocks_total,
+        sketch_missing_prevented_demotion=sketch_missing_prevented_demotion,
+        sketch_backend=(
+            kv_sketch_runtime.backend.backend_name
+            if kv_sketch_runtime is not None
+            and kv_sketch_runtime.config.enabled
+            else None
+        ),
+        sketch_bytes_total=sketch_bytes_total,
     )
 
 
@@ -857,6 +1089,8 @@ def maybe_apply_runtime_block_table_before_slot_mapping(
     req_ids: Sequence[str] | None = None,
     kv_cache_gid: int = 0,
     kv_cache_manager: object | None = None,
+    kv_sketch_runtime: KivoKVSketchRuntime | None = None,
+    kv_cache_tensor: Any | None = None,
     config: KivoRuntimeBlockTableApplyConfig | None = None,
 ) -> KivoRuntimeBlockTableApplySummary:
     """Apply filtered worker rows only at the pre-slot-mapping hook point."""
@@ -866,5 +1100,7 @@ def maybe_apply_runtime_block_table_before_slot_mapping(
         kv_cache_gid=kv_cache_gid,
         slot_mapping_refresh_available=True,
         kv_cache_manager=kv_cache_manager,
+        kv_sketch_runtime=kv_sketch_runtime,
+        kv_cache_tensor=kv_cache_tensor,
         config=config,
     )

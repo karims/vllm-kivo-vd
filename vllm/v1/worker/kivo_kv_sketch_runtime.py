@@ -125,6 +125,34 @@ class KivoKVSketchBuildResult:
     sketch_bytes: int = 0
 
 
+def extract_kv_block_tensor(
+    kv_cache: Any,
+    block_id: int,
+) -> tuple[torch.Tensor | None, str | None]:
+    """Extract one physical KV block tensor from a worker KV cache tensor.
+
+    Expected runtime attention KV cache shape follows current source-observer
+    assumptions:
+    - torch.Tensor
+    - ndim == 5
+    - dim1 == 2 for K/V
+
+    Returns a block tensor shaped like ``kv_cache[block_id]`` on success.
+    """
+    if not isinstance(kv_cache, torch.Tensor):
+        return None, "kv_cache is not a torch.Tensor"
+    if kv_cache.ndim != 5:
+        return None, "kv_cache ndim is not 5"
+    if kv_cache.shape[1] != 2:
+        return None, "kv_cache second dimension is not 2"
+    if block_id < 0 or block_id >= int(kv_cache.shape[0]):
+        return None, "block_id out of range for kv_cache"
+    try:
+        return kv_cache[block_id], None
+    except Exception as exc:
+        return None, f"failed to index kv_cache block: {type(exc).__name__}"
+
+
 def _projection_tensor(
     input_dim: int,
     sketch_dim: int,

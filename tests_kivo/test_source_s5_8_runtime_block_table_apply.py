@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import pytest
 
 from vllm.v1.core.kivo_kv_block_score_store import (
     KivoKVBlockScore,
@@ -10,9 +11,17 @@ from vllm.v1.core.kivo_kv_block_score_store import (
     update_block_scores,
 )
 from vllm.v1.worker.block_table import MultiGroupBlockTable
+from vllm.v1.worker.kivo_kv_sketch_runtime import (
+    KivoKVSketchRuntime,
+    KivoKVSketchRuntimeConfig,
+    KivoKVSketchStore,
+    RandomProjectionKVSketchBackend,
+)
 from vllm.v1.worker.kivo_runtime_block_table_apply import (
     KivoRuntimeBlockTableApplyConfig,
     build_runtime_block_table_apply_summary,
+    maybe_build_kivo_demotion_command_after_runtime_apply,
+    reset_kivo_demotion_command_dedupe_state_for_tests,
 )
 
 
@@ -53,6 +62,37 @@ def _make_input_batch() -> FakeInputBatch:
         req_id_to_index={"req0": 0, "req1": 1},
         block_table=block_table,
     )
+
+
+def _make_sketch_runtime(
+    *, sketch_dim: int = 4, seed: int = 7, max_blocks: int = 16
+) -> KivoKVSketchRuntime:
+    return KivoKVSketchRuntime(
+        config=KivoKVSketchRuntimeConfig(
+            enabled=True,
+            backend="random_projection",
+            sketch_dim=sketch_dim,
+            seed=seed,
+            max_blocks=max_blocks,
+        ),
+        backend=RandomProjectionKVSketchBackend(
+            sketch_dim=sketch_dim,
+            seed=seed,
+        ),
+        store=KivoKVSketchStore(max_blocks=max_blocks),
+    )
+
+
+def _make_kv_cache(num_blocks: int = 8) -> torch.Tensor:
+    return torch.arange(
+        num_blocks * 2 * 4 * 2 * 4,
+        dtype=torch.float32,
+    ).reshape(num_blocks, 2, 4, 2, 4)
+
+
+@pytest.fixture(autouse=True)
+def _reset_dedupe_state() -> None:
+    reset_kivo_demotion_command_dedupe_state_for_tests()
 
 
 def test_disabled_runtime_apply_returns_noop_summary():
@@ -260,3 +300,149 @@ def test_default_behavior_unchanged_when_disabled():
     )
     assert summary.enabled is False
     assert batch.block_table[0].get_row_block_ids(0) == before
+
+
+def test_sketch_disabled_keeps_candidate_demote_blocks_unchanged():
+    export = maybe_build_kivo_demotion_command_after_runtime_apply(
+        request_id="req0",
+        visible_before_block_ids=(10, 11, 12, 13),
+        visible_after_block_ids=(12, 13),
+        candidate_demote_block_ids=(10, 11),
+        protected_block_ids=(12, 13),
+        apply_summary_present=True,
+        block_table_applied=True,
+        slot_mapping_refresh_guaranteed=True,
+        filtered_row_changed=True,
+        keep_recent_blocks=2,
+        policy="recent_only",
+        kv_sketch_runtime=None,
+        kv_cache_tensor=None,
+    )
+    assert export.command is not None
+    assert export.command.candidate_demote_block_ids == (10, 11)
+    assert export.sketch_build_attempted == 0
+
+
+def test_sketch_enabled_all_candidate_blocks_succeed():
+    runtime = _make_sketch_runtime()
+    export = maybe_build_kivo_demotion_command_after_runtime_apply(
+        request_id="req0",
+        visible_before_block_ids=(1, 2, 3, 4),
+        visible_after_block_ids=(3, 4),
+        candidate_demote_block_ids=(1, 2),
+        protected_block_ids=(3, 4),
+        apply_summary_present=True,
+        block_table_applied=True,
+        slot_mapping_refresh_guaranteed=True,
+        filtered_row_changed=True,
+        keep_recent_blocks=2,
+        policy="recent_only",
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=_make_kv_cache(8),
+    )
+    assert export.command is not None
+    assert export.command.candidate_demote_block_ids == (1, 2)
+    assert export.sketch_build_attempted == 2
+    assert export.sketch_build_succeeded == 2
+    assert export.sketch_build_failed == 0
+    assert runtime.store.get(1) is not None
+    assert runtime.store.get(2) is not None
+
+
+def test_sketch_enabled_partial_failure_excludes_failed_block_ids():
+    runtime = _make_sketch_runtime()
+    export = maybe_build_kivo_demotion_command_after_runtime_apply(
+        request_id="req0",
+        visible_before_block_ids=(1, 2, 3, 4),
+        visible_after_block_ids=(3, 4),
+        candidate_demote_block_ids=(1, 99),
+        protected_block_ids=(3, 4),
+        apply_summary_present=True,
+        block_table_applied=True,
+        slot_mapping_refresh_guaranteed=True,
+        filtered_row_changed=True,
+        keep_recent_blocks=2,
+        policy="recent_only",
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=_make_kv_cache(8),
+    )
+    assert export.command is not None
+    assert export.command.candidate_demote_block_ids == (1,)
+    assert export.sketch_build_attempted == 2
+    assert export.sketch_build_succeeded == 1
+    assert export.sketch_build_failed == 1
+    assert export.sketch_missing_prevented_demotion == 1
+    assert runtime.store.get(1) is not None
+    assert runtime.store.get(99) is None
+
+
+def test_sketch_enabled_all_fail_exports_no_unsafe_demotion():
+    runtime = _make_sketch_runtime()
+    export = maybe_build_kivo_demotion_command_after_runtime_apply(
+        request_id="req0",
+        visible_before_block_ids=(1, 2, 3, 4),
+        visible_after_block_ids=(3, 4),
+        candidate_demote_block_ids=(90, 91),
+        protected_block_ids=(3, 4),
+        apply_summary_present=True,
+        block_table_applied=True,
+        slot_mapping_refresh_guaranteed=True,
+        filtered_row_changed=True,
+        keep_recent_blocks=2,
+        policy="recent_only",
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=_make_kv_cache(8),
+    )
+    assert export.command is None
+    assert export.sketch_build_attempted == 2
+    assert export.sketch_build_succeeded == 0
+    assert export.sketch_build_failed == 2
+    assert export.sketch_missing_prevented_demotion == 2
+    assert export.blocker_reasons["empty_candidate_demote_ids"] == 1
+
+
+def test_sketch_enabled_unsupported_kv_cache_shape_fails_closed():
+    runtime = _make_sketch_runtime()
+    export = maybe_build_kivo_demotion_command_after_runtime_apply(
+        request_id="req0",
+        visible_before_block_ids=(1, 2, 3, 4),
+        visible_after_block_ids=(3, 4),
+        candidate_demote_block_ids=(1, 2),
+        protected_block_ids=(3, 4),
+        apply_summary_present=True,
+        block_table_applied=True,
+        slot_mapping_refresh_guaranteed=True,
+        filtered_row_changed=True,
+        keep_recent_blocks=2,
+        policy="recent_only",
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=torch.ones(2, 2, dtype=torch.float32),
+    )
+    assert export.command is None
+    assert export.sketch_build_succeeded == 0
+    assert export.sketch_build_failed == 2
+    assert export.blocker_reasons["empty_candidate_demote_ids"] == 1
+
+
+def test_summary_reports_sketch_gating_stats(monkeypatch):
+    monkeypatch.setenv("KIVO_KV_DEMOTION_TRANSPORT_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_DEMOTION_TRANSPORT_ACTION", "export_only")
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=_make_sketch_runtime(),
+        kv_cache_tensor=_make_kv_cache(32),
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "recent_only", 2, 2, True
+        ),
+    )
+    assert summary.demotion_transport_exported_count == 1
+    assert summary.sketch_build_attempted == 2
+    assert summary.sketch_build_succeeded == 2
+    assert summary.sketch_build_failed == 0
+    assert summary.sketched_blocks_total == 2
+    assert summary.sketch_missing_prevented_demotion == 0
+    assert summary.sketch_backend == "random_projection"
+    assert summary.sketch_bytes_total > 0
