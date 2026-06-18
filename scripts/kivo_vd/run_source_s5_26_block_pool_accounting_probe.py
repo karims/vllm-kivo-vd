@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -170,6 +170,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=16,
     )
+    parser.add_argument("--min-output-tokens", type=int, default=0)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.35)
     parser.add_argument("--max-model-len", type=int, default=1024)
     parser.add_argument("--max-num-batched-tokens", type=int, default=1024)
@@ -189,6 +190,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--disable-prefix-caching",
         action="store_true",
         help="Disable prefix caching if this local vLLM LLM surface supports it.",
+    )
+    parser.add_argument(
+        "--ignore-eos",
+        action="store_true",
+        help="Request ignore_eos=True if this local SamplingParams supports it.",
     )
     parser.add_argument("--output", required=True)
     return parser.parse_args(argv)
@@ -246,6 +252,15 @@ def _supports_enable_prefix_caching(llm_cls: type) -> bool:
     return "enable_prefix_caching" in signature.parameters
 
 
+def _supports_sampling_param(sampling_params_cls: type, name: str) -> bool:
+    try:
+        signature = inspect.signature(sampling_params_cls)
+    except (TypeError, ValueError):
+        fields = getattr(sampling_params_cls, "__struct_fields__", ())
+        return name in fields
+    return name in signature.parameters
+
+
 def _build_llm_kwargs(args: argparse.Namespace, llm_cls: type) -> tuple[dict[str, Any], bool]:
     llm_kwargs: dict[str, Any] = {
         "model": args.model,
@@ -264,6 +279,30 @@ def _build_llm_kwargs(args: argparse.Namespace, llm_cls: type) -> tuple[dict[str
         llm_kwargs["enable_prefix_caching"] = False
         prefix_caching_disabled = True
     return llm_kwargs, prefix_caching_disabled
+
+
+def _build_sampling_params_kwargs(
+    args: argparse.Namespace,
+    sampling_params_cls: type,
+) -> tuple[dict[str, Any], bool, bool]:
+    kwargs: dict[str, Any] = {
+        "temperature": 0.0,
+        "max_tokens": args.max_output_tokens,
+        "seed": args.seed,
+    }
+    ignore_eos_applied = False
+    if args.ignore_eos and _supports_sampling_param(sampling_params_cls, "ignore_eos"):
+        kwargs["ignore_eos"] = True
+        ignore_eos_applied = True
+
+    min_output_tokens = int(getattr(args, "min_output_tokens", 0) or 0)
+    min_output_tokens_applied = False
+    if min_output_tokens > 0 and _supports_sampling_param(
+        sampling_params_cls, "min_tokens"
+    ):
+        kwargs["min_tokens"] = min_output_tokens
+        min_output_tokens_applied = True
+    return kwargs, ignore_eos_applied, min_output_tokens_applied
 
 
 def _average_prompt_tokens(prompt_token_lengths: list[int | None]) -> float | None:
@@ -285,6 +324,53 @@ def _max_prompt_tokens(prompt_token_lengths: list[int | None]) -> int | None:
     if not valid:
         return None
     return max(valid)
+
+
+def _sum_token_lengths(token_lengths: list[int | None]) -> int | None:
+    valid = [length for length in token_lengths if isinstance(length, int)]
+    if not valid:
+        return None
+    return sum(valid)
+
+
+def _average_token_lengths(token_lengths: list[int | None]) -> float | None:
+    valid = [length for length in token_lengths if isinstance(length, int)]
+    if not valid:
+        return None
+    return sum(valid) / len(valid)
+
+
+def _max_token_lengths(token_lengths: list[int | None]) -> int | None:
+    valid = [length for length in token_lengths if isinstance(length, int)]
+    if not valid:
+        return None
+    return max(valid)
+
+
+def extract_output_token_lengths_and_finish_reasons(
+    outputs: Sequence[Any],
+) -> tuple[list[int | None], list[str | None]]:
+    output_token_lengths: list[int | None] = []
+    finish_reasons: list[str | None] = []
+    for request_output in outputs:
+        completions = getattr(request_output, "outputs", None)
+        if not completions:
+            output_token_lengths.append(None)
+            finish_reasons.append(None)
+            continue
+        token_count = 0
+        token_count_observed = False
+        request_finish_reason: str | None = None
+        for completion in completions:
+            token_ids = getattr(completion, "token_ids", None)
+            if token_ids is not None:
+                token_count += len(token_ids)
+                token_count_observed = True
+            if request_finish_reason is None:
+                request_finish_reason = getattr(completion, "finish_reason", None)
+        output_token_lengths.append(token_count if token_count_observed else None)
+        finish_reasons.append(request_finish_reason)
+    return output_token_lengths, finish_reasons
 
 
 def _build_counter_views(counters: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -376,6 +462,17 @@ def _build_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "avg_prompt_tokens": summary.get("avg_prompt_tokens"),
         "max_prompt_tokens": summary.get("max_prompt_tokens"),
         "requested_max_output_tokens": summary.get("requested_max_output_tokens"),
+        "total_output_tokens": summary.get("total_output_tokens"),
+        "avg_output_tokens": summary.get("avg_output_tokens"),
+        "max_output_tokens_observed": summary.get("max_output_tokens_observed"),
+        "total_actual_tokens": summary.get("total_actual_tokens"),
+        "avg_actual_tokens_per_request": summary.get(
+            "avg_actual_tokens_per_request"
+        ),
+        "ignore_eos_applied": bool(summary.get("ignore_eos_applied")),
+        "min_output_tokens_applied": bool(
+            summary.get("min_output_tokens_applied")
+        ),
         "max_num_seqs": summary.get("max_num_seqs"),
         "estimated_max_active_total_tokens": summary.get(
             "estimated_max_active_total_tokens"
@@ -433,12 +530,16 @@ def build_summary(
     generation_success: bool,
     prompt_char_lengths: list[int],
     prompt_token_lengths: list[int | None],
+    output_token_lengths: list[int | None],
+    finish_reasons: list[str | None],
     parent_counters: dict[str, Any],
     exported_counters: dict[str, Any] | None,
     counter_export_file_found: bool,
     counter_export_pid: int | None,
     prefix_caching_disabled: bool,
     prefix_caching_disable_supported: bool,
+    ignore_eos_applied: bool,
+    min_output_tokens_applied: bool,
     cuda_before: dict[str, Any],
     cuda_after: dict[str, Any],
     wall_time_seconds: float,
@@ -466,9 +567,27 @@ def build_summary(
     avg_prompt_tokens = _average_prompt_tokens(prompt_token_lengths)
     total_prompt_tokens = _sum_prompt_tokens(prompt_token_lengths)
     max_prompt_tokens = _max_prompt_tokens(prompt_token_lengths)
+    total_output_tokens = _sum_token_lengths(output_token_lengths)
+    avg_output_tokens = _average_token_lengths(output_token_lengths)
+    max_output_tokens_observed = _max_token_lengths(output_token_lengths)
+    total_actual_tokens = (
+        total_prompt_tokens + total_output_tokens
+        if total_prompt_tokens is not None and total_output_tokens is not None
+        else None
+    )
+    avg_actual_tokens_per_request = (
+        total_actual_tokens / len(prompt_char_lengths)
+        if total_actual_tokens is not None and prompt_char_lengths
+        else None
+    )
+    eos_finished_count = sum(
+        1 for reason in finish_reasons if reason in {"eos", "stop"}
+    )
+    length_finished_count = sum(1 for reason in finish_reasons if reason == "length")
     requested_max_output_tokens = int(
         getattr(args, "max_output_tokens", getattr(args, "max_tokens", 16))
     )
+    min_output_tokens_requested = int(getattr(args, "min_output_tokens", 0) or 0)
     max_num_seqs = int(getattr(args, "max_num_seqs", 1))
     estimated_max_active_prompt_tokens = (
         avg_prompt_tokens * max_num_seqs
@@ -553,10 +672,23 @@ def build_summary(
     summary["num_prompts"] = max(1, args.num_prompts)
     summary["target_prompt_tokens"] = args.target_prompt_tokens
     summary["requested_max_output_tokens"] = requested_max_output_tokens
+    summary["min_output_tokens_requested"] = min_output_tokens_requested
+    summary["min_output_tokens_applied"] = min_output_tokens_applied
+    summary["ignore_eos_requested"] = bool(getattr(args, "ignore_eos", False))
+    summary["ignore_eos_applied"] = ignore_eos_applied
     summary["max_num_seqs"] = max_num_seqs
     summary["total_prompt_tokens"] = total_prompt_tokens
     summary["avg_prompt_tokens"] = avg_prompt_tokens
     summary["max_prompt_tokens"] = max_prompt_tokens
+    summary["output_token_lengths"] = output_token_lengths
+    summary["total_output_tokens"] = total_output_tokens
+    summary["avg_output_tokens"] = avg_output_tokens
+    summary["max_output_tokens_observed"] = max_output_tokens_observed
+    summary["total_actual_tokens"] = total_actual_tokens
+    summary["avg_actual_tokens_per_request"] = avg_actual_tokens_per_request
+    summary["finish_reasons"] = finish_reasons
+    summary["eos_finished_count"] = eos_finished_count
+    summary["length_finished_count"] = length_finished_count
     summary["estimated_max_active_prompt_tokens"] = (
         estimated_max_active_prompt_tokens
     )
@@ -701,15 +833,16 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
     wall_start = time.perf_counter()
     prefix_caching_disabled = False
     prefix_caching_disable_supported = False
+    ignore_eos_applied = False
+    min_output_tokens_applied = False
     try:
         prefix_caching_disable_supported = _supports_enable_prefix_caching(LLM)
         llm_kwargs, prefix_caching_disabled = _build_llm_kwargs(args, LLM)
         llm = LLM(**llm_kwargs)
-        sampling_params = SamplingParams(
-            temperature=0.0,
-            max_tokens=args.max_output_tokens,
-            seed=args.seed,
+        sampling_kwargs, ignore_eos_applied, min_output_tokens_applied = (
+            _build_sampling_params_kwargs(args, SamplingParams)
         )
+        sampling_params = SamplingParams(**sampling_kwargs)
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
         prompt_token_lengths = [
             len(getattr(output, "prompt_token_ids", None) or [])
@@ -717,6 +850,9 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             else None
             for output in outputs
         ]
+        output_token_lengths, finish_reasons = (
+            extract_output_token_lengths_and_finish_reasons(outputs)
+        )
         parent_counters = get_kivo_demotion_counters_snapshot()
         exported_counters, file_found, export_pid = _load_exported_counters(
             export_file
@@ -728,12 +864,16 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             generation_success=True,
             prompt_char_lengths=prompt_char_lengths,
             prompt_token_lengths=prompt_token_lengths,
+            output_token_lengths=output_token_lengths,
+            finish_reasons=finish_reasons,
             parent_counters=parent_counters,
             exported_counters=exported_counters,
             counter_export_file_found=file_found,
             counter_export_pid=export_pid,
             prefix_caching_disabled=prefix_caching_disabled,
             prefix_caching_disable_supported=prefix_caching_disable_supported,
+            ignore_eos_applied=ignore_eos_applied,
+            min_output_tokens_applied=min_output_tokens_applied,
             cuda_before=cuda_before,
             cuda_after=cuda_after,
             wall_time_seconds=wall_time_seconds,
@@ -750,12 +890,16 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             generation_success=False,
             prompt_char_lengths=prompt_char_lengths,
             prompt_token_lengths=[None] * len(prompts),
+            output_token_lengths=[None] * len(prompts),
+            finish_reasons=[None] * len(prompts),
             parent_counters=parent_counters,
             exported_counters=exported_counters,
             counter_export_file_found=file_found,
             counter_export_pid=export_pid,
             prefix_caching_disabled=prefix_caching_disabled,
             prefix_caching_disable_supported=prefix_caching_disable_supported,
+            ignore_eos_applied=ignore_eos_applied,
+            min_output_tokens_applied=min_output_tokens_applied,
             cuda_before=cuda_before,
             cuda_after=cuda_after,
             wall_time_seconds=wall_time_seconds,

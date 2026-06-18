@@ -6,10 +6,13 @@ from pathlib import Path
 from scripts.kivo_vd.run_source_s5_26_block_pool_accounting_probe import (
     _build_compact_summary,
     _build_llm_kwargs,
+    _build_sampling_params_kwargs,
     _supports_enable_prefix_caching,
+    _supports_sampling_param,
     build_prompts,
     build_summary,
     build_targeted_prompt,
+    extract_output_token_lengths_and_finish_reasons,
     parse_args as parse_run_args,
 )
 from scripts.kivo_vd.validate_source_s5_26_block_pool_accounting_probe import (
@@ -29,6 +32,23 @@ class _FakeLLMWithoutPrefixCaching:
         del kwargs
 
 
+class _FakeSamplingParamsWithDecodeControls:
+    def __init__(
+        self,
+        *,
+        max_tokens: int = 16,
+        ignore_eos: bool = False,
+        min_tokens: int = 0,
+        **kwargs,
+    ):
+        del max_tokens, ignore_eos, min_tokens, kwargs
+
+
+class _FakeSamplingParamsWithoutDecodeControls:
+    def __init__(self, *, max_tokens: int = 16, **kwargs):
+        del max_tokens, kwargs
+
+
 class _FakeTokenizer:
     def encode(
         self,
@@ -38,6 +58,17 @@ class _FakeTokenizer:
     ) -> list[int]:
         del add_special_tokens
         return text.split()
+
+
+class _FakeCompletion:
+    def __init__(self, token_ids, finish_reason):
+        self.token_ids = token_ids
+        self.finish_reason = finish_reason
+
+
+class _FakeRequestOutput:
+    def __init__(self, completions):
+        self.outputs = completions
 
 
 def test_build_prompts_repeated_mode_reuses_same_prompt():
@@ -104,6 +135,42 @@ def test_supports_enable_prefix_caching_detection():
     assert _supports_enable_prefix_caching(_FakeLLMWithoutPrefixCaching) is False
 
 
+def test_sampling_param_support_detection():
+    assert _supports_sampling_param(
+        _FakeSamplingParamsWithDecodeControls, "ignore_eos"
+    )
+    assert _supports_sampling_param(
+        _FakeSamplingParamsWithDecodeControls, "min_tokens"
+    )
+    assert not _supports_sampling_param(
+        _FakeSamplingParamsWithoutDecodeControls, "ignore_eos"
+    )
+
+
+def test_build_sampling_params_kwargs_applies_supported_decode_controls():
+    args = argparse.Namespace(
+        max_output_tokens=32,
+        seed=7,
+        ignore_eos=True,
+        min_output_tokens=24,
+    )
+    kwargs, ignore_eos_applied, min_output_tokens_applied = (
+        _build_sampling_params_kwargs(args, _FakeSamplingParamsWithDecodeControls)
+    )
+    unsupported_kwargs, unsupported_ignore, unsupported_min = (
+        _build_sampling_params_kwargs(args, _FakeSamplingParamsWithoutDecodeControls)
+    )
+    assert kwargs["max_tokens"] == 32
+    assert kwargs["ignore_eos"] is True
+    assert kwargs["min_tokens"] == 24
+    assert ignore_eos_applied is True
+    assert min_output_tokens_applied is True
+    assert "ignore_eos" not in unsupported_kwargs
+    assert "min_tokens" not in unsupported_kwargs
+    assert unsupported_ignore is False
+    assert unsupported_min is False
+
+
 def test_build_llm_kwargs_disables_prefix_caching_only_when_supported():
     args = argparse.Namespace(
         model="m",
@@ -128,6 +195,18 @@ def test_build_llm_kwargs_disables_prefix_caching_only_when_supported():
     assert disabled_unsupported is False
 
 
+def test_extract_output_token_lengths_and_finish_reasons():
+    output_lengths, finish_reasons = extract_output_token_lengths_and_finish_reasons(
+        [
+            _FakeRequestOutput([_FakeCompletion([1, 2, 3], "length")]),
+            _FakeRequestOutput([_FakeCompletion([4], "stop")]),
+            _FakeRequestOutput([]),
+        ]
+    )
+    assert output_lengths == [3, 1, None]
+    assert finish_reasons == ["length", "stop", None]
+
+
 def test_build_summary_reports_compact_fields_and_totals():
     args = argparse.Namespace(
         prompt_mode="varied",
@@ -137,12 +216,16 @@ def test_build_summary_reports_compact_fields_and_totals():
         max_output_tokens=12,
         max_num_seqs=3,
         target_prompt_tokens=48,
+        ignore_eos=True,
+        min_output_tokens=6,
     )
     summary = build_summary(
         args=args,
         generation_success=True,
         prompt_char_lengths=[100, 120],
         prompt_token_lengths=[20, 24],
+        output_token_lengths=[12, 10],
+        finish_reasons=["length", "stop"],
         parent_counters={
             "worker_envelopes_built": 1,
             "scheduler_envelopes_received": 1,
@@ -184,14 +267,27 @@ def test_build_summary_reports_compact_fields_and_totals():
         counter_export_pid=None,
         prefix_caching_disabled=False,
         prefix_caching_disable_supported=True,
+        ignore_eos_applied=True,
+        min_output_tokens_applied=True,
         cuda_before={"cuda_memory_snapshot_observed": False},
         cuda_after={"cuda_memory_snapshot_observed": False},
         wall_time_seconds=1.25,
     )
     assert summary["avg_prompt_tokens"] == 22.0
     assert summary["requested_max_output_tokens"] == 12
+    assert summary["min_output_tokens_requested"] == 6
+    assert summary["ignore_eos_requested"] is True
+    assert summary["ignore_eos_applied"] is True
+    assert summary["min_output_tokens_applied"] is True
     assert summary["estimated_max_active_prompt_tokens"] == 66.0
     assert summary["estimated_max_active_total_tokens"] == 102.0
+    assert summary["total_output_tokens"] == 22
+    assert summary["avg_output_tokens"] == 11.0
+    assert summary["max_output_tokens_observed"] == 12
+    assert summary["total_actual_tokens"] == 66
+    assert summary["avg_actual_tokens_per_request"] == 33.0
+    assert summary["eos_finished_count"] == 1
+    assert summary["length_finished_count"] == 1
     assert summary["req_to_blocks_removed_total"] == 8
     assert summary["free_to_pool_blocks_total"] == 8
     assert summary["free_to_pool_blocks_total_or_last"] == 8
@@ -205,6 +301,12 @@ def test_build_summary_reports_compact_fields_and_totals():
     assert summary["summary"]["free_to_pool_observed"] is True
     assert summary["summary"]["block_pool_accounting_observed"] is True
     assert summary["summary"]["requested_max_output_tokens"] == 12
+    assert summary["summary"]["total_output_tokens"] == 22
+    assert summary["summary"]["avg_output_tokens"] == 11.0
+    assert summary["summary"]["max_output_tokens_observed"] == 12
+    assert summary["summary"]["total_actual_tokens"] == 66
+    assert summary["summary"]["ignore_eos_applied"] is True
+    assert summary["summary"]["min_output_tokens_applied"] is True
     assert summary["summary"]["estimated_max_active_total_tokens"] == 102.0
     assert summary["summary"]["free_to_pool_double_free_prevented"] == 1
     assert summary["summary"]["demotion_command_dedupe_dropped_blocks"] == 4
@@ -440,6 +542,9 @@ def test_cli_help_includes_expected_args():
             "64",
             "--max-output-tokens",
             "12",
+            "--min-output-tokens",
+            "8",
+            "--ignore-eos",
             "--disable-prefix-caching",
         ]
     )
@@ -448,5 +553,7 @@ def test_cli_help_includes_expected_args():
     assert run_args.prompt_mode == "varied"
     assert run_args.target_prompt_tokens == 64
     assert run_args.max_output_tokens == 12
+    assert run_args.min_output_tokens == 8
+    assert run_args.ignore_eos is True
     assert run_args.disable_prefix_caching is True
     assert validate_args.input.endswith("out.json")
