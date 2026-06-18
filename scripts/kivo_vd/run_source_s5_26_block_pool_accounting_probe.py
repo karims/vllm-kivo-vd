@@ -347,6 +347,15 @@ def _max_token_lengths(token_lengths: list[int | None]) -> int | None:
     return max(valid)
 
 
+def _tokens_per_second(
+    token_count: int | None,
+    elapsed_seconds: float | None,
+) -> float | None:
+    if token_count is None or elapsed_seconds is None or elapsed_seconds <= 0:
+        return None
+    return token_count / elapsed_seconds
+
+
 def extract_output_token_lengths_and_finish_reasons(
     outputs: Sequence[Any],
 ) -> tuple[list[int | None], list[str | None]]:
@@ -473,6 +482,21 @@ def _build_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "min_output_tokens_applied": bool(
             summary.get("min_output_tokens_applied")
         ),
+        "setup_wall_time_seconds": summary.get("setup_wall_time_seconds"),
+        "generation_wall_time_seconds": summary.get("generation_wall_time_seconds"),
+        "process_wall_time_seconds": summary.get("process_wall_time_seconds"),
+        "generation_total_tokens_per_second": summary.get(
+            "generation_total_tokens_per_second"
+        ),
+        "process_total_tokens_per_second": summary.get(
+            "process_total_tokens_per_second"
+        ),
+        "generation_output_tokens_per_second": summary.get(
+            "generation_output_tokens_per_second"
+        ),
+        "process_output_tokens_per_second": summary.get(
+            "process_output_tokens_per_second"
+        ),
         "max_num_seqs": summary.get("max_num_seqs"),
         "estimated_max_active_total_tokens": summary.get(
             "estimated_max_active_total_tokens"
@@ -543,6 +567,9 @@ def build_summary(
     cuda_before: dict[str, Any],
     cuda_after: dict[str, Any],
     wall_time_seconds: float,
+    setup_wall_time_seconds: float | None = None,
+    generation_wall_time_seconds: float | None = None,
+    process_wall_time_seconds: float | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (
@@ -584,6 +611,22 @@ def build_summary(
         1 for reason in finish_reasons if reason in {"eos", "stop"}
     )
     length_finished_count = sum(1 for reason in finish_reasons if reason == "length")
+    generation_total_tokens_per_second = _tokens_per_second(
+        total_actual_tokens,
+        generation_wall_time_seconds,
+    )
+    process_total_tokens_per_second = _tokens_per_second(
+        total_actual_tokens,
+        process_wall_time_seconds,
+    )
+    generation_output_tokens_per_second = _tokens_per_second(
+        total_output_tokens,
+        generation_wall_time_seconds,
+    )
+    process_output_tokens_per_second = _tokens_per_second(
+        total_output_tokens,
+        process_wall_time_seconds,
+    )
     requested_max_output_tokens = int(
         getattr(args, "max_output_tokens", getattr(args, "max_tokens", 16))
     )
@@ -719,7 +762,22 @@ def build_summary(
     summary["second_generation_success"] = None
     summary["reuse_probe_enabled"] = False
     summary["reuse_probe_success"] = None
+    # Retained for compatibility with older S5.26 output consumers.
     summary["wall_time_seconds"] = wall_time_seconds
+    summary["setup_wall_time_seconds"] = setup_wall_time_seconds
+    # Time spent only inside llm.generate(...).
+    summary["generation_wall_time_seconds"] = generation_wall_time_seconds
+    # Closest in-script metric to /usr/bin/time elapsed; shell/timeout overhead
+    # around the Python process is still outside this measurement.
+    summary["process_wall_time_seconds"] = process_wall_time_seconds
+    summary["generation_total_tokens_per_second"] = (
+        generation_total_tokens_per_second
+    )
+    summary["process_total_tokens_per_second"] = process_total_tokens_per_second
+    summary["generation_output_tokens_per_second"] = (
+        generation_output_tokens_per_second
+    )
+    summary["process_output_tokens_per_second"] = process_output_tokens_per_second
     summary["cuda_memory_allocated_before"] = cuda_before.get("cuda_memory_allocated")
     summary["cuda_memory_reserved_before"] = cuda_before.get("cuda_memory_reserved")
     summary["cuda_memory_allocated_after"] = cuda_after.get("cuda_memory_allocated")
@@ -835,6 +893,8 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
     prefix_caching_disable_supported = False
     ignore_eos_applied = False
     min_output_tokens_applied = False
+    setup_wall_time_seconds: float | None = None
+    generation_wall_time_seconds: float | None = None
     try:
         prefix_caching_disable_supported = _supports_enable_prefix_caching(LLM)
         llm_kwargs, prefix_caching_disabled = _build_llm_kwargs(args, LLM)
@@ -843,7 +903,10 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             _build_sampling_params_kwargs(args, SamplingParams)
         )
         sampling_params = SamplingParams(**sampling_kwargs)
+        setup_wall_time_seconds = time.perf_counter() - wall_start
+        generation_start = time.perf_counter()
         outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+        generation_wall_time_seconds = time.perf_counter() - generation_start
         prompt_token_lengths = [
             len(getattr(output, "prompt_token_ids", None) or [])
             if getattr(output, "prompt_token_ids", None) is not None
@@ -877,6 +940,8 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             cuda_before=cuda_before,
             cuda_after=cuda_after,
             wall_time_seconds=wall_time_seconds,
+            setup_wall_time_seconds=setup_wall_time_seconds,
+            generation_wall_time_seconds=generation_wall_time_seconds,
         )
     except Exception as exc:
         parent_counters = get_kivo_demotion_counters_snapshot()
@@ -903,6 +968,8 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
             cuda_before=cuda_before,
             cuda_after=cuda_after,
             wall_time_seconds=wall_time_seconds,
+            setup_wall_time_seconds=setup_wall_time_seconds,
+            generation_wall_time_seconds=generation_wall_time_seconds,
             error=f"{type(exc).__name__}: {exc}",
         )
     finally:
@@ -912,8 +979,22 @@ def run_generation(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    process_start = time.perf_counter()
     args = parse_args(argv)
     summary = run_generation(args)
+    process_wall_time_seconds = time.perf_counter() - process_start
+    total_actual_tokens = summary.get("total_actual_tokens")
+    total_output_tokens = summary.get("total_output_tokens")
+    summary["process_wall_time_seconds"] = process_wall_time_seconds
+    summary["process_total_tokens_per_second"] = _tokens_per_second(
+        total_actual_tokens if isinstance(total_actual_tokens, int) else None,
+        process_wall_time_seconds,
+    )
+    summary["process_output_tokens_per_second"] = _tokens_per_second(
+        total_output_tokens if isinstance(total_output_tokens, int) else None,
+        process_wall_time_seconds,
+    )
+    summary["summary"] = _build_compact_summary(summary)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

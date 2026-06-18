@@ -7,6 +7,7 @@ from scripts.kivo_vd.run_source_s5_26_block_pool_accounting_probe import (
     _build_compact_summary,
     _build_llm_kwargs,
     _build_sampling_params_kwargs,
+    _tokens_per_second,
     _supports_enable_prefix_caching,
     _supports_sampling_param,
     build_prompts,
@@ -272,6 +273,9 @@ def test_build_summary_reports_compact_fields_and_totals():
         cuda_before={"cuda_memory_snapshot_observed": False},
         cuda_after={"cuda_memory_snapshot_observed": False},
         wall_time_seconds=1.25,
+        setup_wall_time_seconds=0.75,
+        generation_wall_time_seconds=0.5,
+        process_wall_time_seconds=2.0,
     )
     assert summary["avg_prompt_tokens"] == 22.0
     assert summary["requested_max_output_tokens"] == 12
@@ -288,6 +292,14 @@ def test_build_summary_reports_compact_fields_and_totals():
     assert summary["avg_actual_tokens_per_request"] == 33.0
     assert summary["eos_finished_count"] == 1
     assert summary["length_finished_count"] == 1
+    assert summary["wall_time_seconds"] == 1.25
+    assert summary["setup_wall_time_seconds"] == 0.75
+    assert summary["generation_wall_time_seconds"] == 0.5
+    assert summary["process_wall_time_seconds"] == 2.0
+    assert summary["generation_total_tokens_per_second"] == 132.0
+    assert summary["process_total_tokens_per_second"] == 33.0
+    assert summary["generation_output_tokens_per_second"] == 44.0
+    assert summary["process_output_tokens_per_second"] == 11.0
     assert summary["req_to_blocks_removed_total"] == 8
     assert summary["free_to_pool_blocks_total"] == 8
     assert summary["free_to_pool_blocks_total_or_last"] == 8
@@ -307,6 +319,13 @@ def test_build_summary_reports_compact_fields_and_totals():
     assert summary["summary"]["total_actual_tokens"] == 66
     assert summary["summary"]["ignore_eos_applied"] is True
     assert summary["summary"]["min_output_tokens_applied"] is True
+    assert summary["summary"]["setup_wall_time_seconds"] == 0.75
+    assert summary["summary"]["generation_wall_time_seconds"] == 0.5
+    assert summary["summary"]["process_wall_time_seconds"] == 2.0
+    assert summary["summary"]["generation_total_tokens_per_second"] == 132.0
+    assert summary["summary"]["process_total_tokens_per_second"] == 33.0
+    assert summary["summary"]["generation_output_tokens_per_second"] == 44.0
+    assert summary["summary"]["process_output_tokens_per_second"] == 11.0
     assert summary["summary"]["estimated_max_active_total_tokens"] == 102.0
     assert summary["summary"]["free_to_pool_double_free_prevented"] == 1
     assert summary["summary"]["demotion_command_dedupe_dropped_blocks"] == 4
@@ -336,6 +355,12 @@ def test_compact_summary_uses_total_or_last():
         }
     )
     assert compact["free_to_pool_blocks_total_or_last"] == 2
+
+
+def test_tokens_per_second_handles_missing_and_zero_elapsed():
+    assert _tokens_per_second(20, 2.0) == 10.0
+    assert _tokens_per_second(None, 2.0) is None
+    assert _tokens_per_second(20, 0.0) is None
 
 
 def test_validator_passes_when_block_pool_accounting_increases():
