@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any, Iterator
 
+HF_CACHE_ROOT = Path.home() / ".cache" / "huggingface" / "hub"
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -30,6 +32,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Run the Sk-1.3c tiny live sketch smoke test."
     )
     parser.add_argument("--model", default="facebook/opt-125m")
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help=(
+            "Resolve Hugging Face repo IDs from the local cache only and "
+            "avoid network-backed model lookup when possible."
+        ),
+    )
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.35)
     parser.add_argument("--max-model-len", type=int, default=1024)
@@ -52,8 +62,64 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _hf_cache_repo_dir(model_name: str) -> Path:
+    escaped = model_name.replace("/", "--")
+    return HF_CACHE_ROOT / f"models--{escaped}"
+
+
+def discover_cached_model_paths(
+    model_name: str | None = None,
+    *,
+    limit: int = 20,
+) -> list[str]:
+    base_dirs: list[Path]
+    if model_name is not None:
+        candidate = _hf_cache_repo_dir(model_name)
+        base_dirs = [candidate] if candidate.exists() else []
+    else:
+        if not HF_CACHE_ROOT.exists():
+            return []
+        base_dirs = sorted(HF_CACHE_ROOT.glob("models--*"))
+
+    results: list[str] = []
+    for repo_dir in base_dirs:
+        snapshots_dir = repo_dir / "snapshots"
+        if not snapshots_dir.exists():
+            continue
+        snapshots = sorted(
+            (path for path in snapshots_dir.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for snapshot in snapshots:
+            results.append(str(snapshot))
+            if len(results) >= limit:
+                return results
+    return results
+
+
+def resolve_model_reference(
+    model: str,
+    *,
+    local_files_only: bool,
+) -> tuple[str, bool, list[str]]:
+    model_path = Path(model).expanduser()
+    if model_path.exists():
+        return str(model_path), True, []
+    if not local_files_only:
+        return model, False, discover_cached_model_paths(model)
+
+    cached_candidates = discover_cached_model_paths(model)
+    if cached_candidates:
+        return cached_candidates[0], True, cached_candidates
+    raise FileNotFoundError(
+        f"No cached local snapshot found for model {model!r} under "
+        f"{HF_CACHE_ROOT}"
+    )
+
+
 def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
-    return {
+    env = {
         "KIVO_KV_SKETCH_ENABLE": "1",
         "KIVO_KV_SKETCH_BACKEND": "random_projection",
         "KIVO_KV_SKETCH_DIM": str(args.sketch_dim),
@@ -78,6 +144,10 @@ def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
             Path(args.output).with_suffix(".counters.json")
         ),
     }
+    if args.local_files_only:
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+    return env
 
 
 @contextlib.contextmanager
@@ -169,7 +239,16 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     prompts = build_prompts(repeats=args.prompt_repeats, num_prompts=args.num_prompts)
     llm = None
     env_values = _smoke_env(args)
+    resolved_model = args.model
+    model_is_local = False
+    cached_model_candidates: list[str] = []
     try:
+        resolved_model, model_is_local, cached_model_candidates = (
+            resolve_model_reference(
+                args.model,
+                local_files_only=args.local_files_only,
+            )
+        )
         with patched_environ(env_values):
             from vllm import LLM, SamplingParams
             from vllm.v1.core.kivo_demotion_counters import (
@@ -178,7 +257,9 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             )
 
             reset_kivo_demotion_counters()
-            llm = LLM(**_build_llm_kwargs(args))
+            llm_kwargs = _build_llm_kwargs(args)
+            llm_kwargs["model"] = resolved_model
+            llm = LLM(**llm_kwargs)
             sampling_params = SamplingParams(
                 temperature=0.0,
                 max_tokens=args.max_tokens,
@@ -198,6 +279,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             counters = exported_counters if exported_counters is not None else parent_counters
             return {
                 "generation_success": True,
+                "model": args.model,
+                "resolved_model": resolved_model,
+                "model_is_local": model_is_local,
+                "local_files_only": args.local_files_only,
+                "cached_model_candidates": cached_model_candidates,
                 "prompt_count": len(prompts),
                 "prompt_token_lengths": prompt_token_lengths,
                 "env_flags": env_values,
@@ -213,6 +299,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         counters = exported_counters if exported_counters is not None else {}
         return {
             "generation_success": False,
+            "model": args.model,
+            "resolved_model": resolved_model,
+            "model_is_local": model_is_local,
+            "local_files_only": args.local_files_only,
+            "cached_model_candidates": cached_model_candidates,
             "prompt_count": len(prompts),
             "prompt_token_lengths": [None] * len(prompts),
             "env_flags": env_values,
@@ -221,6 +312,18 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "counter_export_file": export_file,
             "counters": counters,
             "counter_summary": summarize_sketch_counters(counters),
+            "model_resolution_debug": {
+                "hf_cache_root": str(HF_CACHE_ROOT),
+                "requested_model": args.model,
+                "resolved_model": resolved_model,
+                "model_is_local": model_is_local,
+                "local_files_only": args.local_files_only,
+                "cached_model_candidates": cached_model_candidates,
+                "export_file_exists": export_path.exists(),
+                "export_file_size": export_path.stat().st_size
+                if export_path.exists()
+                else 0,
+            },
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:

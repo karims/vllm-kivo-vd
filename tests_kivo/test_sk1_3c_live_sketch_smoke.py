@@ -25,8 +25,78 @@ def test_parse_args_defaults() -> None:
     module = _load_module()
     args = module.parse_args(["--output", "out.json"])
     assert args.model == "facebook/opt-125m"
+    assert args.local_files_only is False
     assert args.sketch_dim == 16
     assert args.runtime_policy == "recent_only"
+
+
+def test_parse_args_local_files_only_flag() -> None:
+    module = _load_module()
+    args = module.parse_args(["--output", "out.json", "--local-files-only"])
+    assert args.local_files_only is True
+
+
+def test_resolve_model_reference_prefers_existing_local_path(tmp_path: Path) -> None:
+    module = _load_module()
+    model_dir = tmp_path / "tiny-model"
+    model_dir.mkdir()
+    resolved, is_local, candidates = module.resolve_model_reference(
+        str(model_dir),
+        local_files_only=True,
+    )
+    assert resolved == str(model_dir)
+    assert is_local is True
+    assert candidates == []
+
+
+def test_resolve_model_reference_uses_cached_snapshot_when_local_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    cache_root = tmp_path / "hub"
+    snapshot = (
+        cache_root
+        / "models--sshleifer--tiny-gpt2"
+        / "snapshots"
+        / "abc123"
+    )
+    snapshot.mkdir(parents=True)
+    monkeypatch.setattr(module, "HF_CACHE_ROOT", cache_root)
+
+    resolved, is_local, candidates = module.resolve_model_reference(
+        "sshleifer/tiny-gpt2",
+        local_files_only=True,
+    )
+    assert resolved == str(snapshot)
+    assert is_local is True
+    assert candidates == [str(snapshot)]
+
+
+def test_resolve_model_reference_fails_cleanly_without_cache(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, "HF_CACHE_ROOT", tmp_path / "missing-cache")
+
+    try:
+        module.resolve_model_reference(
+            "missing/model",
+            local_files_only=True,
+        )
+    except FileNotFoundError as exc:
+        assert "No cached local snapshot found" in str(exc)
+    else:
+        raise AssertionError("Expected FileNotFoundError for missing local cache")
+
+
+def test_smoke_env_sets_offline_flags_when_requested() -> None:
+    module = _load_module()
+    args = module.parse_args(["--output", "out.json", "--local-files-only"])
+    env = module._smoke_env(args)
+    assert env["HF_HUB_OFFLINE"] == "1"
+    assert env["TRANSFORMERS_OFFLINE"] == "1"
 
 
 def test_summarize_sketch_counters_success_case() -> None:
