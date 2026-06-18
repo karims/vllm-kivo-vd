@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run a tiny live decode smoke for the sketch-gated demotion/free path."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import gc
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Iterator
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (  # noqa: E402
+    _build_llm_kwargs,
+    _load_exported_counters,
+    build_prompts,
+)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the Sk-1.3c tiny live sketch smoke test."
+    )
+    parser.add_argument("--model", default="facebook/opt-125m")
+    parser.add_argument("--max-tokens", type=int, default=16)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.35)
+    parser.add_argument("--max-model-len", type=int, default=1024)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=1024)
+    parser.add_argument("--max-num-seqs", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--dtype", default="auto")
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--prompt-repeats", type=int, default=200)
+    parser.add_argument("--num-prompts", type=int, default=1)
+    parser.add_argument("--sketch-dim", type=int, default=16)
+    parser.add_argument("--sketch-seed", type=int, default=123)
+    parser.add_argument(
+        "--runtime-policy",
+        default="recent_only",
+        choices=("recent_only", "countsketch_online"),
+    )
+    parser.add_argument("--keep-recent-blocks", type=int, default=2)
+    parser.add_argument("--output", required=True)
+    return parser.parse_args(argv)
+
+
+def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
+    return {
+        "KIVO_KV_SKETCH_ENABLE": "1",
+        "KIVO_KV_SKETCH_BACKEND": "random_projection",
+        "KIVO_KV_SKETCH_DIM": str(args.sketch_dim),
+        "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ACTION": "apply_block_table_only",
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": args.runtime_policy,
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(
+            args.keep_recent_blocks
+        ),
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": "2",
+        "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
+        "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
+        "KIVO_KV_CORE_DEMOTION_ENABLE": "1",
+        "KIVO_KV_CORE_DEMOTION_ACTION": "mark_demoted_only",
+        "KIVO_KV_OWNERSHIP_REMOVE_ENABLE": "1",
+        "KIVO_KV_OWNERSHIP_REMOVE_ACTION": "remove_marked_demoted_only",
+        "KIVO_KV_FREE_TO_POOL_ENABLE": "1",
+        "KIVO_KV_FREE_TO_POOL_ACTION": "free_removed_demoted_only",
+        "KIVO_KV_DEMOTION_COUNTERS_ENABLE": "1",
+        "KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE": str(
+            Path(args.output).with_suffix(".counters.json")
+        ),
+    }
+
+
+@contextlib.contextmanager
+def patched_environ(values: dict[str, str]) -> Iterator[None]:
+    original: dict[str, str | None] = {
+        key: os.environ.get(key) for key in values
+    }
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, old_value in original.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+
+
+def summarize_sketch_counters(
+    counters: dict[str, Any] | None,
+    *,
+    expected_backend: str = "random_projection",
+) -> dict[str, Any]:
+    counters = counters or {}
+    sketch_backend = counters.get("sketch_backend")
+    sketch_attempted = int(counters.get("sketch_build_attempted", 0) or 0)
+    sketch_succeeded = int(counters.get("sketch_build_succeeded", 0) or 0)
+    sketch_failed = int(counters.get("sketch_build_failed", 0) or 0)
+    sketched_blocks_total = int(counters.get("sketched_blocks_total", 0) or 0)
+    freed_after_sketch = int(
+        counters.get("freed_after_sketch_blocks_total", 0) or 0
+    )
+    missing_prevented_demotion = int(
+        counters.get("sketch_missing_prevented_demotion", 0) or 0
+    )
+    missing_prevented_free = int(
+        counters.get("sketch_missing_prevented_free", 0) or 0
+    )
+    invariant_failures = {
+        "ownership_remove_invariant_failed": int(
+            counters.get("ownership_remove_invariant_failed", 0) or 0
+        ),
+        "free_to_pool_double_free_prevented": int(
+            counters.get("free_to_pool_double_free_prevented", 0) or 0
+        ),
+        "block_pool_free_accounting_rejected": int(
+            counters.get("block_pool_free_accounting_rejected", 0) or 0
+        ),
+    }
+    all_clean = all(value == 0 for value in invariant_failures.values())
+    warnings: list[str] = []
+    if sketch_attempted > 0 and sketch_succeeded == 0:
+        warnings.append(
+            "sketch_attempted_without_success; possible kv_cache shape extraction issue"
+        )
+    if sketch_backend not in (None, expected_backend):
+        warnings.append(
+            f"unexpected_sketch_backend:{sketch_backend}"
+        )
+    return {
+        "sketch_backend": sketch_backend,
+        "sketch_build_attempted": sketch_attempted,
+        "sketch_build_succeeded": sketch_succeeded,
+        "sketch_build_failed": sketch_failed,
+        "sketched_blocks_total": sketched_blocks_total,
+        "sketch_missing_prevented_demotion": missing_prevented_demotion,
+        "sketch_missing_prevented_free": missing_prevented_free,
+        "freed_after_sketch_blocks_total": freed_after_sketch,
+        "ownership_remove_succeeded": int(
+            counters.get("ownership_remove_succeeded", 0) or 0
+        ),
+        "free_to_pool_succeeded": int(
+            counters.get("free_to_pool_succeeded", 0) or 0
+        ),
+        "free_to_pool_calls": int(counters.get("free_to_pool_calls", 0) or 0),
+        "sketch_bytes_total": int(counters.get("sketch_bytes_total", 0) or 0),
+        "invariant_counters": invariant_failures,
+        "invariants_clean": all_clean,
+        "warnings": warnings,
+    }
+
+
+def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
+    export_file = str(Path(args.output).with_suffix(".counters.json"))
+    export_path = Path(export_file)
+    if export_path.exists():
+        export_path.unlink()
+
+    prompts = build_prompts(repeats=args.prompt_repeats, num_prompts=args.num_prompts)
+    llm = None
+    env_values = _smoke_env(args)
+    try:
+        with patched_environ(env_values):
+            from vllm import LLM, SamplingParams
+            from vllm.v1.core.kivo_demotion_counters import (
+                get_kivo_demotion_counters_snapshot,
+                reset_kivo_demotion_counters,
+            )
+
+            reset_kivo_demotion_counters()
+            llm = LLM(**_build_llm_kwargs(args))
+            sampling_params = SamplingParams(
+                temperature=0.0,
+                max_tokens=args.max_tokens,
+                seed=args.seed,
+            )
+            outputs = llm.generate(prompts, sampling_params, use_tqdm=False)
+            prompt_token_lengths = [
+                len(getattr(output, "prompt_token_ids", None) or [])
+                if getattr(output, "prompt_token_ids", None) is not None
+                else None
+                for output in outputs
+            ]
+            parent_counters = get_kivo_demotion_counters_snapshot()
+            exported_counters, file_found, export_pid = _load_exported_counters(
+                export_file
+            )
+            counters = exported_counters if exported_counters is not None else parent_counters
+            return {
+                "generation_success": True,
+                "prompt_count": len(prompts),
+                "prompt_token_lengths": prompt_token_lengths,
+                "env_flags": env_values,
+                "counter_export_file_found": file_found,
+                "counter_export_pid": export_pid,
+                "counter_export_file": export_file,
+                "counters": counters,
+                "counter_summary": summarize_sketch_counters(counters),
+                "error": None,
+            }
+    except Exception as exc:
+        exported_counters, file_found, export_pid = _load_exported_counters(export_file)
+        counters = exported_counters if exported_counters is not None else {}
+        return {
+            "generation_success": False,
+            "prompt_count": len(prompts),
+            "prompt_token_lengths": [None] * len(prompts),
+            "env_flags": env_values,
+            "counter_export_file_found": file_found,
+            "counter_export_pid": export_pid,
+            "counter_export_file": export_file,
+            "counters": counters,
+            "counter_summary": summarize_sketch_counters(counters),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    finally:
+        if llm is not None:
+            del llm
+        gc.collect()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    summary = run_smoke(args)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+    return 0 if summary["generation_success"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
