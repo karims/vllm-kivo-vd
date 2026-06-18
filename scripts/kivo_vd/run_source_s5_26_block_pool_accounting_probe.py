@@ -318,6 +318,27 @@ def _build_counter_views(counters: dict[str, Any]) -> tuple[dict[str, Any], dict
         "free_to_pool_blocks",
         "free_to_pool_calls",
         "free_to_pool_double_free_prevented",
+        "demotion_command_dedupe_input_blocks",
+        "demotion_command_dedupe_dropped_blocks",
+        "demotion_command_dedupe_output_blocks",
+        "demotion_command_dedupe_empty_after_drop",
+        "decode_only_requested",
+        "decode_only_supported",
+        "demotion_skipped_not_decode_phase",
+        "ownership_prefilter_input_blocks",
+        "ownership_prefilter_dropped_already_removed",
+        "ownership_prefilter_output_blocks",
+        "free_prefilter_input_blocks",
+        "free_prefilter_dropped_already_freed",
+        "free_prefilter_output_blocks",
+        "demotion_export_wall_time_seconds",
+        "demotion_export_max_call_wall_time_seconds",
+        "ownership_remove_wall_time_seconds",
+        "ownership_remove_max_call_wall_time_seconds",
+        "free_to_pool_wall_time_seconds",
+        "free_to_pool_max_call_wall_time_seconds",
+        "audit_bookkeeping_wall_time_seconds",
+        "audit_bookkeeping_max_call_wall_time_seconds",
         "block_pool_free_accounting_observed",
         "block_pool_free_accounting_increased",
         "block_pool_free_accounting_rejected",
@@ -380,6 +401,18 @@ def _build_compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         ),
         "free_to_pool_calls_total": int(
             summary.get("free_to_pool_calls_total", 0) or 0
+        ),
+        "free_to_pool_double_free_prevented": int(
+            summary.get("free_to_pool_double_free_prevented", 0) or 0
+        ),
+        "demotion_command_dedupe_dropped_blocks": int(
+            summary.get("demotion_command_dedupe_dropped_blocks", 0) or 0
+        ),
+        "ownership_prefilter_dropped_already_removed": int(
+            summary.get("ownership_prefilter_dropped_already_removed", 0) or 0
+        ),
+        "free_prefilter_dropped_already_freed": int(
+            summary.get("free_prefilter_dropped_already_freed", 0) or 0
         ),
         "removed_but_not_freed_block_ids_count": int(
             summary.get("removed_but_not_freed_block_ids_count", 0) or 0
@@ -472,13 +505,17 @@ def build_summary(
     last_rejected_sample = tuple(
         last_snapshot_counters.get("last_free_rejected_block_ids_sample") or ()
     )[:20]
+    freed_sample_set = set(last_freed_sample)
     removed_but_not_freed_sample = tuple(
-        block_id for block_id in last_removed_sample if block_id not in set(last_freed_sample)
+        block_id
+        for block_id in last_removed_sample
+        if block_id not in freed_sample_set
     )[:20]
     blocker_reasons = dict(counters.get("blocker_reasons", {}) or {})
     free_to_pool_rejected_reason_counts = {
         "already_freed_or_duplicate": int(
-            blocker_reasons.get("double_free_prevented", 0) or 0
+            (blocker_reasons.get("double_free_prevented", 0) or 0)
+            + (blocker_reasons.get("already_freed_or_duplicate", 0) or 0)
         ),
         "not_removed": int(
             blocker_reasons.get("no_removed_demoted_blocks", 0) or 0
@@ -496,6 +533,7 @@ def build_summary(
         for reason, count in blocker_reasons.items()
         if reason in {
             "double_free_prevented",
+            "already_freed_or_duplicate",
             "no_removed_demoted_blocks",
             "not_marked_demoted",
             "removed_block_still_owned_by_request",
@@ -578,6 +616,31 @@ def build_summary(
     summary["free_to_pool_calls_total"] = int(
         counters.get("free_to_pool_calls", 0) or 0
     )
+    for counter_name in (
+        "free_to_pool_double_free_prevented",
+        "demotion_command_dedupe_input_blocks",
+        "demotion_command_dedupe_dropped_blocks",
+        "demotion_command_dedupe_output_blocks",
+        "demotion_command_dedupe_empty_after_drop",
+        "decode_only_requested",
+        "decode_only_supported",
+        "demotion_skipped_not_decode_phase",
+        "ownership_prefilter_input_blocks",
+        "ownership_prefilter_dropped_already_removed",
+        "ownership_prefilter_output_blocks",
+        "free_prefilter_input_blocks",
+        "free_prefilter_dropped_already_freed",
+        "free_prefilter_output_blocks",
+        "demotion_export_wall_time_seconds",
+        "demotion_export_max_call_wall_time_seconds",
+        "ownership_remove_wall_time_seconds",
+        "ownership_remove_max_call_wall_time_seconds",
+        "free_to_pool_wall_time_seconds",
+        "free_to_pool_max_call_wall_time_seconds",
+        "audit_bookkeeping_wall_time_seconds",
+        "audit_bookkeeping_max_call_wall_time_seconds",
+    ):
+        summary[counter_name] = counters.get(counter_name, 0)
     summary["block_pool_num_free_blocks_before"] = int(
         counters.get("block_pool_num_free_blocks_before", 0) or 0
     )

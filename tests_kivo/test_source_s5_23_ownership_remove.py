@@ -146,6 +146,28 @@ def test_remove_marked_demoted_blocks_if_safe_rejects_stale_marked_ids():
     assert result.blocker_reasons["demoted_ids_missing_from_req_to_blocks"] == 1
 
 
+def test_remove_prefilter_skips_already_removed_blocks(monkeypatch):
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    reset_kivo_demotion_counters()
+    manager = _manager()
+    already_removed = manager.req_to_blocks["req0"][0]
+    manager.req_to_blocks["req0"] = manager.req_to_blocks["req0"][1:]
+    manager.kivo_req_to_demoted_block_ids["req0"] = {10, 11}
+    manager.kivo_req_to_removed_demoted_blocks["req0"] = [already_removed]
+
+    result = manager.remove_kivo_marked_demoted_blocks_if_safe(
+        "req0",
+        config=_remove_config(),
+    )
+    snapshot = get_kivo_demotion_counters_snapshot()
+
+    assert result.accepted is True
+    assert result.removed_block_ids == (11,)
+    assert snapshot["ownership_prefilter_input_blocks"] == 2
+    assert snapshot["ownership_prefilter_dropped_already_removed"] == 1
+    assert snapshot["ownership_prefilter_output_blocks"] == 1
+
+
 def test_apply_kivo_demotion_command_can_mark_then_remove_when_enabled(monkeypatch):
     manager = _manager()
     reset_kivo_demotion_counters()

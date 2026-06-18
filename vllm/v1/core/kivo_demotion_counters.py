@@ -32,6 +32,13 @@ class KivoDemotionCounters:
     demotion_command_export_attempted: int = 0
     demotion_command_export_rejected: int = 0
     demotion_command_export_succeeded: int = 0
+    demotion_command_dedupe_input_blocks: int = 0
+    demotion_command_dedupe_dropped_blocks: int = 0
+    demotion_command_dedupe_output_blocks: int = 0
+    demotion_command_dedupe_empty_after_drop: int = 0
+    decode_only_requested: int = 0
+    decode_only_supported: int = 0
+    demotion_skipped_not_decode_phase: int = 0
     worker_envelopes_built: int = 0
     worker_envelopes_attached: int = 0
     scheduler_envelopes_received: int = 0
@@ -47,6 +54,9 @@ class KivoDemotionCounters:
     ownership_remove_rejected: int = 0
     ownership_remove_invariant_checked: int = 0
     ownership_remove_invariant_failed: int = 0
+    ownership_prefilter_input_blocks: int = 0
+    ownership_prefilter_dropped_already_removed: int = 0
+    ownership_prefilter_output_blocks: int = 0
     ownership_removed_subset_of_marked: int = 0
     ownership_removed_subset_of_owned: int = 0
     ownership_removed_absent_after: int = 0
@@ -63,6 +73,17 @@ class KivoDemotionCounters:
     free_to_pool_blocks: int = 0
     free_to_pool_double_free_prevented: int = 0
     free_to_pool_calls: int = 0
+    free_prefilter_input_blocks: int = 0
+    free_prefilter_dropped_already_freed: int = 0
+    free_prefilter_output_blocks: int = 0
+    demotion_export_wall_time_seconds: float = 0.0
+    demotion_export_max_call_wall_time_seconds: float = 0.0
+    ownership_remove_wall_time_seconds: float = 0.0
+    ownership_remove_max_call_wall_time_seconds: float = 0.0
+    free_to_pool_wall_time_seconds: float = 0.0
+    free_to_pool_max_call_wall_time_seconds: float = 0.0
+    audit_bookkeeping_wall_time_seconds: float = 0.0
+    audit_bookkeeping_max_call_wall_time_seconds: float = 0.0
     block_pool_free_capacity_before: int = 0
     block_pool_free_capacity_after: int = 0
     block_pool_free_capacity_delta: int = 0
@@ -140,6 +161,19 @@ def increment_kivo_demotion_counter(name: str, amount: int = 1) -> None:
     if not isinstance(current, int):
         return
     setattr(_COUNTERS, name, current + amount)
+
+
+def add_kivo_demotion_timing_counter(name: str, elapsed_seconds: float) -> None:
+    if not kivo_demotion_counters_enabled() or elapsed_seconds <= 0:
+        return
+    current = getattr(_COUNTERS, name, None)
+    if not isinstance(current, float):
+        return
+    setattr(_COUNTERS, name, current + elapsed_seconds)
+    max_name = name.replace("_wall_time_seconds", "_max_call_wall_time_seconds")
+    max_current = getattr(_COUNTERS, max_name, None)
+    if isinstance(max_current, float) and elapsed_seconds > max_current:
+        setattr(_COUNTERS, max_name, elapsed_seconds)
 
 
 def add_kivo_demotion_blocker_reasons(blocker_reasons: dict[str, int]) -> None:

@@ -140,8 +140,64 @@ def test_double_free_is_prevented(monkeypatch):
     snapshot = get_kivo_demotion_counters_snapshot()
     assert first.succeeded is True
     assert second.succeeded is False
-    assert second.double_free_prevented is True
+    assert second.double_free_prevented is False
+    assert second.blocker_reasons["already_freed_or_duplicate"] == 1
+    assert snapshot["free_prefilter_dropped_already_freed"] == 1
+    assert snapshot["free_to_pool_double_free_prevented"] == 0
+
+
+def test_double_free_guard_remains_final_safety_net(monkeypatch):
+    class LateContainsSet(set):
+        def __init__(self, values):
+            super().__init__(values)
+            self.calls = 0
+
+        def __contains__(self, value):
+            self.calls += 1
+            return self.calls > 1 and super().__contains__(value)
+
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    reset_kivo_demotion_counters()
+    manager = _manager()
+    removed_block = manager.req_to_blocks["req0"][0]
+    manager.req_to_blocks["req0"] = manager.req_to_blocks["req0"][1:]
+    manager.kivo_req_to_removed_demoted_blocks["req0"] = [removed_block]
+    manager.kivo_freed_demoted_block_ids = LateContainsSet({removed_block.block_id})
+
+    result = manager.free_kivo_removed_demoted_blocks_to_pool_if_safe(
+        "req0",
+        config=_free_config(),
+    )
+    snapshot = get_kivo_demotion_counters_snapshot()
+
+    assert result.succeeded is False
+    assert result.double_free_prevented is True
     assert snapshot["free_to_pool_double_free_prevented"] == 1
+
+
+def test_free_prefilter_skips_duplicate_removed_blocks(monkeypatch):
+    monkeypatch.setenv("KIVO_KV_DEMOTION_COUNTERS_ENABLE", "1")
+    reset_kivo_demotion_counters()
+    manager = _manager()
+    removed_block = manager.req_to_blocks["req0"][0]
+    manager.req_to_blocks["req0"] = manager.req_to_blocks["req0"][1:]
+    manager.kivo_req_to_removed_demoted_blocks["req0"] = [
+        removed_block,
+        removed_block,
+    ]
+
+    result = manager.free_kivo_removed_demoted_blocks_to_pool_if_safe(
+        "req0",
+        config=_free_config(),
+    )
+    snapshot = get_kivo_demotion_counters_snapshot()
+
+    assert result.succeeded is True
+    assert result.freed_block_ids == (removed_block.block_id,)
+    assert manager.block_pool.freed_calls == [[removed_block.block_id]]
+    assert snapshot["free_prefilter_input_blocks"] == 2
+    assert snapshot["free_prefilter_dropped_already_freed"] == 1
+    assert snapshot["free_prefilter_output_blocks"] == 1
 
 
 def test_validator_accepts_success_case():

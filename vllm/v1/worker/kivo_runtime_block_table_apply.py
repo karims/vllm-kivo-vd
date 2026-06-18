@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
 from vllm.v1.core.kivo_demotion_counters import (
     add_kivo_demotion_blocker_reasons,
+    add_kivo_demotion_timing_counter,
     export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
     set_kivo_demotion_counter_fields,
@@ -55,6 +57,11 @@ if TYPE_CHECKING:
 _DEFAULT_ACTION = "off"
 _SUPPORTED_POLICIES = {"recent_only", "countsketch_online"}
 _COUNTER_SAMPLE_LIMIT = 8
+_EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST: dict[str, set[int]] = {}
+
+
+def reset_kivo_demotion_command_dedupe_state_for_tests() -> None:
+    _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST.clear()
 
 
 @dataclass(frozen=True)
@@ -125,81 +132,118 @@ def build_kivo_demotion_command_for_runtime_row(
     slot_mapping_refresh_guaranteed: bool,
 ) -> KivoRuntimeDemotionCommandExport:
     """Build a worker-side demotion command payload when local invariants hold."""
+    started_at = time.perf_counter()
     blocker_reasons: dict[str, int] = {}
-    increment_kivo_demotion_counter("demotion_command_export_attempted")
-    before = tuple(int(block_id) for block_id in visible_before_block_ids)
-    after = tuple(int(block_id) for block_id in visible_after_block_ids)
-    demote = tuple(int(block_id) for block_id in candidate_demote_block_ids)
-    protected = tuple(int(block_id) for block_id in protected_block_ids)
+    try:
+        increment_kivo_demotion_counter("demotion_command_export_attempted")
+        before = tuple(int(block_id) for block_id in visible_before_block_ids)
+        after = tuple(int(block_id) for block_id in visible_after_block_ids)
+        raw_demote = tuple(int(block_id) for block_id in candidate_demote_block_ids)
+        protected = tuple(int(block_id) for block_id in protected_block_ids)
 
-    if request_id is None:
-        blocker_reasons["missing_request_id"] = 1
-    if not block_table_applied:
-        blocker_reasons["block_table_not_applied"] = 1
-    if not slot_mapping_refresh_guaranteed:
-        blocker_reasons["slot_mapping_refresh_not_guaranteed"] = 1
-    if not demote:
-        blocker_reasons["empty_candidate_demote_ids"] = 1
-    if not after:
-        blocker_reasons["empty_visible_after_blocks"] = 1
-
-    before_set = set(before)
-    after_set = set(after)
-    protected_set = set(protected)
-    if any(block_id not in before_set for block_id in demote):
-        blocker_reasons["candidate_demote_not_visible_before"] = sum(
-            1 for block_id in demote if block_id not in before_set
+        increment_kivo_demotion_counter(
+            "demotion_command_dedupe_input_blocks",
+            len(raw_demote),
         )
-    if any(block_id in after_set for block_id in demote):
-        blocker_reasons["candidate_demote_still_visible_after"] = sum(
-            1 for block_id in demote if block_id in after_set
+        already_exported = (
+            _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST.get(request_id, set())
+            if request_id is not None
+            else set()
         )
-    if any(block_id not in before_set for block_id in after):
-        blocker_reasons["visible_after_not_subset_of_visible_before"] = sum(
-            1 for block_id in after if block_id not in before_set
+        demote = tuple(
+            block_id for block_id in raw_demote if block_id not in already_exported
         )
-    if any(block_id in protected_set for block_id in demote):
-        blocker_reasons["candidate_demote_overlaps_protected"] = sum(
-            1 for block_id in demote if block_id in protected_set
+        dedupe_dropped = len(raw_demote) - len(demote)
+        increment_kivo_demotion_counter(
+            "demotion_command_dedupe_dropped_blocks",
+            dedupe_dropped,
+        )
+        increment_kivo_demotion_counter(
+            "demotion_command_dedupe_output_blocks",
+            len(demote),
         )
 
-    if blocker_reasons or request_id is None:
-        increment_kivo_demotion_counter("demotion_command_export_rejected")
+        if request_id is None:
+            blocker_reasons["missing_request_id"] = 1
+        if not block_table_applied:
+            blocker_reasons["block_table_not_applied"] = 1
+        if not slot_mapping_refresh_guaranteed:
+            blocker_reasons["slot_mapping_refresh_not_guaranteed"] = 1
+        if raw_demote and not demote:
+            increment_kivo_demotion_counter(
+                "demotion_command_dedupe_empty_after_drop"
+            )
+            blocker_reasons["dedupe_empty_after_drop"] = 1
+        if not demote:
+            blocker_reasons["empty_candidate_demote_ids"] = 1
+        if not after:
+            blocker_reasons["empty_visible_after_blocks"] = 1
+
+        before_set = set(before)
+        after_set = set(after)
+        protected_set = set(protected)
+        if any(block_id not in before_set for block_id in demote):
+            blocker_reasons["candidate_demote_not_visible_before"] = sum(
+                1 for block_id in demote if block_id not in before_set
+            )
+        if any(block_id in after_set for block_id in demote):
+            blocker_reasons["candidate_demote_still_visible_after"] = sum(
+                1 for block_id in demote if block_id in after_set
+            )
+        if any(block_id not in before_set for block_id in after):
+            blocker_reasons["visible_after_not_subset_of_visible_before"] = sum(
+                1 for block_id in after if block_id not in before_set
+            )
+        if any(block_id in protected_set for block_id in demote):
+            blocker_reasons["candidate_demote_overlaps_protected"] = sum(
+                1 for block_id in demote if block_id in protected_set
+            )
+
+        if blocker_reasons or request_id is None:
+            increment_kivo_demotion_counter("demotion_command_export_rejected")
+            export_kivo_demotion_counters_snapshot_if_enabled(
+                source="worker_demotion_command_export_rejected"
+            )
+            return KivoRuntimeDemotionCommandExport(
+                attempted=True,
+                command=None,
+                blocker_reason=next(iter(blocker_reasons), None),
+                blocker_reasons=blocker_reasons,
+                visible_before_block_ids=before,
+                visible_after_block_ids=after,
+                candidate_demote_block_ids=demote,
+            )
+
+        _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST.setdefault(request_id, set()).update(
+            demote
+        )
+        increment_kivo_demotion_counter("worker_envelopes_built")
+        increment_kivo_demotion_counter("demotion_command_export_succeeded")
         export_kivo_demotion_counters_snapshot_if_enabled(
-            source="worker_demotion_command_export_rejected"
+            source="worker_demotion_command_export_built"
         )
         return KivoRuntimeDemotionCommandExport(
             attempted=True,
-            command=None,
-            blocker_reason=next(iter(blocker_reasons), None),
-            blocker_reasons=blocker_reasons,
+            command=KivoDemotionCommand(
+                request_id=request_id,
+                visible_before_block_ids=before,
+                visible_after_block_ids=after,
+                candidate_demote_block_ids=demote,
+                protected_block_ids=protected,
+                block_table_applied=block_table_applied,
+                slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
+            ),
+            blocker_reason=None,
+            blocker_reasons={},
             visible_before_block_ids=before,
             visible_after_block_ids=after,
             candidate_demote_block_ids=demote,
         )
-
-    increment_kivo_demotion_counter("worker_envelopes_built")
-    increment_kivo_demotion_counter("demotion_command_export_succeeded")
-    export_kivo_demotion_counters_snapshot_if_enabled(
-        source="worker_demotion_command_export_built"
-    )
-    return KivoRuntimeDemotionCommandExport(
-        attempted=True,
-        command=KivoDemotionCommand(
-            request_id=request_id,
-            visible_before_block_ids=before,
-            visible_after_block_ids=after,
-            candidate_demote_block_ids=demote,
-            protected_block_ids=protected,
-            block_table_applied=block_table_applied,
-            slot_mapping_refresh_guaranteed=slot_mapping_refresh_guaranteed,
-        ),
-        blocker_reason=None,
-        blocker_reasons={},
-        visible_before_block_ids=before,
-        visible_after_block_ids=after,
-        candidate_demote_block_ids=demote,
-    )
+    finally:
+        add_kivo_demotion_timing_counter(
+            "demotion_export_wall_time_seconds",
+            time.perf_counter() - started_at,
+        )
 
 
 def maybe_build_kivo_demotion_command_after_runtime_apply(
@@ -228,6 +272,10 @@ def maybe_build_kivo_demotion_command_after_runtime_apply(
         last_keep_recent_blocks=keep_recent_blocks,
         last_policy=policy,
     )
+    if _parse_bool_env("KIVO_KV_DEMOTION_DECODE_ONLY", default=False):
+        increment_kivo_demotion_counter("decode_only_requested")
+        # This worker hook does not currently receive a reliable decode-vs-prefill
+        # phase signal. Record the request, then leave behavior unchanged.
 
     if not apply_summary_present:
         increment_kivo_demotion_counter(

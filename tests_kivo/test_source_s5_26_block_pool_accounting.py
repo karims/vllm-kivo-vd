@@ -154,6 +154,24 @@ def test_build_summary_reports_compact_fields_and_totals():
             "free_to_pool_succeeded": 2,
             "free_to_pool_calls": 2,
             "free_to_pool_blocks": 8,
+            "free_to_pool_double_free_prevented": 1,
+            "demotion_command_dedupe_input_blocks": 12,
+            "demotion_command_dedupe_dropped_blocks": 4,
+            "demotion_command_dedupe_output_blocks": 8,
+            "ownership_prefilter_input_blocks": 10,
+            "ownership_prefilter_dropped_already_removed": 2,
+            "ownership_prefilter_output_blocks": 8,
+            "free_prefilter_input_blocks": 9,
+            "free_prefilter_dropped_already_freed": 1,
+            "free_prefilter_output_blocks": 8,
+            "demotion_export_wall_time_seconds": 0.2,
+            "demotion_export_max_call_wall_time_seconds": 0.1,
+            "ownership_remove_wall_time_seconds": 0.3,
+            "ownership_remove_max_call_wall_time_seconds": 0.15,
+            "free_to_pool_wall_time_seconds": 0.4,
+            "free_to_pool_max_call_wall_time_seconds": 0.2,
+            "audit_bookkeeping_wall_time_seconds": 0.05,
+            "audit_bookkeeping_max_call_wall_time_seconds": 0.02,
             "ownership_remove_invariant_failed": 0,
             "block_pool_free_accounting_observed": 1,
             "block_pool_num_free_blocks_before": 100,
@@ -179,12 +197,20 @@ def test_build_summary_reports_compact_fields_and_totals():
     assert summary["free_to_pool_blocks_total_or_last"] == 8
     assert summary["free_to_pool_calls_total"] == 2
     assert summary["invariant_failed"] == 0
+    assert summary["free_to_pool_double_free_prevented"] == 1
+    assert summary["demotion_command_dedupe_dropped_blocks"] == 4
+    assert summary["ownership_prefilter_dropped_already_removed"] == 2
+    assert summary["free_prefilter_dropped_already_freed"] == 1
+    assert summary["free_to_pool_wall_time_seconds"] == 0.4
     assert summary["summary"]["free_to_pool_observed"] is True
     assert summary["summary"]["block_pool_accounting_observed"] is True
     assert summary["summary"]["requested_max_output_tokens"] == 12
     assert summary["summary"]["estimated_max_active_total_tokens"] == 102.0
+    assert summary["summary"]["free_to_pool_double_free_prevented"] == 1
+    assert summary["summary"]["demotion_command_dedupe_dropped_blocks"] == 4
     assert summary["summary"]["wall_time_seconds"] == 1.25
     assert "worker_envelopes_built" in summary["cumulative_counters"]
+    assert "free_prefilter_output_blocks" in summary["cumulative_counters"]
     assert "last_freed_block_ids_sample" in summary["last_snapshot_counters"]
 
 
