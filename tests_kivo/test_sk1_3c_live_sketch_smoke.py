@@ -28,12 +28,30 @@ def test_parse_args_defaults() -> None:
     assert args.local_files_only is False
     assert args.sketch_dim == 16
     assert args.runtime_policy == "recent_only"
+    assert args.max_full_blocks == 2
+    assert args.counter_export_file is None
 
 
 def test_parse_args_local_files_only_flag() -> None:
     module = _load_module()
     args = module.parse_args(["--output", "out.json", "--local-files-only"])
     assert args.local_files_only is True
+
+
+def test_parse_args_counter_export_and_max_full_blocks() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--output",
+            "out.json",
+            "--counter-export-file",
+            "/tmp/counters.json",
+            "--max-full-blocks",
+            "5",
+        ]
+    )
+    assert args.counter_export_file == "/tmp/counters.json"
+    assert args.max_full_blocks == 5
 
 
 def test_resolve_model_reference_prefers_existing_local_path(tmp_path: Path) -> None:
@@ -97,6 +115,23 @@ def test_smoke_env_sets_offline_flags_when_requested() -> None:
     env = module._smoke_env(args)
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_smoke_env_uses_explicit_counter_export_and_max_full_blocks() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--output",
+            "out.json",
+            "--counter-export-file",
+            "/tmp/custom-counters.json",
+            "--max-full-blocks",
+            "7",
+        ]
+    )
+    env = module._smoke_env(args)
+    assert env["KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE"] == "/tmp/custom-counters.json"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS"] == "7"
 
 
 def test_summarize_sketch_counters_success_case() -> None:

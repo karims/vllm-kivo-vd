@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a tiny live decode smoke for the sketch-gated demotion/free path."""
+"""Run a tiny live decode smoke for the sketch-gated demotion/free path.
+
+This runner is intended for a real GPU pod environment.
+Local macOS validation is limited to unit tests and argument/config checks.
+"""
 
 from __future__ import annotations
 
@@ -58,6 +62,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("recent_only", "countsketch_online"),
     )
     parser.add_argument("--keep-recent-blocks", type=int, default=2)
+    parser.add_argument("--max-full-blocks", type=int, default=2)
+    parser.add_argument(
+        "--counter-export-file",
+        default=None,
+        help=(
+            "Optional explicit path for KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE. "
+            "Defaults to <output>.counters.json."
+        ),
+    )
     parser.add_argument("--output", required=True)
     return parser.parse_args(argv)
 
@@ -119,6 +132,9 @@ def resolve_model_reference(
 
 
 def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
+    counter_export_file = args.counter_export_file or str(
+        Path(args.output).with_suffix(".counters.json")
+    )
     env = {
         "KIVO_KV_SKETCH_ENABLE": "1",
         "KIVO_KV_SKETCH_BACKEND": "random_projection",
@@ -130,7 +146,9 @@ def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
         "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(
             args.keep_recent_blocks
         ),
-        "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": "2",
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": str(
+            args.max_full_blocks
+        ),
         "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
         "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
         "KIVO_KV_CORE_DEMOTION_ENABLE": "1",
@@ -140,9 +158,7 @@ def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
         "KIVO_KV_FREE_TO_POOL_ENABLE": "1",
         "KIVO_KV_FREE_TO_POOL_ACTION": "free_removed_demoted_only",
         "KIVO_KV_DEMOTION_COUNTERS_ENABLE": "1",
-        "KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE": str(
-            Path(args.output).with_suffix(".counters.json")
-        ),
+        "KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE": counter_export_file,
     }
     if args.local_files_only:
         env["HF_HUB_OFFLINE"] = "1"
@@ -231,7 +247,9 @@ def summarize_sketch_counters(
 
 
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
-    export_file = str(Path(args.output).with_suffix(".counters.json"))
+    export_file = args.counter_export_file or str(
+        Path(args.output).with_suffix(".counters.json")
+    )
     export_path = Path(export_file)
     if export_path.exists():
         export_path.unlink()
