@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_ACTION = "off"
-_SUPPORTED_POLICIES = {"recent_only", "countsketch_online"}
+_SUPPORTED_POLICIES = {"recent_only", "countsketch_online", "sketch_topk"}
 _COUNTER_SAMPLE_LIMIT = 8
 _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST: dict[str, set[int]] = {}
 
@@ -76,6 +76,7 @@ class KivoRuntimeBlockTableApplyConfig:
     keep_recent_blocks: int
     max_full_blocks: int
     require_slot_mapping_refresh: bool
+    sketch_topk_blocks: int = 0
 
 
 @dataclass(frozen=True)
@@ -600,6 +601,8 @@ def _plan_runtime_filtered_row(
     policy: str,
     keep_recent_blocks: int,
     max_full_blocks: int,
+    sketch_topk_blocks: int = 0,
+    kv_sketch_runtime: KivoKVSketchRuntime | None = None,
 ) -> KivoRuntimeFilteredRowPlan:
     increment_kivo_demotion_counter("filtered_row_plan_attempted")
     row = tuple(int(block_id) for block_id in original_row)
@@ -665,6 +668,75 @@ def _plan_runtime_filtered_row(
             blocker_reasons=(
                 {noop_reason: 1}
                 if noop_reason is not None and not changed
+                else {}
+            ),
+        )
+
+    if policy == "sketch_topk":
+        keep_recent = min(max(0, keep_recent_blocks), len(row))
+        protected_recent = tuple(row[-keep_recent:]) if keep_recent > 0 else ()
+        older = tuple(row[:-keep_recent]) if keep_recent > 0 else row
+        topk_budget = max(0, sketch_topk_blocks)
+        total_budget = max(len(protected_recent), max_full_blocks)
+        topk_budget = min(topk_budget, max(0, total_budget - len(protected_recent)))
+        score_map = (
+            kv_sketch_runtime.score_blocks(older)
+            if kv_sketch_runtime is not None
+            and kv_sketch_runtime.config.enabled
+            else {}
+        )
+        older_index = {block_id: idx for idx, block_id in enumerate(older)}
+        scored_older = [
+            (block_id, float(score_map[block_id]))
+            for block_id in older
+            if block_id in score_map
+        ]
+        scored_older.sort(key=lambda item: (-item[1], -older_index[item[0]]))
+        selected_old = {
+            block_id for block_id, _ in scored_older[:topk_budget]
+        }
+        keep_set = set(protected_recent) | selected_old
+        visible_after = tuple(block_id for block_id in row if block_id in keep_set)
+        candidate_drop = tuple(block_id for block_id in row if block_id not in keep_set)
+        missing_score_count = len(older) - len(scored_older)
+        changed = tuple(row) != visible_after
+        increment_kivo_demotion_counter(
+            "sketch_topk_old_blocks_considered", len(older)
+        )
+        increment_kivo_demotion_counter(
+            "sketch_topk_extra_blocks_kept", len(selected_old)
+        )
+        increment_kivo_demotion_counter(
+            "sketch_topk_missing_scores", missing_score_count
+        )
+        if changed:
+            increment_kivo_demotion_counter("filtered_row_changed_count")
+            increment_kivo_demotion_counter(
+                "filtered_row_candidate_drop_count", len(candidate_drop)
+            )
+        else:
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(visible_after),
+            last_filtered_drop_count=len(candidate_drop),
+            last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+            last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+            last_sketch_topk_keep_ids_sample=_sample_block_ids(
+                tuple(block_id for block_id in row if block_id in selected_old)
+            ),
+        )
+        noop_reason = None if changed else "filtered_row_noop_no_blocks_above_budget"
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=visible_after,
+            candidate_demote_block_ids=candidate_drop,
+            protected_block_ids=protected_recent,
+            filtered_row_changed=changed,
+            noop_reason=noop_reason,
+            blocker_reasons=(
+                {noop_reason: 1}
+                if noop_reason is not None
                 else {}
             ),
         )
@@ -737,6 +809,9 @@ def current_kivo_runtime_block_table_apply_config(
         require_slot_mapping_refresh=_parse_bool_env(
             "KIVO_KV_RUNTIME_BLOCK_TABLE_REQUIRE_SLOT_MAPPING_REFRESH",
             default=True,
+        ),
+        sketch_topk_blocks=_parse_int_env(
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK", default=0, minimum=0
         ),
     )
 
@@ -879,6 +954,8 @@ def build_runtime_block_table_apply_summary(
             policy=config.policy,
             keep_recent_blocks=config.keep_recent_blocks,
             max_full_blocks=config.max_full_blocks,
+            sketch_topk_blocks=config.sketch_topk_blocks,
+            kv_sketch_runtime=kv_sketch_runtime,
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,

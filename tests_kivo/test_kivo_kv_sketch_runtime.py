@@ -117,6 +117,35 @@ def test_store_insert_get_and_evict_behavior() -> None:
     assert stats["sketch_store_evictions"] == 1
 
 
+def test_runtime_scores_blocks_from_stored_sketch_norms() -> None:
+    runtime = KivoKVSketchRuntime(
+        config=KivoKVSketchRuntimeConfig(
+            enabled=True,
+            backend="random_projection",
+            sketch_dim=4,
+            seed=7,
+            max_blocks=8,
+        ),
+        backend=RandomProjectionKVSketchBackend(sketch_dim=4, seed=7),
+        store=KivoKVSketchStore(max_blocks=8),
+    )
+    low = runtime.build_and_store_block_sketch(
+        block_id=1,
+        block_tensor=torch.ones(2, 8, dtype=torch.float32),
+    )
+    high = runtime.build_and_store_block_sketch(
+        block_id=2,
+        block_tensor=torch.full((2, 8), 5.0, dtype=torch.float32),
+    )
+
+    scores = runtime.score_blocks([1, 2, 3])
+
+    assert low.success is True
+    assert high.success is True
+    assert set(scores) == {1, 2}
+    assert scores[2] > scores[1]
+
+
 def test_unsupported_shape_fails_safely() -> None:
     backend = RandomProjectionKVSketchBackend(sketch_dim=4, seed=3)
     too_wide_backend = RandomProjectionKVSketchBackend(sketch_dim=5, seed=3)

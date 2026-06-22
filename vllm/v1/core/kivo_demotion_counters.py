@@ -44,6 +44,9 @@ class KivoDemotionCounters:
     sketch_missing_prevented_free: int = 0
     freed_after_sketch_blocks_total: int = 0
     sketch_bytes_total: int = 0
+    sketch_topk_old_blocks_considered: int = 0
+    sketch_topk_extra_blocks_kept: int = 0
+    sketch_topk_missing_scores: int = 0
     decode_only_requested: int = 0
     decode_only_supported: int = 0
     demotion_skipped_not_decode_phase: int = 0
@@ -113,6 +116,7 @@ class KivoDemotionCounters:
     last_filtered_drop_count: int = 0
     last_filtered_drop_ids_sample: tuple[int, ...] = ()
     last_filtered_keep_ids_sample: tuple[int, ...] = ()
+    last_sketch_topk_keep_ids_sample: tuple[int, ...] = ()
     last_removed_block_ids_sample: tuple[int, ...] = ()
     last_remaining_block_ids_sample: tuple[int, ...] = ()
     last_freed_block_ids_sample: tuple[int, ...] = ()

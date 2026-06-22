@@ -393,6 +393,15 @@ class KivoKVSketchStore:
             "block_ids_sample": list(self._records.keys())[:16],
         }
 
+    def score(self, block_id: int) -> float | None:
+        record = self.get(block_id)
+        if record is None:
+            return None
+        try:
+            return float(torch.linalg.vector_norm(record.sketch.float()).item())
+        except Exception:
+            return None
+
 
 class KivoKVSketchRuntime:
     """Small runtime-owned wrapper around backend + bounded CPU sketch store."""
@@ -459,6 +468,14 @@ class KivoKVSketchRuntime:
         merged.update(store_stats)
         merged["sketch_backend"] = self.backend.backend_name
         return merged
+
+    def score_blocks(self, block_ids: Iterable[int]) -> dict[int, float]:
+        scores: dict[int, float] = {}
+        for block_id in block_ids:
+            score = self.store.score(int(block_id))
+            if score is not None:
+                scores[int(block_id)] = score
+        return scores
 
 
 def make_kivo_kv_sketch_backend(

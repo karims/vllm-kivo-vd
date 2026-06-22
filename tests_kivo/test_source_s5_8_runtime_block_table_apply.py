@@ -13,6 +13,7 @@ from vllm.v1.core.kivo_kv_block_score_store import (
 )
 from vllm.v1.worker.block_table import MultiGroupBlockTable
 from vllm.v1.worker.kivo_kv_sketch_runtime import (
+    KivoKVBlockSketchRecord,
     KivoKVSketchRuntime,
     KivoKVSketchRuntimeConfig,
     KivoKVSketchStore,
@@ -20,6 +21,7 @@ from vllm.v1.worker.kivo_kv_sketch_runtime import (
 )
 from vllm.v1.worker.kivo_runtime_block_table_apply import (
     KivoRuntimeBlockTableApplyConfig,
+    _plan_runtime_filtered_row,
     build_runtime_block_table_apply_summary,
     maybe_build_kivo_demotion_command_after_runtime_apply,
     reset_kivo_demotion_command_dedupe_state_for_tests,
@@ -94,6 +96,29 @@ def _make_kv_cache(num_blocks: int = 8) -> torch.Tensor:
 @pytest.fixture(autouse=True)
 def _reset_dedupe_state() -> None:
     reset_kivo_demotion_command_dedupe_state_for_tests()
+
+
+def _store_fake_sketch_score(
+    runtime: KivoKVSketchRuntime,
+    *,
+    block_id: int,
+    score: float,
+) -> None:
+    runtime.store.update(
+        KivoKVBlockSketchRecord(
+            block_id=block_id,
+            backend="random_projection",
+            sketch_dim=1,
+            sketch=torch.tensor([score], dtype=torch.float32),
+            source_shape=(1,),
+            source_numel=1,
+            source_dtype="torch.float32",
+            source_device="cpu",
+            shape_summary=(1,),
+            created_counter=1,
+            updated_counter=1,
+        )
+    )
 
 
 def test_disabled_runtime_apply_returns_noop_summary():
@@ -222,6 +247,74 @@ def test_missing_countsketch_scores_are_protected_or_fail_closed():
     )
     assert summary.applied_row_count == 1
     assert batch.block_table[0].get_row_block_ids(0) == (11, 12, 13)
+
+
+def test_sketch_topk_always_keeps_recent_blocks():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=10.0)
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 2, 3, True, 1
+        ),
+    )
+    assert summary.applied_row_count == 1
+    assert batch.block_table[0].get_row_block_ids(0) == (10, 12, 13)
+
+
+def test_sketch_topk_keeps_top_scored_old_blocks():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=0.1)
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    _store_fake_sketch_score(runtime, block_id=12, score=0.2)
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 1, 2, True, 1
+        ),
+    )
+    assert summary.applied_row_count == 1
+    assert batch.block_table[0].get_row_block_ids(0) == (11, 13)
+
+
+def test_sketch_topk_missing_scores_falls_back_to_recent_only():
+    runtime = _make_sketch_runtime()
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 2, 4, True, 2
+        ),
+    )
+    assert summary.applied_row_count == 1
+    assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
+
+
+def test_sketch_topk_candidate_demote_excludes_recent_and_sketch_kept_old():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=5.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=2,
+        sketch_topk_blocks=1,
+        kv_sketch_runtime=runtime,
+    )
+    assert plan.visible_after_block_ids == (10, 13)
+    assert plan.protected_block_ids == (13,)
+    assert plan.candidate_demote_block_ids == (11, 12)
 
 
 def test_summary_reports_attempted_applied_blocked_counts():
