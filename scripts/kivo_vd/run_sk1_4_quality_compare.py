@@ -82,6 +82,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sketch-topk", type=int, default=2)
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
+    parser.add_argument("--trace-retention", action="store_true")
+    parser.add_argument("--retention-trace-file", default=None)
     parser.add_argument("--prompt-repeats", type=int, default=24)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--dtype", default="auto")
@@ -167,6 +169,11 @@ def _mode_counter_export_file(output_path: str | Path, mode: str) -> str:
     return str(output.with_name(f"{output.stem}.{mode}.counters.json"))
 
 
+def _mode_retention_trace_file(output_path: str | Path, mode: str) -> str:
+    output = Path(output_path)
+    return str(output.with_name(f"{output.stem}.{mode}.retention_trace.jsonl"))
+
+
 def build_mode_env(
     mode: str,
     *,
@@ -214,6 +221,13 @@ def build_mode_env(
                 "KIVO_KV_SKETCH_DIM": str(args.sketch_dim),
                 "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
             }
+        )
+    if args.trace_retention and mode == SKETCH_TOPK_MODE:
+        base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] = "1"
+        base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] = "64"
+        base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] = (
+            args.retention_trace_file
+            or _mode_retention_trace_file(args.output, mode)
         )
     return base
 
@@ -453,6 +467,9 @@ def run_mode(
         "cached_model_candidates": cached_model_candidates,
         "env_flags": mode_env,
         "counter_export_file": counter_export_file,
+        "retention_trace_file": mode_env.get(
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"
+        ),
         "results": results,
         "summary": build_mode_summary(mode, results),
     }
@@ -494,6 +511,7 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
             "sketch_topk": args.sketch_topk,
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
+            "trace_retention": args.trace_retention,
             "prompt_repeats": args.prompt_repeats,
             "seed": args.seed,
         },

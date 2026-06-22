@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from pathlib import Path
 
 import torch
 import pytest
@@ -338,6 +339,107 @@ def test_sketch_topk_missing_kv_cache_falls_back_safely():
     )
     assert plan.visible_after_block_ids == (12, 13)
     assert plan.candidate_demote_block_ids == (10, 11)
+
+
+def test_trace_disabled_has_no_behavior_change(monkeypatch):
+    monkeypatch.delenv(
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", raising=False
+    )
+    trace_file = Path("/tmp/kivo_runtime_trace_disabled.jsonl")
+    if trace_file.exists():
+        trace_file.unlink()
+    runtime = _make_sketch_runtime()
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=2,
+        sketch_topk_blocks=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids == (13,)
+    assert not trace_file.exists()
+
+
+def test_trace_enabled_writes_retention_fields(monkeypatch, tmp_path):
+    trace_file = tmp_path / "retention_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS", "64")
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=5.0)
+    batch = _make_input_batch()
+    build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 1, 2, True, 1
+        ),
+    )
+    rows = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    record = rows[-1]
+    assert record["visible_before_block_ids"] == [10, 11, 12, 13]
+    assert record["recent_keep_block_ids"] == [13]
+    assert record["sketch_topk_keep_block_ids"] == [10]
+    assert record["candidate_demote_block_ids"] == [11, 12]
+    assert record["final_block_order"] == [10, 13]
+
+
+def test_trace_max_blocks_truncates_safely(monkeypatch, tmp_path):
+    trace_file = tmp_path / "retention_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS", "2")
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=5.0)
+    batch = _make_input_batch()
+    build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 1, 2, True, 1
+        ),
+    )
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["visible_before_count"] == 4
+    assert record["visible_before_block_ids"] == [10, 11]
+
+
+def test_trace_preserves_relative_order_of_kept_blocks():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=5.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=2,
+        sketch_topk_blocks=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids == (10, 13)
+    assert plan.sketch_topk_keep_block_ids == (10,)
+
+
+def test_trace_includes_scored_and_missing_blocks():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=5.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=2,
+        sketch_topk_blocks=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.old_block_score_pairs == ((10, 5.0),)
+    assert plan.missing_score_block_ids == (11, 12)
 
 
 def test_sketch_topk_candidate_demote_excludes_recent_and_sketch_kept_old():

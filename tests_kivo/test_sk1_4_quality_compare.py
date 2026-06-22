@@ -28,6 +28,8 @@ def test_parse_args_defaults() -> None:
     assert args.max_full_blocks == 2
     assert args.sketch_topk == 2
     assert args.sketch_dim == 16
+    assert args.trace_retention is False
+    assert args.retention_trace_file is None
 
 
 def test_build_mode_env_baseline_only_has_counter_export() -> None:
@@ -73,6 +75,25 @@ def test_build_mode_env_sketch_topk_sets_policy_and_sketch_flags() -> None:
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "4"
     assert env["KIVO_KV_SKETCH_ENABLE"] == "1"
     assert env["KIVO_KV_SKETCH_BACKEND"] == "random_projection"
+
+
+def test_build_mode_env_sketch_topk_trace_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--trace-retention",
+            "--retention-trace-file",
+            "/tmp/trace.jsonl",
+        ]
+    )
+    env = module.build_mode_env(
+        module.SKETCH_TOPK_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] == "1"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] == "64"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] == "/tmp/trace.jsonl"
 
 
 def test_build_quality_prompts_has_expected_schema() -> None:

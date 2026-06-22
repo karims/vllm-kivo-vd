@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 from vllm.v1.core.kivo_demotion_command import KivoDemotionCommand
@@ -148,9 +150,102 @@ class KivoRuntimeFilteredRowPlan:
     visible_after_block_ids: tuple[int, ...]
     candidate_demote_block_ids: tuple[int, ...]
     protected_block_ids: tuple[int, ...]
+    recent_keep_block_ids: tuple[int, ...]
+    sketch_topk_keep_block_ids: tuple[int, ...]
+    old_block_score_pairs: tuple[tuple[int, float], ...]
+    missing_score_block_ids: tuple[int, ...]
     filtered_row_changed: bool
     noop_reason: str | None
     blocker_reasons: dict[str, int]
+
+
+def _trace_retained_blocks_enabled() -> bool:
+    return _parse_bool_env(
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", default=False
+    )
+
+
+def _trace_retained_blocks_max() -> int:
+    return _parse_int_env(
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS", default=64, minimum=1
+    )
+
+
+def _trace_retained_blocks_file() -> str | None:
+    path = os.getenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE")
+    if path is None:
+        return None
+    path = path.strip()
+    return path or None
+
+
+def _truncate_block_ids(block_ids: Sequence[int], *, limit: int) -> tuple[int, ...]:
+    return tuple(int(block_id) for block_id in block_ids[:limit])
+
+
+def _truncate_score_pairs(
+    score_pairs: Sequence[tuple[int, float]], *, limit: int
+) -> tuple[tuple[int, float], ...]:
+    return tuple((int(block_id), float(score)) for block_id, score in score_pairs[:limit])
+
+
+def _write_retention_trace(
+    *,
+    request_id: str | None,
+    policy: str,
+    plan: KivoRuntimeFilteredRowPlan,
+) -> None:
+    if not _trace_retained_blocks_enabled():
+        return
+    trace_file = _trace_retained_blocks_file()
+    if not trace_file:
+        return
+    limit = _trace_retained_blocks_max()
+    payload = {
+        "request_id": request_id,
+        "policy": policy,
+        "visible_before_count": len(plan.visible_before_block_ids),
+        "visible_before_block_ids": list(
+            _truncate_block_ids(plan.visible_before_block_ids, limit=limit)
+        ),
+        "visible_after_count": len(plan.visible_after_block_ids),
+        "visible_after_block_ids": list(
+            _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
+        ),
+        "recent_keep_count": len(plan.recent_keep_block_ids),
+        "recent_keep_block_ids": list(
+            _truncate_block_ids(plan.recent_keep_block_ids, limit=limit)
+        ),
+        "sketch_topk_keep_count": len(plan.sketch_topk_keep_block_ids),
+        "sketch_topk_keep_block_ids": list(
+            _truncate_block_ids(plan.sketch_topk_keep_block_ids, limit=limit)
+        ),
+        "candidate_demote_count": len(plan.candidate_demote_block_ids),
+        "candidate_demote_block_ids": list(
+            _truncate_block_ids(plan.candidate_demote_block_ids, limit=limit)
+        ),
+        "old_block_score_count": len(plan.old_block_score_pairs),
+        "old_block_score_pairs": [
+            {"block_id": block_id, "score": score}
+            for block_id, score in _truncate_score_pairs(
+                plan.old_block_score_pairs, limit=limit
+            )
+        ],
+        "missing_score_count": len(plan.missing_score_block_ids),
+        "missing_score_block_ids": list(
+            _truncate_block_ids(plan.missing_score_block_ids, limit=limit)
+        ),
+        "final_block_order_count": len(plan.visible_after_block_ids),
+        "final_block_order": list(
+            _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
+        ),
+        "filtered_row_changed": plan.filtered_row_changed,
+        "noop_reason": plan.noop_reason,
+    }
+    target = Path(trace_file)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload) + "\n")
 
 
 def build_kivo_demotion_command_for_runtime_row(
@@ -624,6 +719,10 @@ def _plan_runtime_filtered_row(
             visible_after_block_ids=row,
             candidate_demote_block_ids=(),
             protected_block_ids=(),
+            recent_keep_block_ids=(),
+            sketch_topk_keep_block_ids=(),
+            old_block_score_pairs=(),
+            missing_score_block_ids=(),
             filtered_row_changed=False,
             noop_reason="filtered_row_noop_padding_ambiguity",
             blocker_reasons={"padding_zero_ambiguous": zero_count},
@@ -664,6 +763,10 @@ def _plan_runtime_filtered_row(
             visible_after_block_ids=tuple(visible_after),
             candidate_demote_block_ids=tuple(candidate_drop),
             protected_block_ids=tuple(protected_recent),
+            recent_keep_block_ids=tuple(protected_recent),
+            sketch_topk_keep_block_ids=(),
+            old_block_score_pairs=(),
+            missing_score_block_ids=(),
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -734,6 +837,16 @@ def _plan_runtime_filtered_row(
             visible_after_block_ids=visible_after,
             candidate_demote_block_ids=candidate_drop,
             protected_block_ids=protected_recent,
+            recent_keep_block_ids=protected_recent,
+            sketch_topk_keep_block_ids=tuple(
+                block_id for block_id in row if block_id in selected_old
+            ),
+            old_block_score_pairs=tuple(
+                (int(block_id), float(score)) for block_id, score in scored_older
+            ),
+            missing_score_block_ids=tuple(
+                block_id for block_id in older if block_id not in score_map
+            ),
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -778,6 +891,10 @@ def _plan_runtime_filtered_row(
         visible_after_block_ids=visible_after,
         candidate_demote_block_ids=candidate_drop,
         protected_block_ids=tuple(retention_decision.protected_block_ids),
+        recent_keep_block_ids=(),
+        sketch_topk_keep_block_ids=(),
+        old_block_score_pairs=(),
+        missing_score_block_ids=(),
         filtered_row_changed=changed,
         noop_reason=noop_reason,
         blocker_reasons=(
@@ -959,6 +1076,11 @@ def build_runtime_block_table_apply_summary(
             sketch_topk_blocks=config.sketch_topk_blocks,
             kv_sketch_runtime=kv_sketch_runtime,
             kv_cache_tensor=kv_cache_tensor,
+        )
+        _write_retention_trace(
+            request_id=req_id,
+            policy=config.policy,
+            plan=filtered_row_plan,
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,
