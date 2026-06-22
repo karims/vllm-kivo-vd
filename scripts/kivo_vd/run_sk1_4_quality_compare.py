@@ -32,7 +32,13 @@ from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (  # noqa
 BASELINE_MODE = "baseline"
 RECENT_ONLY_MODE = "recent_only"
 RANDOM_PROJECTION_MODE = "random_projection"
-MODE_ORDER = [BASELINE_MODE, RECENT_ONLY_MODE, RANDOM_PROJECTION_MODE]
+SKETCH_TOPK_MODE = "sketch_topk"
+MODE_ORDER = [
+    BASELINE_MODE,
+    RECENT_ONLY_MODE,
+    RANDOM_PROJECTION_MODE,
+    SKETCH_TOPK_MODE,
+]
 
 KIVO_ENV_KEYS = [
     "KIVO_KV_SKETCH_ENABLE",
@@ -180,7 +186,9 @@ def build_mode_env(
         {
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ACTION": "apply_block_table_only",
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": RECENT_ONLY_MODE,
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": (
+                SKETCH_TOPK_MODE if mode == SKETCH_TOPK_MODE else RECENT_ONLY_MODE
+            ),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(
                 args.keep_recent_blocks
             ),
@@ -198,7 +206,7 @@ def build_mode_env(
             "KIVO_KV_FREE_TO_POOL_ACTION": "free_removed_demoted_only",
         }
     )
-    if mode == RANDOM_PROJECTION_MODE:
+    if mode in {RANDOM_PROJECTION_MODE, SKETCH_TOPK_MODE}:
         base.update(
             {
                 "KIVO_KV_SKETCH_ENABLE": "1",
@@ -208,6 +216,28 @@ def build_mode_env(
             }
         )
     return base
+
+
+def summarize_quality_counters(counters: dict[str, Any] | None) -> dict[str, Any]:
+    summary = summarize_sketch_counters(counters)
+    counters = counters or {}
+    summary.update(
+        {
+            "sketch_topk_old_blocks_considered": int(
+                counters.get("sketch_topk_old_blocks_considered", 0) or 0
+            ),
+            "sketch_topk_extra_blocks_kept": int(
+                counters.get("sketch_topk_extra_blocks_kept", 0) or 0
+            ),
+            "sketch_topk_missing_scores": int(
+                counters.get("sketch_topk_missing_scores", 0) or 0
+            ),
+            "last_sketch_topk_keep_ids_sample": list(
+                counters.get("last_sketch_topk_keep_ids_sample", ()) or ()
+            ),
+        }
+    )
+    return summary
 
 
 def extract_output_text(output: Any) -> str:
@@ -353,7 +383,7 @@ def _run_prompt(
             "counter_export_file_found": file_found,
             "counter_export_pid": export_pid,
             "counters": counters,
-            "counter_summary": summarize_sketch_counters(counters),
+            "counter_summary": summarize_quality_counters(counters),
             "error": None,
         }
     except Exception as exc:
@@ -371,7 +401,7 @@ def _run_prompt(
             "counter_export_file_found": file_found,
             "counter_export_pid": export_pid,
             "counters": counters,
-            "counter_summary": summarize_sketch_counters(counters),
+            "counter_summary": summarize_quality_counters(counters),
             "error": f"{type(exc).__name__}: {exc}",
         }
 

@@ -61,6 +61,20 @@ def test_build_mode_env_random_projection_contains_sketch_and_free_flags() -> No
     assert env["KIVO_KV_FREE_TO_POOL_ENABLE"] == "1"
 
 
+def test_build_mode_env_sketch_topk_sets_policy_and_sketch_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(["--sketch-topk", "4"])
+    env = module.build_mode_env(
+        module.SKETCH_TOPK_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "sketch_topk"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "4"
+    assert env["KIVO_KV_SKETCH_ENABLE"] == "1"
+    assert env["KIVO_KV_SKETCH_BACKEND"] == "random_projection"
+
+
 def test_build_quality_prompts_has_expected_schema() -> None:
     module = _load_module()
     prompts = module.build_quality_prompts(repeats=3)
@@ -114,6 +128,23 @@ def test_build_mode_summary_warns_on_invariant_failure() -> None:
     assert "invariants_not_clean" in summary["warnings"]
 
 
+def test_summarize_quality_counters_includes_sketch_topk_fields() -> None:
+    module = _load_module()
+    summary = module.summarize_quality_counters(
+        {
+            "sketch_backend": "random_projection",
+            "sketch_topk_old_blocks_considered": 9,
+            "sketch_topk_extra_blocks_kept": 2,
+            "sketch_topk_missing_scores": 1,
+            "last_sketch_topk_keep_ids_sample": (21, 22),
+        }
+    )
+    assert summary["sketch_topk_old_blocks_considered"] == 9
+    assert summary["sketch_topk_extra_blocks_kept"] == 2
+    assert summary["sketch_topk_missing_scores"] == 1
+    assert summary["last_sketch_topk_keep_ids_sample"] == [21, 22]
+
+
 def test_build_overall_summary_schema_basics() -> None:
     module = _load_module()
     overall = module.build_overall_summary(
@@ -146,6 +177,16 @@ def test_build_overall_summary_schema_basics() -> None:
                     "total_freed_after_sketch_blocks": 12,
                     "invariants_clean": True,
                     "random_projection_sketch_success_count": 3,
+                },
+            },
+            {
+                "mode": module.SKETCH_TOPK_MODE,
+                "summary": {
+                    "success_count": 4,
+                    "average_latency_seconds": 1.4,
+                    "total_freed_after_sketch_blocks": 11,
+                    "invariants_clean": True,
+                    "random_projection_sketch_success_count": 4,
                 },
             },
         ]
