@@ -477,6 +477,31 @@ class KivoKVSketchRuntime:
                 scores[int(block_id)] = score
         return scores
 
+    def ensure_scores_for_blocks(
+        self,
+        block_ids: Iterable[int],
+        *,
+        kv_cache_tensor: Any | None,
+        kv_kind: str | None = "kv",
+    ) -> dict[int, float]:
+        """Return available scores, building missing block sketches if possible."""
+        block_id_tuple = tuple(int(block_id) for block_id in block_ids)
+        if not self.config.enabled:
+            return {}
+
+        for block_id in block_id_tuple:
+            if self.store.get(block_id) is not None:
+                continue
+            block_tensor, _ = extract_kv_block_tensor(kv_cache_tensor, block_id)
+            if block_tensor is None:
+                continue
+            self.build_and_store_block_sketch(
+                block_id=block_id,
+                block_tensor=block_tensor,
+                kv_kind=kv_kind,
+            )
+        return self.score_blocks(block_id_tuple)
+
 
 def make_kivo_kv_sketch_backend(
     config: KivoKVSketchRuntimeConfig,

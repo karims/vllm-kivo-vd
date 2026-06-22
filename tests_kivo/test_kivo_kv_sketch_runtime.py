@@ -146,6 +146,31 @@ def test_runtime_scores_blocks_from_stored_sketch_norms() -> None:
     assert scores[2] > scores[1]
 
 
+def test_runtime_ensure_scores_builds_missing_sketches_from_kv_cache() -> None:
+    runtime = KivoKVSketchRuntime(
+        config=KivoKVSketchRuntimeConfig(
+            enabled=True,
+            backend="random_projection",
+            sketch_dim=4,
+            seed=7,
+            max_blocks=8,
+        ),
+        backend=RandomProjectionKVSketchBackend(sketch_dim=4, seed=7),
+        store=KivoKVSketchStore(max_blocks=8),
+    )
+    kv_cache = torch.arange(
+        4 * 2 * 2 * 2 * 2,
+        dtype=torch.float32,
+    ).reshape(4, 2, 2, 2, 2)
+
+    scores = runtime.ensure_scores_for_blocks([1, 2, 99], kv_cache_tensor=kv_cache)
+
+    assert set(scores) == {1, 2}
+    assert runtime.store.get(1) is not None
+    assert runtime.store.get(2) is not None
+    assert runtime.store.get(99) is None
+
+
 def test_unsupported_shape_fails_safely() -> None:
     backend = RandomProjectionKVSketchBackend(sketch_dim=4, seed=3)
     too_wide_backend = RandomProjectionKVSketchBackend(sketch_dim=5, seed=3)

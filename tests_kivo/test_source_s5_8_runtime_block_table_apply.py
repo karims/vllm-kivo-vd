@@ -285,6 +285,30 @@ def test_sketch_topk_keeps_top_scored_old_blocks():
     assert batch.block_table[0].get_row_block_ids(0) == (11, 13)
 
 
+def test_sketch_topk_builds_scores_before_selection_from_kv_cache():
+    runtime = _make_sketch_runtime()
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=_make_kv_cache(32),
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_topk", 1, 2, True, 1
+        ),
+    )
+    kept = batch.block_table[0].get_row_block_ids(0)
+    older_kept = tuple(block_id for block_id in kept if block_id not in (13,))
+
+    assert summary.applied_row_count == 1
+    assert kept[-1:] == (13,)
+    assert len(older_kept) == 1
+    assert runtime.store.get(10) is not None
+    assert runtime.store.get(11) is not None
+    assert runtime.store.get(12) is not None
+
+
 def test_sketch_topk_missing_scores_falls_back_to_recent_only():
     runtime = _make_sketch_runtime()
     batch = _make_input_batch()
@@ -299,6 +323,21 @@ def test_sketch_topk_missing_scores_falls_back_to_recent_only():
     )
     assert summary.applied_row_count == 1
     assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
+
+
+def test_sketch_topk_missing_kv_cache_falls_back_safely():
+    runtime = _make_sketch_runtime()
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_topk",
+        keep_recent_blocks=2,
+        max_full_blocks=4,
+        sketch_topk_blocks=2,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids == (12, 13)
+    assert plan.candidate_demote_block_ids == (10, 11)
 
 
 def test_sketch_topk_candidate_demote_excludes_recent_and_sketch_kept_old():

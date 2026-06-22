@@ -603,6 +603,7 @@ def _plan_runtime_filtered_row(
     max_full_blocks: int,
     sketch_topk_blocks: int = 0,
     kv_sketch_runtime: KivoKVSketchRuntime | None = None,
+    kv_cache_tensor: Any | None = None,
 ) -> KivoRuntimeFilteredRowPlan:
     increment_kivo_demotion_counter("filtered_row_plan_attempted")
     row = tuple(int(block_id) for block_id in original_row)
@@ -679,12 +680,13 @@ def _plan_runtime_filtered_row(
         topk_budget = max(0, sketch_topk_blocks)
         total_budget = max(len(protected_recent), max_full_blocks)
         topk_budget = min(topk_budget, max(0, total_budget - len(protected_recent)))
-        score_map = (
-            kv_sketch_runtime.score_blocks(older)
-            if kv_sketch_runtime is not None
-            and kv_sketch_runtime.config.enabled
-            else {}
-        )
+        score_map = {}
+        if kv_sketch_runtime is not None and kv_sketch_runtime.config.enabled:
+            score_map = kv_sketch_runtime.ensure_scores_for_blocks(
+                older,
+                kv_cache_tensor=kv_cache_tensor,
+                kv_kind="kv",
+            )
         older_index = {block_id: idx for idx, block_id in enumerate(older)}
         scored_older = [
             (block_id, float(score_map[block_id]))
@@ -956,6 +958,7 @@ def build_runtime_block_table_apply_summary(
             max_full_blocks=config.max_full_blocks,
             sketch_topk_blocks=config.sketch_topk_blocks,
             kv_sketch_runtime=kv_sketch_runtime,
+            kv_cache_tensor=kv_cache_tensor,
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,
