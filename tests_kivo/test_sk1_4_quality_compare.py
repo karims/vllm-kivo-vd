@@ -26,6 +26,7 @@ def test_parse_args_defaults() -> None:
     assert args.output == "/tmp/sk1_4_quality_compare.json"
     assert args.keep_recent_blocks == 2
     assert args.max_full_blocks == 2
+    assert args.sketch_topk == 2
     assert args.sketch_dim == 16
 
 
@@ -44,7 +45,9 @@ def test_build_mode_env_baseline_only_has_counter_export() -> None:
 
 def test_build_mode_env_random_projection_contains_sketch_and_free_flags() -> None:
     module = _load_module()
-    args = module.parse_args(["--sketch-dim", "32", "--max-full-blocks", "4"])
+    args = module.parse_args(
+        ["--sketch-dim", "32", "--max-full-blocks", "4", "--sketch-topk", "3"]
+    )
     env = module.build_mode_env(
         module.RANDOM_PROJECTION_MODE,
         args=args,
@@ -54,6 +57,7 @@ def test_build_mode_env_random_projection_contains_sketch_and_free_flags() -> No
     assert env["KIVO_KV_SKETCH_BACKEND"] == "random_projection"
     assert env["KIVO_KV_SKETCH_DIM"] == "32"
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS"] == "4"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "3"
     assert env["KIVO_KV_FREE_TO_POOL_ENABLE"] == "1"
 
 

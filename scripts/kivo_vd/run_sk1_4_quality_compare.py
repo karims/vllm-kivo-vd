@@ -73,6 +73,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.10)
     parser.add_argument("--keep-recent-blocks", type=int, default=2)
     parser.add_argument("--max-full-blocks", type=int, default=2)
+    parser.add_argument("--sketch-topk", type=int, default=2)
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
     parser.add_argument("--prompt-repeats", type=int, default=24)
@@ -186,6 +187,7 @@ def build_mode_env(
             "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": str(
                 args.max_full_blocks
             ),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK": str(args.sketch_topk),
             "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
             "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
             "KIVO_KV_CORE_DEMOTION_ENABLE": "1",
@@ -459,6 +461,7 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "keep_recent_blocks": args.keep_recent_blocks,
             "max_full_blocks": args.max_full_blocks,
+            "sketch_topk": args.sketch_topk,
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
             "prompt_repeats": args.prompt_repeats,
