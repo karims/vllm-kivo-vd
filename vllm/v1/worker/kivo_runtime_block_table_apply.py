@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 _DEFAULT_ACTION = "off"
 _SUPPORTED_POLICIES = {
     "recent_only",
+    "prefix_recent",
     "countsketch_online",
     "sketch_topk",
     "sketch_span_topk",
@@ -85,6 +86,7 @@ class KivoRuntimeBlockTableApplyConfig:
     require_slot_mapping_refresh: bool
     sketch_topk_blocks: int = 0
     sketch_span_radius: int = 0
+    keep_prefix_blocks: int = 0
 
 
 @dataclass(frozen=True)
@@ -748,6 +750,7 @@ def _plan_runtime_filtered_row(
     max_full_blocks: int,
     sketch_topk_blocks: int = 0,
     sketch_span_radius: int = 0,
+    keep_prefix_blocks: int = 0,
     kv_sketch_runtime: KivoKVSketchRuntime | None = None,
     kv_cache_tensor: Any | None = None,
 ) -> KivoRuntimeFilteredRowPlan:
@@ -837,6 +840,79 @@ def _plan_runtime_filtered_row(
                 if noop_reason is not None and not changed
                 else {}
             ),
+        )
+
+    if policy == "prefix_recent":
+        keep_prefix = min(max(0, keep_prefix_blocks), len(row))
+        keep_recent = min(max(0, keep_recent_blocks), len(row))
+        prefix_ids = tuple(row[:keep_prefix]) if keep_prefix > 0 else ()
+        recent_ids = tuple(row[-keep_recent:]) if keep_recent > 0 else ()
+        total_budget = max(0, max_full_blocks)
+
+        ordered_keep: list[int] = []
+        for block_id in prefix_ids + recent_ids:
+            if block_id in ordered_keep:
+                continue
+            ordered_keep.append(block_id)
+        ordered_keep = ordered_keep[:total_budget]
+
+        keep_set = set(ordered_keep)
+        visible_after = tuple(block_id for block_id in row if block_id in keep_set)
+        candidate_drop = tuple(
+            block_id for block_id in row if block_id not in keep_set
+        )
+        prefix_kept = tuple(
+            block_id for block_id in prefix_ids if block_id in keep_set
+        )
+        recent_kept = tuple(
+            block_id for block_id in recent_ids if block_id in keep_set
+        )
+        changed = tuple(row) != visible_after
+        contiguous_span_count, max_gap = _retention_shape_metrics(row, visible_after)
+        increment_kivo_demotion_counter(
+            "prefix_recent_prefix_blocks_kept", len(prefix_kept)
+        )
+        increment_kivo_demotion_counter(
+            "prefix_recent_recent_blocks_kept", len(recent_kept)
+        )
+        if changed:
+            increment_kivo_demotion_counter("filtered_row_changed_count")
+            increment_kivo_demotion_counter(
+                "filtered_row_candidate_drop_count", len(candidate_drop)
+            )
+        else:
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(visible_after),
+            last_filtered_drop_count=len(candidate_drop),
+            last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+            last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+            last_prefix_recent_keep_ids_sample=_sample_block_ids(visible_after),
+            last_retention_ratio_numerator=len(visible_after),
+            last_retention_ratio_denominator=len(row),
+            last_contiguous_span_count=contiguous_span_count,
+            last_max_gap_between_kept_blocks=max_gap,
+        )
+        noop_reason = None if changed else "filtered_row_noop_no_blocks_above_budget"
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=visible_after,
+            candidate_demote_block_ids=candidate_drop,
+            protected_block_ids=tuple(visible_after),
+            recent_keep_block_ids=recent_kept,
+            sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
+            old_block_score_pairs=(),
+            missing_score_block_ids=(),
+            retention_ratio_numerator=len(visible_after),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=contiguous_span_count,
+            max_gap_between_kept_blocks=max_gap,
+            filtered_row_changed=changed,
+            noop_reason=noop_reason,
+            blocker_reasons=({noop_reason: 1} if noop_reason is not None else {}),
         )
 
     if policy == "sketch_topk":
@@ -1143,6 +1219,11 @@ def current_kivo_runtime_block_table_apply_config(
             default=0,
             minimum=0,
         ),
+        keep_prefix_blocks=_parse_int_env(
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_PREFIX_BLOCKS",
+            default=0,
+            minimum=0,
+        ),
     )
 
 
@@ -1286,6 +1367,7 @@ def build_runtime_block_table_apply_summary(
             max_full_blocks=config.max_full_blocks,
             sketch_topk_blocks=config.sketch_topk_blocks,
             sketch_span_radius=config.sketch_span_radius,
+            keep_prefix_blocks=config.keep_prefix_blocks,
             kv_sketch_runtime=kv_sketch_runtime,
             kv_cache_tensor=kv_cache_tensor,
         )

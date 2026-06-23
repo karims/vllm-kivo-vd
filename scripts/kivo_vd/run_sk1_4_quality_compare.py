@@ -31,12 +31,14 @@ from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (  # noqa
 
 BASELINE_MODE = "baseline"
 RECENT_ONLY_MODE = "recent_only"
+PREFIX_RECENT_MODE = "prefix_recent"
 RANDOM_PROJECTION_MODE = "random_projection"
 SKETCH_TOPK_MODE = "sketch_topk"
 SKETCH_SPAN_TOPK_MODE = "sketch_span_topk"
 MODE_ORDER = [
     BASELINE_MODE,
     RECENT_ONLY_MODE,
+    PREFIX_RECENT_MODE,
     RANDOM_PROJECTION_MODE,
     SKETCH_TOPK_MODE,
     SKETCH_SPAN_TOPK_MODE,
@@ -51,6 +53,7 @@ KIVO_ENV_KEYS = [
     "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ACTION",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS",
+    "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_PREFIX_BLOCKS",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS",
@@ -82,9 +85,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-num-seqs", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.10)
     parser.add_argument("--keep-recent-blocks", type=int, default=2)
+    parser.add_argument("--keep-prefix-blocks", type=int, default=4)
     parser.add_argument("--max-full-blocks", type=int, default=2)
     parser.add_argument("--sketch-topk", type=int, default=2)
     parser.add_argument("--span-radius", type=int, default=1)
+    parser.add_argument("--geometry-sweep", action="store_true")
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
     parser.add_argument("--trace-retention", action="store_true")
@@ -184,7 +189,27 @@ def build_mode_env(
     *,
     args: argparse.Namespace,
     counter_export_file: str,
+    keep_recent_blocks: int | None = None,
+    keep_prefix_blocks: int | None = None,
+    max_full_blocks: int | None = None,
+    sketch_topk: int | None = None,
+    span_radius: int | None = None,
 ) -> dict[str, str]:
+    effective_keep_recent = (
+        args.keep_recent_blocks if keep_recent_blocks is None else keep_recent_blocks
+    )
+    effective_keep_prefix = (
+        args.keep_prefix_blocks if keep_prefix_blocks is None else keep_prefix_blocks
+    )
+    effective_max_full = (
+        args.max_full_blocks if max_full_blocks is None else max_full_blocks
+    )
+    effective_sketch_topk = (
+        args.sketch_topk if sketch_topk is None else sketch_topk
+    )
+    effective_span_radius = (
+        args.span_radius if span_radius is None else span_radius
+    )
     base = {
         "KIVO_KV_DEMOTION_COUNTERS_ENABLE": "1",
         "KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE": counter_export_file,
@@ -203,22 +228,21 @@ def build_mode_env(
                     SKETCH_SPAN_TOPK_MODE
                     if mode == SKETCH_SPAN_TOPK_MODE
                     else (
-                        SKETCH_TOPK_MODE
-                        if mode == SKETCH_TOPK_MODE
-                        else RECENT_ONLY_MODE
+                        PREFIX_RECENT_MODE
+                        if mode == PREFIX_RECENT_MODE
+                        else (
+                            SKETCH_TOPK_MODE
+                            if mode == SKETCH_TOPK_MODE
+                            else RECENT_ONLY_MODE
+                        )
                     )
                 )
             ),
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(
-                args.keep_recent_blocks
-            ),
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": str(
-                args.max_full_blocks
-            ),
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK": str(args.sketch_topk),
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS": str(
-                args.span_radius
-            ),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(effective_keep_recent),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_PREFIX_BLOCKS": str(effective_keep_prefix),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": str(effective_max_full),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK": str(effective_sketch_topk),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS": str(effective_span_radius),
             "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
             "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
             "KIVO_KV_CORE_DEMOTION_ENABLE": "1",
@@ -302,9 +326,70 @@ def summarize_quality_counters(counters: dict[str, Any] | None) -> dict[str, Any
             "last_max_gap_between_kept_blocks": int(
                 counters.get("last_max_gap_between_kept_blocks", 0) or 0
             ),
+            "prefix_recent_prefix_blocks_kept": int(
+                counters.get("prefix_recent_prefix_blocks_kept", 0) or 0
+            ),
+            "prefix_recent_recent_blocks_kept": int(
+                counters.get("prefix_recent_recent_blocks_kept", 0) or 0
+            ),
+            "last_prefix_recent_keep_ids_sample": list(
+                counters.get("last_prefix_recent_keep_ids_sample", ()) or ()
+            ),
         }
     )
     return summary
+
+
+def build_mode_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if not args.geometry_sweep:
+        return [{"label": mode, "mode": mode, "params": {}} for mode in MODE_ORDER]
+    return [
+        {"label": BASELINE_MODE, "mode": BASELINE_MODE, "params": {}},
+        {
+            "label": "recent_only_k8",
+            "mode": RECENT_ONLY_MODE,
+            "params": {"keep_recent_blocks": 8, "max_full_blocks": 8},
+        },
+        {
+            "label": "recent_only_k16",
+            "mode": RECENT_ONLY_MODE,
+            "params": {"keep_recent_blocks": 16, "max_full_blocks": 16},
+        },
+        {
+            "label": "recent_only_k24",
+            "mode": RECENT_ONLY_MODE,
+            "params": {"keep_recent_blocks": 24, "max_full_blocks": 24},
+        },
+        {
+            "label": "prefix_recent_p4_k16",
+            "mode": PREFIX_RECENT_MODE,
+            "params": {
+                "keep_prefix_blocks": 4,
+                "keep_recent_blocks": 16,
+                "max_full_blocks": 20,
+            },
+        },
+        {
+            "label": "sketch_span_topk_k8_top4_span1_max16",
+            "mode": SKETCH_SPAN_TOPK_MODE,
+            "params": {
+                "keep_recent_blocks": 8,
+                "sketch_topk": 4,
+                "span_radius": 1,
+                "max_full_blocks": 16,
+            },
+        },
+        {
+            "label": "sketch_span_topk_k16_top4_span1_max24",
+            "mode": SKETCH_SPAN_TOPK_MODE,
+            "params": {
+                "keep_recent_blocks": 16,
+                "sketch_topk": 4,
+                "span_radius": 1,
+                "max_full_blocks": 24,
+            },
+        },
+    ]
 
 
 def extract_output_text(output: Any) -> str:
@@ -368,31 +453,37 @@ def build_mode_summary(mode: str, results: list[dict[str, Any]]) -> dict[str, An
 
 def build_overall_summary(mode_reports: list[dict[str, Any]]) -> dict[str, Any]:
     per_mode = {item["mode"]: item["summary"] for item in mode_reports}
+    mode_order = [item["mode"] for item in mode_reports]
     warnings: list[str] = []
-    random_projection = per_mode.get(RANDOM_PROJECTION_MODE, {})
-    if random_projection.get("random_projection_sketch_success_count", 0) == 0:
+    random_projection = per_mode.get(RANDOM_PROJECTION_MODE)
+    if (
+        random_projection is not None
+        and random_projection.get("random_projection_sketch_success_count", 0) == 0
+    ):
         warnings.append("random_projection_zero_sketch_success")
     if not all(item.get("invariants_clean", True) for item in per_mode.values()):
         warnings.append("one_or_more_modes_have_invariant_failures")
     return {
         "per_mode_success_count": {
             mode: per_mode.get(mode, {}).get("success_count", 0)
-            for mode in MODE_ORDER
+            for mode in mode_order
         },
         "per_mode_average_latency_seconds": {
             mode: per_mode.get(mode, {}).get("average_latency_seconds")
-            for mode in MODE_ORDER
+            for mode in mode_order
         },
         "per_mode_total_freed_after_sketch_blocks": {
             mode: per_mode.get(mode, {}).get("total_freed_after_sketch_blocks", 0)
-            for mode in MODE_ORDER
+            for mode in mode_order
         },
         "per_mode_invariants_clean": {
             mode: per_mode.get(mode, {}).get("invariants_clean", True)
-            for mode in MODE_ORDER
+            for mode in mode_order
         },
-        "random_projection_sketch_success_count": random_projection.get(
-            "random_projection_sketch_success_count", 0
+        "random_projection_sketch_success_count": (
+            random_projection.get("random_projection_sketch_success_count", 0)
+            if random_projection is not None
+            else 0
         ),
         "warnings": warnings,
     }
@@ -476,14 +567,21 @@ def _run_prompt(
 def run_mode(
     mode: str,
     *,
+    mode_label: str,
+    mode_params: dict[str, Any],
     args: argparse.Namespace,
     resolved_model: str,
     model_is_local: bool,
     cached_model_candidates: list[str],
     prompts: list[dict[str, str]],
 ) -> dict[str, Any]:
-    counter_export_file = _mode_counter_export_file(args.output, mode)
-    mode_env = build_mode_env(mode, args=args, counter_export_file=counter_export_file)
+    counter_export_file = _mode_counter_export_file(args.output, mode_label)
+    mode_env = build_mode_env(
+        mode,
+        args=args,
+        counter_export_file=counter_export_file,
+        **mode_params,
+    )
     llm = None
     try:
         with patched_environ(mode_env):
@@ -513,7 +611,8 @@ def run_mode(
             del llm
         gc.collect()
     return {
-        "mode": mode,
+        "mode": mode_label,
+        "policy_mode": mode,
         "model": args.model,
         "resolved_model": resolved_model,
         "model_is_local": model_is_local,
@@ -536,16 +635,19 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     prompts = build_quality_prompts(repeats=args.prompt_repeats)
+    mode_specs = build_mode_specs(args)
     mode_reports = [
         run_mode(
-            mode,
+            mode_spec["mode"],
+            mode_label=mode_spec["label"],
+            mode_params=mode_spec["params"],
             args=args,
             resolved_model=resolved_model,
             model_is_local=model_is_local,
             cached_model_candidates=cached_model_candidates,
             prompts=prompts,
         )
-        for mode in MODE_ORDER
+        for mode_spec in mode_specs
     ]
     return {
         "phase": "Sk-1.4",
@@ -560,15 +662,18 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
             "max_num_seqs": args.max_num_seqs,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "keep_recent_blocks": args.keep_recent_blocks,
+            "keep_prefix_blocks": args.keep_prefix_blocks,
             "max_full_blocks": args.max_full_blocks,
             "sketch_topk": args.sketch_topk,
             "span_radius": args.span_radius,
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
+            "geometry_sweep": args.geometry_sweep,
             "trace_retention": args.trace_retention,
             "prompt_repeats": args.prompt_repeats,
             "seed": args.seed,
         },
+        "mode_labels": [spec["label"] for spec in mode_specs],
         "prompt_names": [item["prompt_name"] for item in prompts],
         "mode_reports": mode_reports,
         "summary": build_overall_summary(mode_reports),

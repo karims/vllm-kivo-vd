@@ -25,9 +25,11 @@ def test_parse_args_defaults() -> None:
     assert args.model == "Qwen/Qwen2.5-0.5B-Instruct"
     assert args.output == "/tmp/sk1_4_quality_compare.json"
     assert args.keep_recent_blocks == 2
+    assert args.keep_prefix_blocks == 4
     assert args.max_full_blocks == 2
     assert args.sketch_topk == 2
     assert args.span_radius == 1
+    assert args.geometry_sweep is False
     assert args.sketch_dim == 16
     assert args.trace_retention is False
     assert args.retention_trace_file is None
@@ -44,6 +46,24 @@ def test_build_mode_env_baseline_only_has_counter_export() -> None:
     assert env["KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE"] == "/tmp/counters.json"
     assert "KIVO_KV_SKETCH_ENABLE" not in env
     assert "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE" not in env
+
+
+def test_build_mode_env_prefix_recent_sets_prefix_and_recent_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(["--keep-prefix-blocks", "4", "--keep-recent-blocks", "16"])
+    env = module.build_mode_env(
+        module.PREFIX_RECENT_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+        keep_prefix_blocks=4,
+        keep_recent_blocks=16,
+        max_full_blocks=20,
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "prefix_recent"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_PREFIX_BLOCKS"] == "4"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS"] == "16"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS"] == "20"
+    assert "KIVO_KV_SKETCH_ENABLE" not in env
 
 
 def test_build_mode_env_random_projection_contains_sketch_and_free_flags() -> None:
@@ -228,6 +248,43 @@ def test_summarize_quality_counters_includes_sketch_span_fields() -> None:
     assert summary["last_retention_ratio_denominator"] == 12
     assert summary["last_contiguous_span_count"] == 2
     assert summary["last_max_gap_between_kept_blocks"] == 1
+
+
+def test_summarize_quality_counters_includes_prefix_recent_fields() -> None:
+    module = _load_module()
+    summary = module.summarize_quality_counters(
+        {
+            "prefix_recent_prefix_blocks_kept": 4,
+            "prefix_recent_recent_blocks_kept": 16,
+            "last_prefix_recent_keep_ids_sample": (1, 2, 40, 41),
+        }
+    )
+    assert summary["prefix_recent_prefix_blocks_kept"] == 4
+    assert summary["prefix_recent_recent_blocks_kept"] == 16
+    assert summary["last_prefix_recent_keep_ids_sample"] == [1, 2, 40, 41]
+
+
+def test_build_mode_specs_defaults_to_full_mode_order() -> None:
+    module = _load_module()
+    args = module.parse_args([])
+    specs = module.build_mode_specs(args)
+    assert [spec["label"] for spec in specs] == module.MODE_ORDER
+
+
+def test_build_mode_specs_geometry_sweep_contains_expected_labels() -> None:
+    module = _load_module()
+    args = module.parse_args(["--geometry-sweep"])
+    specs = module.build_mode_specs(args)
+    labels = [spec["label"] for spec in specs]
+    assert labels == [
+        "baseline",
+        "recent_only_k8",
+        "recent_only_k16",
+        "recent_only_k24",
+        "prefix_recent_p4_k16",
+        "sketch_span_topk_k8_top4_span1_max16",
+        "sketch_span_topk_k16_top4_span1_max24",
+    ]
 
 
 def test_build_overall_summary_schema_basics() -> None:

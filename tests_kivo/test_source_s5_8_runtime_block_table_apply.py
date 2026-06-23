@@ -326,6 +326,73 @@ def test_sketch_topk_missing_scores_falls_back_to_recent_only():
     assert batch.block_table[0].get_row_block_ids(0) == (12, 13)
 
 
+def test_prefix_recent_keeps_first_p_and_last_k() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13, 14, 15),
+        policy="prefix_recent",
+        keep_recent_blocks=2,
+        keep_prefix_blocks=2,
+        max_full_blocks=4,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 14, 15)
+    assert plan.candidate_demote_block_ids == (12, 13)
+
+
+def test_prefix_recent_preserves_original_order() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(100, 101, 102, 103, 104, 105),
+        policy="prefix_recent",
+        keep_recent_blocks=2,
+        keep_prefix_blocks=2,
+        max_full_blocks=4,
+    )
+    assert plan.visible_after_block_ids == (100, 101, 104, 105)
+
+
+def test_prefix_recent_respects_max_full_blocks() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13, 14, 15),
+        policy="prefix_recent",
+        keep_recent_blocks=3,
+        keep_prefix_blocks=3,
+        max_full_blocks=4,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 12, 13)
+
+
+def test_prefix_recent_trace_includes_prefix_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "prefix_recent_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_path))
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS", "64")
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True,
+            "apply_block_table_only",
+            "prefix_recent",
+            2,
+            4,
+            True,
+            0,
+            0,
+            2,
+        ),
+    )
+    assert summary.applied_row_count == 1
+    record = json.loads(trace_path.read_text(encoding="utf-8").strip())
+    assert record["policy"] == "prefix_recent"
+    assert record["visible_before_count"] == 4
+    assert record["visible_after_count"] == 4
+    assert record["recent_keep_count"] == 2
+    assert record["retention_ratio"] == 1.0
+
+
 def test_sketch_topk_missing_kv_cache_falls_back_safely():
     runtime = _make_sketch_runtime()
     plan = _plan_runtime_filtered_row(
