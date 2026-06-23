@@ -59,11 +59,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--runtime-policy",
         default="recent_only",
-        choices=("recent_only", "countsketch_online", "sketch_topk"),
+        choices=(
+            "recent_only",
+            "countsketch_online",
+            "sketch_topk",
+            "sketch_span_topk",
+        ),
     )
     parser.add_argument("--keep-recent-blocks", type=int, default=2)
     parser.add_argument("--max-full-blocks", type=int, default=2)
     parser.add_argument("--sketch-topk", type=int, default=2)
+    parser.add_argument("--span-radius", type=int, default=1)
     parser.add_argument(
         "--counter-export-file",
         default=None,
@@ -151,6 +157,9 @@ def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
             args.max_full_blocks
         ),
         "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK": str(args.sketch_topk),
+        "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS": str(
+            args.span_radius
+        ),
         "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
         "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
         "KIVO_KV_CORE_DEMOTION_ENABLE": "1",

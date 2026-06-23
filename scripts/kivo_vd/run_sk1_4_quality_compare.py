@@ -33,11 +33,13 @@ BASELINE_MODE = "baseline"
 RECENT_ONLY_MODE = "recent_only"
 RANDOM_PROJECTION_MODE = "random_projection"
 SKETCH_TOPK_MODE = "sketch_topk"
+SKETCH_SPAN_TOPK_MODE = "sketch_span_topk"
 MODE_ORDER = [
     BASELINE_MODE,
     RECENT_ONLY_MODE,
     RANDOM_PROJECTION_MODE,
     SKETCH_TOPK_MODE,
+    SKETCH_SPAN_TOPK_MODE,
 ]
 
 KIVO_ENV_KEYS = [
@@ -50,6 +52,8 @@ KIVO_ENV_KEYS = [
     "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS",
     "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS",
+    "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK",
+    "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS",
     "KIVO_KV_DEMOTION_TRANSPORT_ENABLE",
     "KIVO_KV_DEMOTION_TRANSPORT_ACTION",
     "KIVO_KV_CORE_DEMOTION_ENABLE",
@@ -80,6 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--keep-recent-blocks", type=int, default=2)
     parser.add_argument("--max-full-blocks", type=int, default=2)
     parser.add_argument("--sketch-topk", type=int, default=2)
+    parser.add_argument("--span-radius", type=int, default=1)
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
     parser.add_argument("--trace-retention", action="store_true")
@@ -194,7 +199,15 @@ def build_mode_env(
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ACTION": "apply_block_table_only",
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": (
-                SKETCH_TOPK_MODE if mode == SKETCH_TOPK_MODE else RECENT_ONLY_MODE
+                (
+                    SKETCH_SPAN_TOPK_MODE
+                    if mode == SKETCH_SPAN_TOPK_MODE
+                    else (
+                        SKETCH_TOPK_MODE
+                        if mode == SKETCH_TOPK_MODE
+                        else RECENT_ONLY_MODE
+                    )
+                )
             ),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(
                 args.keep_recent_blocks
@@ -203,6 +216,9 @@ def build_mode_env(
                 args.max_full_blocks
             ),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK": str(args.sketch_topk),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS": str(
+                args.span_radius
+            ),
             "KIVO_KV_DEMOTION_TRANSPORT_ENABLE": "1",
             "KIVO_KV_DEMOTION_TRANSPORT_ACTION": "apply_core_mark_demoted",
             "KIVO_KV_CORE_DEMOTION_ENABLE": "1",
@@ -213,7 +229,11 @@ def build_mode_env(
             "KIVO_KV_FREE_TO_POOL_ACTION": "free_removed_demoted_only",
         }
     )
-    if mode in {RANDOM_PROJECTION_MODE, SKETCH_TOPK_MODE}:
+    if mode in {
+        RANDOM_PROJECTION_MODE,
+        SKETCH_TOPK_MODE,
+        SKETCH_SPAN_TOPK_MODE,
+    }:
         base.update(
             {
                 "KIVO_KV_SKETCH_ENABLE": "1",
@@ -222,7 +242,10 @@ def build_mode_env(
                 "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
             }
         )
-    if args.trace_retention and mode == SKETCH_TOPK_MODE:
+    if args.trace_retention and mode in {
+        SKETCH_TOPK_MODE,
+        SKETCH_SPAN_TOPK_MODE,
+    }:
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] = "1"
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] = "64"
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] = (
@@ -248,6 +271,36 @@ def summarize_quality_counters(counters: dict[str, Any] | None) -> dict[str, Any
             ),
             "last_sketch_topk_keep_ids_sample": list(
                 counters.get("last_sketch_topk_keep_ids_sample", ()) or ()
+            ),
+            "sketch_span_old_blocks_considered": int(
+                counters.get("sketch_span_old_blocks_considered", 0) or 0
+            ),
+            "sketch_span_anchor_blocks_kept": int(
+                counters.get("sketch_span_anchor_blocks_kept", 0) or 0
+            ),
+            "sketch_span_neighbor_blocks_kept": int(
+                counters.get("sketch_span_neighbor_blocks_kept", 0) or 0
+            ),
+            "sketch_span_missing_scores": int(
+                counters.get("sketch_span_missing_scores", 0) or 0
+            ),
+            "last_sketch_span_anchor_ids_sample": list(
+                counters.get("last_sketch_span_anchor_ids_sample", ()) or ()
+            ),
+            "last_sketch_span_keep_ids_sample": list(
+                counters.get("last_sketch_span_keep_ids_sample", ()) or ()
+            ),
+            "last_retention_ratio_numerator": int(
+                counters.get("last_retention_ratio_numerator", 0) or 0
+            ),
+            "last_retention_ratio_denominator": int(
+                counters.get("last_retention_ratio_denominator", 0) or 0
+            ),
+            "last_contiguous_span_count": int(
+                counters.get("last_contiguous_span_count", 0) or 0
+            ),
+            "last_max_gap_between_kept_blocks": int(
+                counters.get("last_max_gap_between_kept_blocks", 0) or 0
             ),
         }
     )
@@ -509,6 +562,7 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
             "keep_recent_blocks": args.keep_recent_blocks,
             "max_full_blocks": args.max_full_blocks,
             "sketch_topk": args.sketch_topk,
+            "span_radius": args.span_radius,
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
             "trace_retention": args.trace_retention,

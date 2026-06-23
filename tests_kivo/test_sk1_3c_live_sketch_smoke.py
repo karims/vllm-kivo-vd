@@ -30,6 +30,7 @@ def test_parse_args_defaults() -> None:
     assert args.runtime_policy == "recent_only"
     assert args.max_full_blocks == 2
     assert args.sketch_topk == 2
+    assert args.span_radius == 1
     assert args.counter_export_file is None
 
 
@@ -69,6 +70,25 @@ def test_parse_args_accepts_sketch_topk_policy_and_budget() -> None:
     )
     assert args.runtime_policy == "sketch_topk"
     assert args.sketch_topk == 3
+
+
+def test_parse_args_accepts_sketch_span_topk_policy_and_span_radius() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--output",
+            "out.json",
+            "--runtime-policy",
+            "sketch_span_topk",
+            "--sketch-topk",
+            "3",
+            "--span-radius",
+            "2",
+        ]
+    )
+    assert args.runtime_policy == "sketch_span_topk"
+    assert args.sketch_topk == 3
+    assert args.span_radius == 2
 
 
 def test_resolve_model_reference_prefers_existing_local_path(tmp_path: Path) -> None:
@@ -159,6 +179,26 @@ def test_smoke_env_sets_sketch_topk_budget() -> None:
     env = module._smoke_env(args)
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "sketch_topk"
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "4"
+
+
+def test_smoke_env_sets_sketch_span_topk_radius() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--output",
+            "out.json",
+            "--runtime-policy",
+            "sketch_span_topk",
+            "--sketch-topk",
+            "4",
+            "--span-radius",
+            "2",
+        ]
+    )
+    env = module._smoke_env(args)
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "sketch_span_topk"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "4"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS"] == "2"
 
 
 def test_summarize_sketch_counters_success_case() -> None:

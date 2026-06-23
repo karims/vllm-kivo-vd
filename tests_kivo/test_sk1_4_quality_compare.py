@@ -27,6 +27,7 @@ def test_parse_args_defaults() -> None:
     assert args.keep_recent_blocks == 2
     assert args.max_full_blocks == 2
     assert args.sketch_topk == 2
+    assert args.span_radius == 1
     assert args.sketch_dim == 16
     assert args.trace_retention is False
     assert args.retention_trace_file is None
@@ -77,6 +78,21 @@ def test_build_mode_env_sketch_topk_sets_policy_and_sketch_flags() -> None:
     assert env["KIVO_KV_SKETCH_BACKEND"] == "random_projection"
 
 
+def test_build_mode_env_sketch_span_topk_sets_policy_and_span_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(["--sketch-topk", "4", "--span-radius", "2"])
+    env = module.build_mode_env(
+        module.SKETCH_SPAN_TOPK_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "sketch_span_topk"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "4"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS"] == "2"
+    assert env["KIVO_KV_SKETCH_ENABLE"] == "1"
+    assert env["KIVO_KV_SKETCH_BACKEND"] == "random_projection"
+
+
 def test_build_mode_env_sketch_topk_trace_flags() -> None:
     module = _load_module()
     args = module.parse_args(
@@ -88,6 +104,25 @@ def test_build_mode_env_sketch_topk_trace_flags() -> None:
     )
     env = module.build_mode_env(
         module.SKETCH_TOPK_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] == "1"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] == "64"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] == "/tmp/trace.jsonl"
+
+
+def test_build_mode_env_sketch_span_topk_trace_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--trace-retention",
+            "--retention-trace-file",
+            "/tmp/trace.jsonl",
+        ]
+    )
+    env = module.build_mode_env(
+        module.SKETCH_SPAN_TOPK_MODE,
         args=args,
         counter_export_file="/tmp/counters.json",
     )
@@ -166,6 +201,35 @@ def test_summarize_quality_counters_includes_sketch_topk_fields() -> None:
     assert summary["last_sketch_topk_keep_ids_sample"] == [21, 22]
 
 
+def test_summarize_quality_counters_includes_sketch_span_fields() -> None:
+    module = _load_module()
+    summary = module.summarize_quality_counters(
+        {
+            "sketch_backend": "random_projection",
+            "sketch_span_old_blocks_considered": 12,
+            "sketch_span_anchor_blocks_kept": 2,
+            "sketch_span_neighbor_blocks_kept": 3,
+            "sketch_span_missing_scores": 1,
+            "last_sketch_span_anchor_ids_sample": (20, 24),
+            "last_sketch_span_keep_ids_sample": (19, 20, 21, 23, 24),
+            "last_retention_ratio_numerator": 5,
+            "last_retention_ratio_denominator": 12,
+            "last_contiguous_span_count": 2,
+            "last_max_gap_between_kept_blocks": 1,
+        }
+    )
+    assert summary["sketch_span_old_blocks_considered"] == 12
+    assert summary["sketch_span_anchor_blocks_kept"] == 2
+    assert summary["sketch_span_neighbor_blocks_kept"] == 3
+    assert summary["sketch_span_missing_scores"] == 1
+    assert summary["last_sketch_span_anchor_ids_sample"] == [20, 24]
+    assert summary["last_sketch_span_keep_ids_sample"] == [19, 20, 21, 23, 24]
+    assert summary["last_retention_ratio_numerator"] == 5
+    assert summary["last_retention_ratio_denominator"] == 12
+    assert summary["last_contiguous_span_count"] == 2
+    assert summary["last_max_gap_between_kept_blocks"] == 1
+
+
 def test_build_overall_summary_schema_basics() -> None:
     module = _load_module()
     overall = module.build_overall_summary(
@@ -210,6 +274,16 @@ def test_build_overall_summary_schema_basics() -> None:
                     "random_projection_sketch_success_count": 4,
                 },
             },
+            {
+                "mode": module.SKETCH_SPAN_TOPK_MODE,
+                "summary": {
+                    "success_count": 4,
+                    "average_latency_seconds": 1.5,
+                    "total_freed_after_sketch_blocks": 9,
+                    "invariants_clean": True,
+                    "random_projection_sketch_success_count": 4,
+                },
+            },
         ]
     )
     assert overall["per_mode_success_count"][module.BASELINE_MODE] == 4
@@ -221,3 +295,4 @@ def test_build_overall_summary_schema_basics() -> None:
     )
     assert overall["random_projection_sketch_success_count"] == 3
     assert overall["warnings"] == []
+    assert overall["per_mode_success_count"][module.SKETCH_SPAN_TOPK_MODE] == 4
