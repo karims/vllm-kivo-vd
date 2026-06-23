@@ -73,6 +73,41 @@ def test_build_mode_env_drop_one_oldest_sets_policy() -> None:
     assert "KIVO_KV_SKETCH_ENABLE" not in env
 
 
+def test_build_mode_env_drop_one_middle_sets_policy() -> None:
+    module = _load_module()
+    args = module.parse_args([])
+    env = module.build_mode_env(
+        module.DROP_ONE_MIDDLE_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "drop_one_middle"
+
+
+def test_build_mode_env_drop_one_newest_sets_policy() -> None:
+    module = _load_module()
+    args = module.parse_args([])
+    env = module.build_mode_env(
+        module.DROP_ONE_NEWEST_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "drop_one_newest"
+
+
+def test_build_mode_env_drop_one_before_recent_sets_policy() -> None:
+    module = _load_module()
+    args = module.parse_args(["--keep-recent-blocks", "8"])
+    env = module.build_mode_env(
+        module.DROP_ONE_BEFORE_RECENT_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+        keep_recent_blocks=8,
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "drop_one_before_recent"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS"] == "8"
+
+
 def test_build_mode_env_prefix_recent_sets_prefix_and_recent_flags() -> None:
     module = _load_module()
     args = module.parse_args(["--keep-prefix-blocks", "4", "--keep-recent-blocks", "16"])
@@ -173,6 +208,20 @@ def test_build_mode_env_sketch_span_topk_trace_flags() -> None:
     )
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] == "1"
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] == "64"
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] == "/tmp/trace.jsonl"
+
+
+def test_build_mode_env_apply_noop_trace_flags() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        ["--trace-retention", "--retention-trace-file", "/tmp/trace.jsonl"]
+    )
+    env = module.build_mode_env(
+        module.APPLY_NOOP_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] == "1"
     assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] == "/tmp/trace.jsonl"
 
 
@@ -321,9 +370,12 @@ def test_build_mode_specs_integrity_sweep_contains_expected_labels() -> None:
         "baseline",
         "apply_noop",
         "drop_one_oldest",
+        "drop_one_middle",
+        "drop_one_newest",
+        "drop_one_before_recent_k8",
         "recent_only_k32",
-        "recent_only_k40",
         "recent_only_k44",
+        "recent_only_k40",
     ]
 
 

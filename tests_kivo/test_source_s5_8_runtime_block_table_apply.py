@@ -472,6 +472,117 @@ def test_drop_one_oldest_trace_diagnostics_are_written(
     assert record["candidate_demote_count"] == 1
     assert record["candidate_demote_block_ids"] == [10]
     assert record["retention_ratio"] == 0.75
+    assert record["single_drop_position"] == "oldest"
+    assert record["single_drop_index"] == 0
+    assert record["single_drop_block_id"] == 10
+
+
+def test_drop_one_middle_drops_exactly_middle_block() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13, 14),
+        policy="drop_one_middle",
+        keep_recent_blocks=2,
+        max_full_blocks=5,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 13, 14)
+    assert plan.candidate_demote_block_ids == (12,)
+    assert plan.single_drop_position == "middle"
+    assert plan.single_drop_index == 2
+    assert plan.single_drop_block_id == 12
+
+
+def test_drop_one_newest_drops_exactly_last_block() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="drop_one_newest",
+        keep_recent_blocks=2,
+        max_full_blocks=4,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 12)
+    assert plan.candidate_demote_block_ids == (13,)
+    assert plan.single_drop_position == "newest"
+    assert plan.single_drop_index == 3
+    assert plan.single_drop_block_id == 13
+
+
+def test_drop_one_before_recent_drops_block_before_recent_window() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13, 14, 15),
+        policy="drop_one_before_recent",
+        keep_recent_blocks=2,
+        max_full_blocks=6,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 12, 14, 15)
+    assert plan.candidate_demote_block_ids == (13,)
+    assert plan.single_drop_position == "before_recent"
+    assert plan.single_drop_index == 3
+    assert plan.single_drop_block_id == 13
+
+
+def test_single_drop_policies_preserve_remaining_order() -> None:
+    for policy, expected in [
+        ("drop_one_oldest", (101, 102, 103, 104)),
+        ("drop_one_middle", (100, 101, 103, 104)),
+        ("drop_one_newest", (100, 101, 102, 103)),
+    ]:
+        plan = _plan_runtime_filtered_row(
+            original_row=(100, 101, 102, 103, 104),
+            policy=policy,
+            keep_recent_blocks=2,
+            max_full_blocks=5,
+        )
+        assert plan.visible_after_block_ids == expected
+
+
+def test_single_drop_policies_noop_when_too_small() -> None:
+    for policy in (
+        "drop_one_oldest",
+        "drop_one_middle",
+        "drop_one_newest",
+    ):
+        plan = _plan_runtime_filtered_row(
+            original_row=(42,),
+            policy=policy,
+            keep_recent_blocks=1,
+            max_full_blocks=1,
+        )
+        assert plan.visible_after_block_ids == (42,)
+        assert plan.candidate_demote_block_ids == ()
+        assert plan.single_drop_position == "none"
+
+
+def test_drop_one_before_recent_noop_when_no_old_block_exists() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11),
+        policy="drop_one_before_recent",
+        keep_recent_blocks=2,
+        max_full_blocks=2,
+    )
+    assert plan.visible_after_block_ids == (10, 11)
+    assert plan.candidate_demote_block_ids == ()
+    assert plan.single_drop_position == "none"
+
+
+def test_trace_rows_include_single_drop_fields_for_middle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "drop_one_middle_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_path))
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "drop_one_middle", 2, 4, True
+        ),
+    )
+    assert summary.applied_row_count == 1
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["single_drop_position"] == "middle"
+    assert record["single_drop_index"] == 2
+    assert record["single_drop_block_id"] == 12
 
 
 def test_sketch_topk_missing_kv_cache_falls_back_safely():

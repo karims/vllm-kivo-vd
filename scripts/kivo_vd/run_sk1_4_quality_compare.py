@@ -32,6 +32,9 @@ from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (  # noqa
 BASELINE_MODE = "baseline"
 APPLY_NOOP_MODE = "apply_noop"
 DROP_ONE_OLDEST_MODE = "drop_one_oldest"
+DROP_ONE_MIDDLE_MODE = "drop_one_middle"
+DROP_ONE_NEWEST_MODE = "drop_one_newest"
+DROP_ONE_BEFORE_RECENT_MODE = "drop_one_before_recent"
 RECENT_ONLY_MODE = "recent_only"
 PREFIX_RECENT_MODE = "prefix_recent"
 RANDOM_PROJECTION_MODE = "random_projection"
@@ -41,6 +44,9 @@ MODE_ORDER = [
     BASELINE_MODE,
     APPLY_NOOP_MODE,
     DROP_ONE_OLDEST_MODE,
+    DROP_ONE_MIDDLE_MODE,
+    DROP_ONE_NEWEST_MODE,
+    DROP_ONE_BEFORE_RECENT_MODE,
     RECENT_ONLY_MODE,
     PREFIX_RECENT_MODE,
     RANDOM_PROJECTION_MODE,
@@ -218,6 +224,9 @@ def build_mode_env(
     policy_mode = {
         APPLY_NOOP_MODE: APPLY_NOOP_MODE,
         DROP_ONE_OLDEST_MODE: DROP_ONE_OLDEST_MODE,
+        DROP_ONE_MIDDLE_MODE: DROP_ONE_MIDDLE_MODE,
+        DROP_ONE_NEWEST_MODE: DROP_ONE_NEWEST_MODE,
+        DROP_ONE_BEFORE_RECENT_MODE: DROP_ONE_BEFORE_RECENT_MODE,
         PREFIX_RECENT_MODE: PREFIX_RECENT_MODE,
         SKETCH_TOPK_MODE: SKETCH_TOPK_MODE,
         SKETCH_SPAN_TOPK_MODE: SKETCH_SPAN_TOPK_MODE,
@@ -264,10 +273,7 @@ def build_mode_env(
                 "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
             }
         )
-    if args.trace_retention and mode in {
-        SKETCH_TOPK_MODE,
-        SKETCH_SPAN_TOPK_MODE,
-    }:
+    if args.trace_retention and mode != BASELINE_MODE:
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS"] = "1"
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_MAX_BLOCKS"] = "64"
         base["KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE"] = (
@@ -349,19 +355,34 @@ def build_mode_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "params": {},
             },
             {
+                "label": DROP_ONE_MIDDLE_MODE,
+                "mode": DROP_ONE_MIDDLE_MODE,
+                "params": {},
+            },
+            {
+                "label": DROP_ONE_NEWEST_MODE,
+                "mode": DROP_ONE_NEWEST_MODE,
+                "params": {},
+            },
+            {
+                "label": "drop_one_before_recent_k8",
+                "mode": DROP_ONE_BEFORE_RECENT_MODE,
+                "params": {"keep_recent_blocks": 8},
+            },
+            {
                 "label": "recent_only_k32",
                 "mode": RECENT_ONLY_MODE,
                 "params": {"keep_recent_blocks": 32, "max_full_blocks": 32},
             },
             {
-                "label": "recent_only_k40",
-                "mode": RECENT_ONLY_MODE,
-                "params": {"keep_recent_blocks": 40, "max_full_blocks": 40},
-            },
-            {
                 "label": "recent_only_k44",
                 "mode": RECENT_ONLY_MODE,
                 "params": {"keep_recent_blocks": 44, "max_full_blocks": 44},
+            },
+            {
+                "label": "recent_only_k40",
+                "mode": RECENT_ONLY_MODE,
+                "params": {"keep_recent_blocks": 40, "max_full_blocks": 40},
             },
         ]
     if not args.geometry_sweep:

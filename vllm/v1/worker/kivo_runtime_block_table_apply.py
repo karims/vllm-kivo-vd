@@ -63,7 +63,10 @@ if TYPE_CHECKING:
 _DEFAULT_ACTION = "off"
 _SUPPORTED_POLICIES = {
     "apply_noop",
+    "drop_one_middle",
     "drop_one_oldest",
+    "drop_one_newest",
+    "drop_one_before_recent",
     "recent_only",
     "prefix_recent",
     "countsketch_online",
@@ -170,6 +173,9 @@ class KivoRuntimeFilteredRowPlan:
     retention_ratio_denominator: int
     contiguous_span_count: int
     max_gap_between_kept_blocks: int
+    single_drop_position: str | None
+    single_drop_index: int | None
+    single_drop_block_id: int | None
     filtered_row_changed: bool
     noop_reason: str | None
     blocker_reasons: dict[str, int]
@@ -293,6 +299,9 @@ def _write_retention_trace(
         ),
         "contiguous_span_count": plan.contiguous_span_count,
         "max_gap_between_kept_blocks": plan.max_gap_between_kept_blocks,
+        "single_drop_position": plan.single_drop_position,
+        "single_drop_index": plan.single_drop_index,
+        "single_drop_block_id": plan.single_drop_block_id,
         "filtered_row_changed": plan.filtered_row_changed,
         "noop_reason": plan.noop_reason,
     }
@@ -785,6 +794,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=1 if row else 0,
             max_gap_between_kept_blocks=0,
+            single_drop_position=None,
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=False,
             noop_reason="filtered_row_noop_padding_ambiguity",
             blocker_reasons={"padding_zero_ambiguous": zero_count},
@@ -818,12 +830,20 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=1 if row else 0,
             max_gap_between_kept_blocks=0,
+            single_drop_position="none",
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=False,
             noop_reason="filtered_row_noop_identity",
             blocker_reasons={"filtered_row_noop_identity": 1},
         )
 
-    if policy == "drop_one_oldest":
+    if policy in {
+        "drop_one_oldest",
+        "drop_one_middle",
+        "drop_one_newest",
+        "drop_one_before_recent",
+    }:
         if len(row) <= 1:
             increment_kivo_demotion_counter("filtered_row_apply_noop")
             increment_kivo_demotion_counter("filtered_row_plan_succeeded")
@@ -836,6 +856,9 @@ def _plan_runtime_filtered_row(
                 last_retention_ratio_denominator=len(row),
                 last_contiguous_span_count=1 if row else 0,
                 last_max_gap_between_kept_blocks=0,
+                last_single_drop_position="none",
+                last_single_drop_index=-1,
+                last_single_drop_block_id=-1,
             )
             return KivoRuntimeFilteredRowPlan(
                 visible_before_block_ids=row,
@@ -852,12 +875,68 @@ def _plan_runtime_filtered_row(
                 retention_ratio_denominator=len(row),
                 contiguous_span_count=1 if row else 0,
                 max_gap_between_kept_blocks=0,
+                single_drop_position="none",
+                single_drop_index=None,
+                single_drop_block_id=None,
                 filtered_row_changed=False,
                 noop_reason="filtered_row_noop_not_enough_blocks",
                 blocker_reasons={"filtered_row_noop_not_enough_blocks": 1},
             )
-        visible_after = tuple(row[1:])
-        candidate_drop = (row[0],)
+        if policy == "drop_one_oldest":
+            drop_index = 0
+            drop_position = "oldest"
+        elif policy == "drop_one_middle":
+            drop_index = len(row) // 2
+            drop_position = "middle"
+        elif policy == "drop_one_newest":
+            drop_index = len(row) - 1
+            drop_position = "newest"
+        else:
+            if len(row) <= keep_recent_blocks:
+                increment_kivo_demotion_counter("filtered_row_apply_noop")
+                increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+                set_kivo_demotion_counter_fields(
+                    last_filtered_keep_count=len(row),
+                    last_filtered_drop_count=0,
+                    last_filtered_drop_ids_sample=(),
+                    last_filtered_keep_ids_sample=_sample_block_ids(row),
+                    last_retention_ratio_numerator=len(row),
+                    last_retention_ratio_denominator=len(row),
+                    last_contiguous_span_count=1 if row else 0,
+                    last_max_gap_between_kept_blocks=0,
+                    last_single_drop_position="none",
+                    last_single_drop_index=-1,
+                    last_single_drop_block_id=-1,
+                )
+                return KivoRuntimeFilteredRowPlan(
+                    visible_before_block_ids=row,
+                    visible_after_block_ids=row,
+                    candidate_demote_block_ids=(),
+                    protected_block_ids=row,
+                    recent_keep_block_ids=(),
+                    sketch_topk_keep_block_ids=(),
+                    sketch_span_anchor_block_ids=(),
+                    sketch_span_keep_block_ids=(),
+                    old_block_score_pairs=(),
+                    missing_score_block_ids=(),
+                    retention_ratio_numerator=len(row),
+                    retention_ratio_denominator=len(row),
+                    contiguous_span_count=1 if row else 0,
+                    max_gap_between_kept_blocks=0,
+                    single_drop_position="none",
+                    single_drop_index=None,
+                    single_drop_block_id=None,
+                    filtered_row_changed=False,
+                    noop_reason="filtered_row_noop_not_enough_blocks",
+                    blocker_reasons={"filtered_row_noop_not_enough_blocks": 1},
+                )
+            drop_index = len(row) - keep_recent_blocks - 1
+            drop_position = "before_recent"
+        drop_block_id = row[drop_index]
+        visible_after = tuple(
+            block_id for idx, block_id in enumerate(row) if idx != drop_index
+        )
+        candidate_drop = (drop_block_id,)
         contiguous_span_count, max_gap = _retention_shape_metrics(row, visible_after)
         increment_kivo_demotion_counter("filtered_row_changed_count")
         increment_kivo_demotion_counter("filtered_row_candidate_drop_count", 1)
@@ -871,6 +950,9 @@ def _plan_runtime_filtered_row(
             last_retention_ratio_denominator=len(row),
             last_contiguous_span_count=contiguous_span_count,
             last_max_gap_between_kept_blocks=max_gap,
+            last_single_drop_position=drop_position,
+            last_single_drop_index=drop_index,
+            last_single_drop_block_id=drop_block_id,
         )
         return KivoRuntimeFilteredRowPlan(
             visible_before_block_ids=row,
@@ -887,6 +969,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=contiguous_span_count,
             max_gap_between_kept_blocks=max_gap,
+            single_drop_position=drop_position,
+            single_drop_index=drop_index,
+            single_drop_block_id=drop_block_id,
             filtered_row_changed=True,
             noop_reason=None,
             blocker_reasons={},
@@ -937,6 +1022,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=1 if visible_after else 0,
             max_gap_between_kept_blocks=0,
+            single_drop_position=None,
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -1014,6 +1102,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=contiguous_span_count,
             max_gap_between_kept_blocks=max_gap,
+            single_drop_position=None,
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=({noop_reason: 1} if noop_reason is not None else {}),
@@ -1096,6 +1187,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=_retention_shape_metrics(row, visible_after)[0],
             max_gap_between_kept_blocks=_retention_shape_metrics(row, visible_after)[1],
+            single_drop_position=None,
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -1227,6 +1321,9 @@ def _plan_runtime_filtered_row(
             retention_ratio_denominator=len(row),
             contiguous_span_count=contiguous_span_count,
             max_gap_between_kept_blocks=max_gap,
+            single_drop_position=None,
+            single_drop_index=None,
+            single_drop_block_id=None,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -1281,6 +1378,9 @@ def _plan_runtime_filtered_row(
         retention_ratio_denominator=len(row),
         contiguous_span_count=_retention_shape_metrics(row, visible_after)[0],
         max_gap_between_kept_blocks=_retention_shape_metrics(row, visible_after)[1],
+        single_drop_position=None,
+        single_drop_index=None,
+        single_drop_block_id=None,
         filtered_row_changed=changed,
         noop_reason=noop_reason,
         blocker_reasons=(
