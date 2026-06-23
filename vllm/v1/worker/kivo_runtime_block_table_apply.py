@@ -61,7 +61,12 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_ACTION = "off"
-_SUPPORTED_POLICIES = {"recent_only", "countsketch_online", "sketch_topk"}
+_SUPPORTED_POLICIES = {
+    "recent_only",
+    "countsketch_online",
+    "sketch_topk",
+    "sketch_span_topk",
+}
 _COUNTER_SAMPLE_LIMIT = 8
 _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST: dict[str, set[int]] = {}
 
@@ -79,6 +84,7 @@ class KivoRuntimeBlockTableApplyConfig:
     max_full_blocks: int
     require_slot_mapping_refresh: bool
     sketch_topk_blocks: int = 0
+    sketch_span_radius: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,8 +158,14 @@ class KivoRuntimeFilteredRowPlan:
     protected_block_ids: tuple[int, ...]
     recent_keep_block_ids: tuple[int, ...]
     sketch_topk_keep_block_ids: tuple[int, ...]
+    sketch_span_anchor_block_ids: tuple[int, ...]
+    sketch_span_keep_block_ids: tuple[int, ...]
     old_block_score_pairs: tuple[tuple[int, float], ...]
     missing_score_block_ids: tuple[int, ...]
+    retention_ratio_numerator: int
+    retention_ratio_denominator: int
+    contiguous_span_count: int
+    max_gap_between_kept_blocks: int
     filtered_row_changed: bool
     noop_reason: str | None
     blocker_reasons: dict[str, int]
@@ -189,6 +201,29 @@ def _truncate_score_pairs(
     return tuple((int(block_id), float(score)) for block_id, score in score_pairs[:limit])
 
 
+def _retention_shape_metrics(
+    row: Sequence[int],
+    kept_block_ids: Sequence[int],
+) -> tuple[int, int]:
+    if not kept_block_ids:
+        return 0, 0
+    keep_set = set(int(block_id) for block_id in kept_block_ids)
+    kept_indices = [
+        idx for idx, block_id in enumerate(row) if int(block_id) in keep_set
+    ]
+    if not kept_indices:
+        return 0, 0
+    contiguous_span_count = 1
+    max_gap = 0
+    for previous, current in zip(kept_indices, kept_indices[1:]):
+        gap = max(0, current - previous - 1)
+        if gap > 0:
+            contiguous_span_count += 1
+        if gap > max_gap:
+            max_gap = gap
+    return contiguous_span_count, max_gap
+
+
 def _write_retention_trace(
     *,
     request_id: str | None,
@@ -220,6 +255,14 @@ def _write_retention_trace(
         "sketch_topk_keep_block_ids": list(
             _truncate_block_ids(plan.sketch_topk_keep_block_ids, limit=limit)
         ),
+        "sketch_span_anchor_count": len(plan.sketch_span_anchor_block_ids),
+        "sketch_span_anchor_block_ids": list(
+            _truncate_block_ids(plan.sketch_span_anchor_block_ids, limit=limit)
+        ),
+        "sketch_span_keep_count": len(plan.sketch_span_keep_block_ids),
+        "sketch_span_keep_block_ids": list(
+            _truncate_block_ids(plan.sketch_span_keep_block_ids, limit=limit)
+        ),
         "candidate_demote_count": len(plan.candidate_demote_block_ids),
         "candidate_demote_block_ids": list(
             _truncate_block_ids(plan.candidate_demote_block_ids, limit=limit)
@@ -239,6 +282,13 @@ def _write_retention_trace(
         "final_block_order": list(
             _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
         ),
+        "retention_ratio": (
+            float(plan.retention_ratio_numerator) / float(plan.retention_ratio_denominator)
+            if plan.retention_ratio_denominator > 0
+            else 0.0
+        ),
+        "contiguous_span_count": plan.contiguous_span_count,
+        "max_gap_between_kept_blocks": plan.max_gap_between_kept_blocks,
         "filtered_row_changed": plan.filtered_row_changed,
         "noop_reason": plan.noop_reason,
     }
@@ -697,6 +747,7 @@ def _plan_runtime_filtered_row(
     keep_recent_blocks: int,
     max_full_blocks: int,
     sketch_topk_blocks: int = 0,
+    sketch_span_radius: int = 0,
     kv_sketch_runtime: KivoKVSketchRuntime | None = None,
     kv_cache_tensor: Any | None = None,
 ) -> KivoRuntimeFilteredRowPlan:
@@ -721,8 +772,14 @@ def _plan_runtime_filtered_row(
             protected_block_ids=(),
             recent_keep_block_ids=(),
             sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
             old_block_score_pairs=(),
             missing_score_block_ids=(),
+            retention_ratio_numerator=len(row),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=1 if row else 0,
+            max_gap_between_kept_blocks=0,
             filtered_row_changed=False,
             noop_reason="filtered_row_noop_padding_ambiguity",
             blocker_reasons={"padding_zero_ambiguous": zero_count},
@@ -765,8 +822,14 @@ def _plan_runtime_filtered_row(
             protected_block_ids=tuple(protected_recent),
             recent_keep_block_ids=tuple(protected_recent),
             sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
             old_block_score_pairs=(),
             missing_score_block_ids=(),
+            retention_ratio_numerator=len(visible_after),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=1 if visible_after else 0,
+            max_gap_between_kept_blocks=0,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -841,12 +904,149 @@ def _plan_runtime_filtered_row(
             sketch_topk_keep_block_ids=tuple(
                 block_id for block_id in row if block_id in selected_old
             ),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
             old_block_score_pairs=tuple(
                 (int(block_id), float(score)) for block_id, score in scored_older
             ),
             missing_score_block_ids=tuple(
                 block_id for block_id in older if block_id not in score_map
             ),
+            retention_ratio_numerator=len(visible_after),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=_retention_shape_metrics(row, visible_after)[0],
+            max_gap_between_kept_blocks=_retention_shape_metrics(row, visible_after)[1],
+            filtered_row_changed=changed,
+            noop_reason=noop_reason,
+            blocker_reasons=(
+                {noop_reason: 1}
+                if noop_reason is not None
+                else {}
+            ),
+        )
+
+    if policy == "sketch_span_topk":
+        keep_recent = min(max(0, keep_recent_blocks), len(row))
+        protected_recent = tuple(row[-keep_recent:]) if keep_recent > 0 else ()
+        older = tuple(row[:-keep_recent]) if keep_recent > 0 else row
+        topk_budget = max(0, sketch_topk_blocks)
+        span_radius = max(0, sketch_span_radius)
+        total_budget = max(len(protected_recent), max_full_blocks)
+        available_old_budget = max(0, total_budget - len(protected_recent))
+        topk_budget = min(topk_budget, available_old_budget)
+
+        score_map = {}
+        if kv_sketch_runtime is not None and kv_sketch_runtime.config.enabled:
+            score_map = kv_sketch_runtime.ensure_scores_for_blocks(
+                older,
+                kv_cache_tensor=kv_cache_tensor,
+                kv_kind="kv",
+            )
+        older_index = {block_id: idx for idx, block_id in enumerate(older)}
+        scored_older = [
+            (block_id, float(score_map[block_id]))
+            for block_id in older
+            if block_id in score_map
+        ]
+        scored_older.sort(key=lambda item: (-item[1], -older_index[item[0]]))
+        anchor_ids = [block_id for block_id, _ in scored_older[:topk_budget]]
+        anchor_set = set(anchor_ids)
+
+        neighbor_candidates: list[tuple[int, int, int]] = []
+        seen_neighbor_ids: set[int] = set()
+        for anchor_rank, anchor_id in enumerate(anchor_ids):
+            anchor_idx = older_index[anchor_id]
+            for neighbor_idx in range(
+                max(0, anchor_idx - span_radius),
+                min(len(older), anchor_idx + span_radius + 1),
+            ):
+                neighbor_id = older[neighbor_idx]
+                if neighbor_id in anchor_set or neighbor_id in seen_neighbor_ids:
+                    continue
+                seen_neighbor_ids.add(neighbor_id)
+                distance = abs(neighbor_idx - anchor_idx)
+                neighbor_candidates.append((distance, anchor_rank, neighbor_idx))
+        neighbor_candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        neighbor_ids = [older[idx] for _, _, idx in neighbor_candidates]
+
+        selected_old_ordered: list[int] = []
+        for block_id in anchor_ids + neighbor_ids:
+            if block_id in selected_old_ordered:
+                continue
+            if len(selected_old_ordered) >= available_old_budget:
+                break
+            selected_old_ordered.append(block_id)
+
+        selected_old = set(selected_old_ordered)
+        selected_anchor_ids = tuple(
+            block_id for block_id in anchor_ids if block_id in selected_old
+        )
+        selected_neighbor_ids = tuple(
+            block_id for block_id in selected_old_ordered if block_id not in anchor_set
+        )
+        keep_set = set(protected_recent) | selected_old
+        visible_after = tuple(block_id for block_id in row if block_id in keep_set)
+        candidate_drop = tuple(block_id for block_id in row if block_id not in keep_set)
+        missing_score_ids = tuple(
+            block_id for block_id in older if block_id not in score_map
+        )
+        missing_score_count = len(missing_score_ids)
+        changed = tuple(row) != visible_after
+        contiguous_span_count, max_gap = _retention_shape_metrics(row, visible_after)
+        increment_kivo_demotion_counter(
+            "sketch_span_old_blocks_considered", len(older)
+        )
+        increment_kivo_demotion_counter(
+            "sketch_span_anchor_blocks_kept", len(selected_anchor_ids)
+        )
+        increment_kivo_demotion_counter(
+            "sketch_span_neighbor_blocks_kept", len(selected_neighbor_ids)
+        )
+        increment_kivo_demotion_counter(
+            "sketch_span_missing_scores", missing_score_count
+        )
+        if changed:
+            increment_kivo_demotion_counter("filtered_row_changed_count")
+            increment_kivo_demotion_counter(
+                "filtered_row_candidate_drop_count", len(candidate_drop)
+            )
+        else:
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(visible_after),
+            last_filtered_drop_count=len(candidate_drop),
+            last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+            last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+            last_sketch_span_anchor_ids_sample=_sample_block_ids(selected_anchor_ids),
+            last_sketch_span_keep_ids_sample=_sample_block_ids(
+                tuple(block_id for block_id in row if block_id in selected_old)
+            ),
+            last_retention_ratio_numerator=len(visible_after),
+            last_retention_ratio_denominator=len(row),
+            last_contiguous_span_count=contiguous_span_count,
+            last_max_gap_between_kept_blocks=max_gap,
+        )
+        noop_reason = None if changed else "filtered_row_noop_no_blocks_above_budget"
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=visible_after,
+            candidate_demote_block_ids=candidate_drop,
+            protected_block_ids=protected_recent,
+            recent_keep_block_ids=protected_recent,
+            sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=selected_anchor_ids,
+            sketch_span_keep_block_ids=tuple(
+                block_id for block_id in row if block_id in selected_old
+            ),
+            old_block_score_pairs=tuple(
+                (int(block_id), float(score)) for block_id, score in scored_older
+            ),
+            missing_score_block_ids=missing_score_ids,
+            retention_ratio_numerator=len(visible_after),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=contiguous_span_count,
+            max_gap_between_kept_blocks=max_gap,
             filtered_row_changed=changed,
             noop_reason=noop_reason,
             blocker_reasons=(
@@ -893,8 +1093,14 @@ def _plan_runtime_filtered_row(
         protected_block_ids=tuple(retention_decision.protected_block_ids),
         recent_keep_block_ids=(),
         sketch_topk_keep_block_ids=(),
+        sketch_span_anchor_block_ids=(),
+        sketch_span_keep_block_ids=(),
         old_block_score_pairs=(),
         missing_score_block_ids=(),
+        retention_ratio_numerator=len(visible_after),
+        retention_ratio_denominator=len(row),
+        contiguous_span_count=_retention_shape_metrics(row, visible_after)[0],
+        max_gap_between_kept_blocks=_retention_shape_metrics(row, visible_after)[1],
         filtered_row_changed=changed,
         noop_reason=noop_reason,
         blocker_reasons=(
@@ -931,6 +1137,11 @@ def current_kivo_runtime_block_table_apply_config(
         ),
         sketch_topk_blocks=_parse_int_env(
             "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK", default=0, minimum=0
+        ),
+        sketch_span_radius=_parse_int_env(
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS",
+            default=0,
+            minimum=0,
         ),
     )
 
@@ -1074,6 +1285,7 @@ def build_runtime_block_table_apply_summary(
             keep_recent_blocks=config.keep_recent_blocks,
             max_full_blocks=config.max_full_blocks,
             sketch_topk_blocks=config.sketch_topk_blocks,
+            sketch_span_radius=config.sketch_span_radius,
             kv_sketch_runtime=kv_sketch_runtime,
             kv_cache_tensor=kv_cache_tensor,
         )

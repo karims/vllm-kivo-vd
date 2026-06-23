@@ -458,6 +458,138 @@ def test_sketch_topk_candidate_demote_excludes_recent_and_sketch_kept_old():
     assert plan.candidate_demote_block_ids == (11, 12)
 
 
+def test_sketch_span_topk_keeps_recent_blocks():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_span_topk", 1, 4, True, 1, 1
+        ),
+    )
+    assert summary.applied_row_count == 1
+    assert batch.block_table[0].get_row_block_ids(0)[-1:] == (13,)
+
+
+def test_sketch_span_topk_keeps_anchor_and_neighbors():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_span_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=4,
+        sketch_topk_blocks=1,
+        sketch_span_radius=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.sketch_span_anchor_block_ids == (11,)
+    assert plan.sketch_span_keep_block_ids == (10, 11, 12)
+    assert plan.visible_after_block_ids == (10, 11, 12, 13)
+
+
+def test_sketch_span_topk_preserves_original_order():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_span_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=3,
+        sketch_topk_blocks=1,
+        sketch_span_radius=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids in {(10, 11, 13), (11, 12, 13)}
+    assert plan.visible_after_block_ids == tuple(
+        block_id
+        for block_id in (10, 11, 12, 13)
+        if block_id in set(plan.visible_after_block_ids)
+    )
+
+
+def test_sketch_span_topk_respects_max_full_blocks_cap():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_span_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=2,
+        sketch_topk_blocks=1,
+        sketch_span_radius=2,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids == (11, 13)
+    assert plan.sketch_span_keep_block_ids == (11,)
+
+
+def test_sketch_span_topk_missing_scores_falls_back_safely():
+    runtime = _make_sketch_runtime()
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_span_topk",
+        keep_recent_blocks=2,
+        max_full_blocks=4,
+        sketch_topk_blocks=1,
+        sketch_span_radius=1,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.visible_after_block_ids == (12, 13)
+    assert plan.sketch_span_anchor_block_ids == ()
+
+
+def test_sketch_span_topk_trace_includes_span_fields(monkeypatch, tmp_path):
+    trace_file = tmp_path / "span_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_file))
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    build_runtime_block_table_apply_summary(
+        _make_input_batch(),
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "sketch_span_topk", 1, 4, True, 1, 1
+        ),
+    )
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["sketch_span_anchor_block_ids"] == [11]
+    assert record["sketch_span_keep_block_ids"] == [10, 11, 12]
+    assert record["retention_ratio"] == 1.0
+    assert record["contiguous_span_count"] == 1
+    assert record["max_gap_between_kept_blocks"] == 0
+
+
+def test_sketch_span_topk_derived_diagnostics_are_computed():
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=10, score=9.0)
+    _store_fake_sketch_score(runtime, block_id=12, score=8.0)
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="sketch_span_topk",
+        keep_recent_blocks=1,
+        max_full_blocks=3,
+        sketch_topk_blocks=2,
+        sketch_span_radius=0,
+        kv_sketch_runtime=runtime,
+        kv_cache_tensor=None,
+    )
+    assert plan.retention_ratio_numerator == 3
+    assert plan.retention_ratio_denominator == 4
+    assert plan.contiguous_span_count == 2
+    assert plan.max_gap_between_kept_blocks == 1
+
+
 def test_summary_reports_attempted_applied_blocked_counts():
     clear_block_scores()
     batch = _make_input_batch()
