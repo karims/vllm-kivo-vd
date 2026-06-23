@@ -62,6 +62,8 @@ if TYPE_CHECKING:
 
 _DEFAULT_ACTION = "off"
 _SUPPORTED_POLICIES = {
+    "apply_noop",
+    "drop_one_oldest",
     "recent_only",
     "prefix_recent",
     "countsketch_online",
@@ -786,6 +788,108 @@ def _plan_runtime_filtered_row(
             filtered_row_changed=False,
             noop_reason="filtered_row_noop_padding_ambiguity",
             blocker_reasons={"padding_zero_ambiguous": zero_count},
+        )
+
+    if policy == "apply_noop":
+        increment_kivo_demotion_counter("filtered_row_apply_noop")
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(row),
+            last_filtered_drop_count=0,
+            last_filtered_drop_ids_sample=(),
+            last_filtered_keep_ids_sample=_sample_block_ids(row),
+            last_retention_ratio_numerator=len(row),
+            last_retention_ratio_denominator=len(row),
+            last_contiguous_span_count=1 if row else 0,
+            last_max_gap_between_kept_blocks=0,
+        )
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=row,
+            candidate_demote_block_ids=(),
+            protected_block_ids=row,
+            recent_keep_block_ids=(),
+            sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
+            old_block_score_pairs=(),
+            missing_score_block_ids=(),
+            retention_ratio_numerator=len(row),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=1 if row else 0,
+            max_gap_between_kept_blocks=0,
+            filtered_row_changed=False,
+            noop_reason="filtered_row_noop_identity",
+            blocker_reasons={"filtered_row_noop_identity": 1},
+        )
+
+    if policy == "drop_one_oldest":
+        if len(row) <= 1:
+            increment_kivo_demotion_counter("filtered_row_apply_noop")
+            increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+            set_kivo_demotion_counter_fields(
+                last_filtered_keep_count=len(row),
+                last_filtered_drop_count=0,
+                last_filtered_drop_ids_sample=(),
+                last_filtered_keep_ids_sample=_sample_block_ids(row),
+                last_retention_ratio_numerator=len(row),
+                last_retention_ratio_denominator=len(row),
+                last_contiguous_span_count=1 if row else 0,
+                last_max_gap_between_kept_blocks=0,
+            )
+            return KivoRuntimeFilteredRowPlan(
+                visible_before_block_ids=row,
+                visible_after_block_ids=row,
+                candidate_demote_block_ids=(),
+                protected_block_ids=row,
+                recent_keep_block_ids=(),
+                sketch_topk_keep_block_ids=(),
+                sketch_span_anchor_block_ids=(),
+                sketch_span_keep_block_ids=(),
+                old_block_score_pairs=(),
+                missing_score_block_ids=(),
+                retention_ratio_numerator=len(row),
+                retention_ratio_denominator=len(row),
+                contiguous_span_count=1 if row else 0,
+                max_gap_between_kept_blocks=0,
+                filtered_row_changed=False,
+                noop_reason="filtered_row_noop_not_enough_blocks",
+                blocker_reasons={"filtered_row_noop_not_enough_blocks": 1},
+            )
+        visible_after = tuple(row[1:])
+        candidate_drop = (row[0],)
+        contiguous_span_count, max_gap = _retention_shape_metrics(row, visible_after)
+        increment_kivo_demotion_counter("filtered_row_changed_count")
+        increment_kivo_demotion_counter("filtered_row_candidate_drop_count", 1)
+        increment_kivo_demotion_counter("filtered_row_plan_succeeded")
+        set_kivo_demotion_counter_fields(
+            last_filtered_keep_count=len(visible_after),
+            last_filtered_drop_count=1,
+            last_filtered_drop_ids_sample=_sample_block_ids(candidate_drop),
+            last_filtered_keep_ids_sample=_sample_block_ids(visible_after),
+            last_retention_ratio_numerator=len(visible_after),
+            last_retention_ratio_denominator=len(row),
+            last_contiguous_span_count=contiguous_span_count,
+            last_max_gap_between_kept_blocks=max_gap,
+        )
+        return KivoRuntimeFilteredRowPlan(
+            visible_before_block_ids=row,
+            visible_after_block_ids=visible_after,
+            candidate_demote_block_ids=candidate_drop,
+            protected_block_ids=visible_after,
+            recent_keep_block_ids=(),
+            sketch_topk_keep_block_ids=(),
+            sketch_span_anchor_block_ids=(),
+            sketch_span_keep_block_ids=(),
+            old_block_score_pairs=(),
+            missing_score_block_ids=(),
+            retention_ratio_numerator=len(visible_after),
+            retention_ratio_denominator=len(row),
+            contiguous_span_count=contiguous_span_count,
+            max_gap_between_kept_blocks=max_gap,
+            filtered_row_changed=True,
+            noop_reason=None,
+            blocker_reasons={},
         )
 
     if policy == "recent_only":

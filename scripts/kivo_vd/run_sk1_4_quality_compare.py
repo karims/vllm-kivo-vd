@@ -30,6 +30,8 @@ from scripts.kivo_vd.run_source_s5_19_demotable_transport_probe import (  # noqa
 )
 
 BASELINE_MODE = "baseline"
+APPLY_NOOP_MODE = "apply_noop"
+DROP_ONE_OLDEST_MODE = "drop_one_oldest"
 RECENT_ONLY_MODE = "recent_only"
 PREFIX_RECENT_MODE = "prefix_recent"
 RANDOM_PROJECTION_MODE = "random_projection"
@@ -37,6 +39,8 @@ SKETCH_TOPK_MODE = "sketch_topk"
 SKETCH_SPAN_TOPK_MODE = "sketch_span_topk"
 MODE_ORDER = [
     BASELINE_MODE,
+    APPLY_NOOP_MODE,
+    DROP_ONE_OLDEST_MODE,
     RECENT_ONLY_MODE,
     PREFIX_RECENT_MODE,
     RANDOM_PROJECTION_MODE,
@@ -90,6 +94,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sketch-topk", type=int, default=2)
     parser.add_argument("--span-radius", type=int, default=1)
     parser.add_argument("--geometry-sweep", action="store_true")
+    parser.add_argument("--integrity-sweep", action="store_true")
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
     parser.add_argument("--trace-retention", action="store_true")
@@ -210,6 +215,13 @@ def build_mode_env(
     effective_span_radius = (
         args.span_radius if span_radius is None else span_radius
     )
+    policy_mode = {
+        APPLY_NOOP_MODE: APPLY_NOOP_MODE,
+        DROP_ONE_OLDEST_MODE: DROP_ONE_OLDEST_MODE,
+        PREFIX_RECENT_MODE: PREFIX_RECENT_MODE,
+        SKETCH_TOPK_MODE: SKETCH_TOPK_MODE,
+        SKETCH_SPAN_TOPK_MODE: SKETCH_SPAN_TOPK_MODE,
+    }.get(mode, RECENT_ONLY_MODE)
     base = {
         "KIVO_KV_DEMOTION_COUNTERS_ENABLE": "1",
         "KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE": counter_export_file,
@@ -223,21 +235,7 @@ def build_mode_env(
         {
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ACTION": "apply_block_table_only",
-            "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": (
-                (
-                    SKETCH_SPAN_TOPK_MODE
-                    if mode == SKETCH_SPAN_TOPK_MODE
-                    else (
-                        PREFIX_RECENT_MODE
-                        if mode == PREFIX_RECENT_MODE
-                        else (
-                            SKETCH_TOPK_MODE
-                            if mode == SKETCH_TOPK_MODE
-                            else RECENT_ONLY_MODE
-                        )
-                    )
-                )
-            ),
+            "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY": policy_mode,
             "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS": str(effective_keep_recent),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_PREFIX_BLOCKS": str(effective_keep_prefix),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS": str(effective_max_full),
@@ -341,6 +339,31 @@ def summarize_quality_counters(counters: dict[str, Any] | None) -> dict[str, Any
 
 
 def build_mode_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.integrity_sweep:
+        return [
+            {"label": BASELINE_MODE, "mode": BASELINE_MODE, "params": {}},
+            {"label": APPLY_NOOP_MODE, "mode": APPLY_NOOP_MODE, "params": {}},
+            {
+                "label": DROP_ONE_OLDEST_MODE,
+                "mode": DROP_ONE_OLDEST_MODE,
+                "params": {},
+            },
+            {
+                "label": "recent_only_k32",
+                "mode": RECENT_ONLY_MODE,
+                "params": {"keep_recent_blocks": 32, "max_full_blocks": 32},
+            },
+            {
+                "label": "recent_only_k40",
+                "mode": RECENT_ONLY_MODE,
+                "params": {"keep_recent_blocks": 40, "max_full_blocks": 40},
+            },
+            {
+                "label": "recent_only_k44",
+                "mode": RECENT_ONLY_MODE,
+                "params": {"keep_recent_blocks": 44, "max_full_blocks": 44},
+            },
+        ]
     if not args.geometry_sweep:
         return [{"label": mode, "mode": mode, "params": {}} for mode in MODE_ORDER]
     return [
@@ -669,6 +692,7 @@ def run_quality_compare(args: argparse.Namespace) -> dict[str, Any]:
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
             "geometry_sweep": args.geometry_sweep,
+            "integrity_sweep": args.integrity_sweep,
             "trace_retention": args.trace_retention,
             "prompt_repeats": args.prompt_repeats,
             "seed": args.seed,

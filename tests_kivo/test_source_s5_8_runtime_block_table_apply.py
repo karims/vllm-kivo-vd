@@ -393,6 +393,87 @@ def test_prefix_recent_trace_includes_prefix_fields(
     assert record["retention_ratio"] == 1.0
 
 
+def test_apply_noop_preserves_input_block_ids_exactly() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="apply_noop",
+        keep_recent_blocks=2,
+        max_full_blocks=2,
+    )
+    assert plan.visible_after_block_ids == (10, 11, 12, 13)
+    assert plan.candidate_demote_block_ids == ()
+
+
+def test_apply_noop_trace_diagnostics_are_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "apply_noop_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_path))
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "apply_noop", 2, 4, True
+        ),
+    )
+    assert summary.applied_row_count == 1
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["policy"] == "apply_noop"
+    assert record["visible_before_count"] == 4
+    assert record["visible_after_count"] == 4
+    assert record["candidate_demote_count"] == 0
+    assert record["retention_ratio"] == 1.0
+    assert record["contiguous_span_count"] == 1
+    assert record["max_gap_between_kept_blocks"] == 0
+
+
+def test_drop_one_oldest_drops_exactly_one_block_when_possible() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(10, 11, 12, 13),
+        policy="drop_one_oldest",
+        keep_recent_blocks=2,
+        max_full_blocks=4,
+    )
+    assert plan.visible_after_block_ids == (11, 12, 13)
+    assert plan.candidate_demote_block_ids == (10,)
+
+
+def test_drop_one_oldest_preserves_order_of_remaining_blocks() -> None:
+    plan = _plan_runtime_filtered_row(
+        original_row=(100, 101, 102, 103, 104),
+        policy="drop_one_oldest",
+        keep_recent_blocks=2,
+        max_full_blocks=5,
+    )
+    assert plan.visible_after_block_ids == (101, 102, 103, 104)
+
+
+def test_drop_one_oldest_trace_diagnostics_are_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "drop_one_oldest_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_path))
+    batch = _make_input_batch()
+    summary = build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "drop_one_oldest", 2, 4, True
+        ),
+    )
+    assert summary.applied_row_count == 1
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["policy"] == "drop_one_oldest"
+    assert record["candidate_demote_count"] == 1
+    assert record["candidate_demote_block_ids"] == [10]
+    assert record["retention_ratio"] == 0.75
+
+
 def test_sketch_topk_missing_kv_cache_falls_back_safely():
     runtime = _make_sketch_runtime()
     plan = _plan_runtime_filtered_row(

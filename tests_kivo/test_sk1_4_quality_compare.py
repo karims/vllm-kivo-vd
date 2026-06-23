@@ -30,6 +30,7 @@ def test_parse_args_defaults() -> None:
     assert args.sketch_topk == 2
     assert args.span_radius == 1
     assert args.geometry_sweep is False
+    assert args.integrity_sweep is False
     assert args.sketch_dim == 16
     assert args.trace_retention is False
     assert args.retention_trace_file is None
@@ -46,6 +47,30 @@ def test_build_mode_env_baseline_only_has_counter_export() -> None:
     assert env["KIVO_KV_DEMOTION_COUNTERS_EXPORT_FILE"] == "/tmp/counters.json"
     assert "KIVO_KV_SKETCH_ENABLE" not in env
     assert "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE" not in env
+
+
+def test_build_mode_env_apply_noop_sets_identity_policy() -> None:
+    module = _load_module()
+    args = module.parse_args([])
+    env = module.build_mode_env(
+        module.APPLY_NOOP_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "apply_noop"
+    assert "KIVO_KV_SKETCH_ENABLE" not in env
+
+
+def test_build_mode_env_drop_one_oldest_sets_policy() -> None:
+    module = _load_module()
+    args = module.parse_args([])
+    env = module.build_mode_env(
+        module.DROP_ONE_OLDEST_MODE,
+        args=args,
+        counter_export_file="/tmp/counters.json",
+    )
+    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_POLICY"] == "drop_one_oldest"
+    assert "KIVO_KV_SKETCH_ENABLE" not in env
 
 
 def test_build_mode_env_prefix_recent_sets_prefix_and_recent_flags() -> None:
@@ -284,6 +309,21 @@ def test_build_mode_specs_geometry_sweep_contains_expected_labels() -> None:
         "prefix_recent_p4_k16",
         "sketch_span_topk_k8_top4_span1_max16",
         "sketch_span_topk_k16_top4_span1_max24",
+    ]
+
+
+def test_build_mode_specs_integrity_sweep_contains_expected_labels() -> None:
+    module = _load_module()
+    args = module.parse_args(["--integrity-sweep"])
+    specs = module.build_mode_specs(args)
+    labels = [spec["label"] for spec in specs]
+    assert labels == [
+        "baseline",
+        "apply_noop",
+        "drop_one_oldest",
+        "recent_only_k32",
+        "recent_only_k40",
+        "recent_only_k44",
     ]
 
 
