@@ -22,6 +22,8 @@ from vllm.v1.worker.kivo_kv_sketch_runtime import (
 )
 from vllm.v1.worker.kivo_runtime_block_table_apply import (
     KivoRuntimeBlockTableApplyConfig,
+    _estimated_visible_token_capacity,
+    _kept_block_ids_are_contiguous,
     _plan_runtime_filtered_row,
     build_runtime_block_table_apply_summary,
     maybe_build_kivo_demotion_command_after_runtime_apply,
@@ -563,6 +565,18 @@ def test_drop_one_before_recent_noop_when_no_old_block_exists() -> None:
     assert plan.single_drop_position == "none"
 
 
+def test_kept_block_ids_contiguous_helper_true() -> None:
+    assert _kept_block_ids_are_contiguous((10, 11, 12, 13), (11, 12)) is True
+
+
+def test_kept_block_ids_contiguous_helper_false() -> None:
+    assert _kept_block_ids_are_contiguous((10, 11, 12, 13), (10, 13)) is False
+
+
+def test_estimated_visible_token_capacity_helper() -> None:
+    assert _estimated_visible_token_capacity(4, 16) == 64
+
+
 def test_trace_rows_include_single_drop_fields_for_middle(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -583,6 +597,31 @@ def test_trace_rows_include_single_drop_fields_for_middle(
     assert record["single_drop_position"] == "middle"
     assert record["single_drop_index"] == 2
     assert record["single_drop_block_id"] == 12
+
+
+def test_trace_includes_metadata_geometry_fields_for_apply_noop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "apply_noop_metadata_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_path))
+    batch = _make_input_batch()
+    build_runtime_block_table_apply_summary(
+        batch,
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True, "apply_block_table_only", "apply_noop", 2, 4, True
+        ),
+    )
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["block_size"] == 16
+    assert record["row_block_count_before"] == 4
+    assert record["row_block_count_after"] == 4
+    assert record["estimated_visible_token_capacity_before"] == 64
+    assert record["estimated_visible_token_capacity_after"] == 64
+    assert record["kept_block_ids_contiguous"] is True
+    assert record["logical_positions_compacted"] is False
 
 
 def test_sketch_topk_missing_kv_cache_falls_back_safely():

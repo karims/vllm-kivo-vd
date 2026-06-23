@@ -213,6 +213,7 @@ from vllm.v1.worker.kivo_attention_metadata_observer import (
 from vllm.v1.core.kivo_demotion_counters import (
     export_kivo_demotion_counters_snapshot_if_enabled,
     increment_kivo_demotion_counter,
+    set_kivo_demotion_counter_fields,
 )
 from vllm.v1.worker.kv_connector_model_runner_mixin import KVConnectorModelRunnerMixin
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
@@ -2111,10 +2112,19 @@ class GPUModelRunner(
         self.seq_lens[num_reqs:].fill_(0)
 
         self._maybe_apply_kivo_runtime_block_table_before_slot_mapping(num_reqs)
+        # Kivo block-table filtering happens before slot mapping is recomputed.
+        # This preserves the original logical positions/seq_lens for the step,
+        # while changing which physical KV blocks remain visible. Arbitrary
+        # block removal may therefore be attention-invalid unless future work
+        # updates position/mask semantics together with block visibility.
         self.input_batch.block_table.compute_slot_mapping(
             num_reqs,
             self.query_start_loc.gpu[: num_reqs + 1],
             self.positions[:total_num_scheduled_tokens],
+        )
+        self._record_kivo_attention_metadata_diagnostics(
+            num_reqs=num_reqs,
+            total_num_scheduled_tokens=total_num_scheduled_tokens,
         )
 
         # Copy the tensors to the GPU.
@@ -2228,6 +2238,52 @@ class GPUModelRunner(
             return None
         layer_name = layer_names[0]
         return self._kivo_kv_caches_by_layer.get(layer_name)
+
+    def _record_kivo_attention_metadata_diagnostics(
+        self,
+        *,
+        num_reqs: int,
+        total_num_scheduled_tokens: int,
+    ) -> None:
+        summary = self._last_kivo_runtime_block_table_apply_summary
+        if summary is None or not summary.enabled:
+            return
+        query_start_loc_sample = tuple(
+            int(x)
+            for x in self.query_start_loc.cpu[: min(num_reqs + 1, 8)].tolist()
+        )
+        seq_lens_sample = tuple(
+            int(x)
+            for x in self.seq_lens[: min(num_reqs, 8)].detach().cpu().tolist()
+        )
+        positions_sample = tuple(
+            int(x)
+            for x in self.positions[
+                : min(total_num_scheduled_tokens, 16)
+            ].detach().cpu().tolist()
+        )
+        slot_mapping_sample = tuple(
+            int(x)
+            for x in self.input_batch.block_table[0].slot_mapping.gpu[
+                : min(total_num_scheduled_tokens, 16)
+            ].detach().cpu().tolist()
+        )
+        max_seq_len_upper_bound = (
+            int(self.optimistic_seq_lens_cpu[:num_reqs].max().item())
+            if num_reqs > 0
+            else 0
+        )
+        set_kivo_demotion_counter_fields(
+            last_attention_num_tokens=total_num_scheduled_tokens,
+            last_attention_num_reqs=num_reqs,
+            last_attention_max_seq_len_upper_bound=max_seq_len_upper_bound,
+            last_attention_query_start_loc_sample=query_start_loc_sample,
+            last_attention_seq_lens_sample=seq_lens_sample,
+            last_attention_positions_sample=positions_sample,
+            last_slot_mapping_length=total_num_scheduled_tokens,
+            last_slot_mapping_sample=slot_mapping_sample,
+            last_logical_positions_compacted=False,
+        )
 
     def _build_attention_metadata(
         self,

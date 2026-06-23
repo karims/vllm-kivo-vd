@@ -234,11 +234,38 @@ def _retention_shape_metrics(
     return contiguous_span_count, max_gap
 
 
+def _kept_block_ids_are_contiguous(
+    row: Sequence[int],
+    kept_block_ids: Sequence[int],
+) -> bool:
+    if not kept_block_ids:
+        return True
+    keep_set = set(int(block_id) for block_id in kept_block_ids)
+    kept_indices = [
+        idx for idx, block_id in enumerate(row) if int(block_id) in keep_set
+    ]
+    if not kept_indices:
+        return True
+    first = kept_indices[0]
+    last = kept_indices[-1]
+    return kept_indices == list(range(first, last + 1))
+
+
+def _estimated_visible_token_capacity(
+    block_count: int,
+    block_size: int | None,
+) -> int | None:
+    if block_size is None or block_size <= 0:
+        return None
+    return int(block_count) * int(block_size)
+
+
 def _write_retention_trace(
     *,
     request_id: str | None,
     policy: str,
     plan: KivoRuntimeFilteredRowPlan,
+    block_size: int | None = None,
 ) -> None:
     if not _trace_retained_blocks_enabled():
         return
@@ -249,6 +276,7 @@ def _write_retention_trace(
     payload = {
         "request_id": request_id,
         "policy": policy,
+        "block_size": block_size,
         "visible_before_count": len(plan.visible_before_block_ids),
         "visible_before_block_ids": list(
             _truncate_block_ids(plan.visible_before_block_ids, limit=limit)
@@ -292,6 +320,18 @@ def _write_retention_trace(
         "final_block_order": list(
             _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
         ),
+        "row_block_count_before": len(plan.visible_before_block_ids),
+        "row_block_count_after": len(plan.visible_after_block_ids),
+        "estimated_visible_token_capacity_before": _estimated_visible_token_capacity(
+            len(plan.visible_before_block_ids), block_size
+        ),
+        "estimated_visible_token_capacity_after": _estimated_visible_token_capacity(
+            len(plan.visible_after_block_ids), block_size
+        ),
+        "kept_block_ids_contiguous": _kept_block_ids_are_contiguous(
+            plan.visible_before_block_ids, plan.visible_after_block_ids
+        ),
+        "logical_positions_compacted": False,
         "retention_ratio": (
             float(plan.retention_ratio_numerator) / float(plan.retention_ratio_denominator)
             if plan.retention_ratio_denominator > 0
@@ -1575,10 +1615,34 @@ def build_runtime_block_table_apply_summary(
             kv_sketch_runtime=kv_sketch_runtime,
             kv_cache_tensor=kv_cache_tensor,
         )
+        block_size = int(input_batch.block_table[kv_cache_gid].block_size)
+        set_kivo_demotion_counter_fields(
+            last_block_size=block_size,
+            last_row_block_count_before=len(original_row),
+            last_row_block_count_after=len(
+                filtered_row_plan.visible_after_block_ids
+            ),
+            last_visible_token_capacity_before=(
+                _estimated_visible_token_capacity(len(original_row), block_size) or 0
+            ),
+            last_visible_token_capacity_after=(
+                _estimated_visible_token_capacity(
+                    len(filtered_row_plan.visible_after_block_ids),
+                    block_size,
+                )
+                or 0
+            ),
+            last_kept_block_ids_contiguous=_kept_block_ids_are_contiguous(
+                original_row,
+                filtered_row_plan.visible_after_block_ids,
+            ),
+            last_logical_positions_compacted=False,
+        )
         _write_retention_trace(
             request_id=req_id,
             policy=config.policy,
             plan=filtered_row_plan,
+            block_size=block_size,
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,

@@ -338,6 +338,44 @@ def test_summarize_quality_counters_includes_prefix_recent_fields() -> None:
     assert summary["last_prefix_recent_keep_ids_sample"] == [1, 2, 40, 41]
 
 
+def test_summarize_quality_counters_includes_attention_metadata_fields() -> None:
+    module = _load_module()
+    summary = module.summarize_quality_counters(
+        {
+            "last_block_size": 16,
+            "last_row_block_count_before": 44,
+            "last_row_block_count_after": 40,
+            "last_visible_token_capacity_before": 704,
+            "last_visible_token_capacity_after": 640,
+            "last_kept_block_ids_contiguous": False,
+            "last_logical_positions_compacted": False,
+            "last_attention_num_tokens": 8,
+            "last_attention_num_reqs": 1,
+            "last_attention_max_seq_len_upper_bound": 632,
+            "last_attention_query_start_loc_sample": (0, 8),
+            "last_attention_seq_lens_sample": (632,),
+            "last_attention_positions_sample": (624, 625, 626),
+            "last_slot_mapping_length": 8,
+            "last_slot_mapping_sample": (1, 2, 3),
+        }
+    )
+    assert summary["last_block_size"] == 16
+    assert summary["last_row_block_count_before"] == 44
+    assert summary["last_row_block_count_after"] == 40
+    assert summary["last_visible_token_capacity_before"] == 704
+    assert summary["last_visible_token_capacity_after"] == 640
+    assert summary["last_kept_block_ids_contiguous"] is False
+    assert summary["last_logical_positions_compacted"] is False
+    assert summary["last_attention_num_tokens"] == 8
+    assert summary["last_attention_num_reqs"] == 1
+    assert summary["last_attention_max_seq_len_upper_bound"] == 632
+    assert summary["last_attention_query_start_loc_sample"] == [0, 8]
+    assert summary["last_attention_seq_lens_sample"] == [632]
+    assert summary["last_attention_positions_sample"] == [624, 625, 626]
+    assert summary["last_slot_mapping_length"] == 8
+    assert summary["last_slot_mapping_sample"] == [1, 2, 3]
+
+
 def test_build_mode_specs_defaults_to_full_mode_order() -> None:
     module = _load_module()
     args = module.parse_args([])

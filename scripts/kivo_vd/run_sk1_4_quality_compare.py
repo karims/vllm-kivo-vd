@@ -330,6 +330,49 @@ def summarize_quality_counters(counters: dict[str, Any] | None) -> dict[str, Any
             "last_max_gap_between_kept_blocks": int(
                 counters.get("last_max_gap_between_kept_blocks", 0) or 0
             ),
+            "last_block_size": int(counters.get("last_block_size", 0) or 0),
+            "last_row_block_count_before": int(
+                counters.get("last_row_block_count_before", 0) or 0
+            ),
+            "last_row_block_count_after": int(
+                counters.get("last_row_block_count_after", 0) or 0
+            ),
+            "last_visible_token_capacity_before": int(
+                counters.get("last_visible_token_capacity_before", 0) or 0
+            ),
+            "last_visible_token_capacity_after": int(
+                counters.get("last_visible_token_capacity_after", 0) or 0
+            ),
+            "last_kept_block_ids_contiguous": counters.get(
+                "last_kept_block_ids_contiguous"
+            ),
+            "last_logical_positions_compacted": counters.get(
+                "last_logical_positions_compacted"
+            ),
+            "last_attention_num_tokens": int(
+                counters.get("last_attention_num_tokens", 0) or 0
+            ),
+            "last_attention_num_reqs": int(
+                counters.get("last_attention_num_reqs", 0) or 0
+            ),
+            "last_attention_max_seq_len_upper_bound": int(
+                counters.get("last_attention_max_seq_len_upper_bound", 0) or 0
+            ),
+            "last_attention_query_start_loc_sample": list(
+                counters.get("last_attention_query_start_loc_sample", ()) or ()
+            ),
+            "last_attention_seq_lens_sample": list(
+                counters.get("last_attention_seq_lens_sample", ()) or ()
+            ),
+            "last_attention_positions_sample": list(
+                counters.get("last_attention_positions_sample", ()) or ()
+            ),
+            "last_slot_mapping_length": int(
+                counters.get("last_slot_mapping_length", 0) or 0
+            ),
+            "last_slot_mapping_sample": list(
+                counters.get("last_slot_mapping_sample", ()) or ()
+            ),
             "prefix_recent_prefix_blocks_kept": int(
                 counters.get("prefix_recent_prefix_blocks_kept", 0) or 0
             ),
