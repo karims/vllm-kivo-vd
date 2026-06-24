@@ -27,6 +27,7 @@ def test_parse_args_defaults() -> None:
     assert args.model == "facebook/opt-125m"
     assert args.local_files_only is False
     assert args.sketch_dim == 16
+    assert args.sketch_backend == "random_projection"
     assert args.runtime_policy == "recent_only"
     assert args.max_full_blocks == 2
     assert args.sketch_topk == 2
@@ -152,6 +153,15 @@ def test_smoke_env_sets_offline_flags_when_requested() -> None:
     env = module._smoke_env(args)
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_smoke_env_respects_countsketch_backend() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        ["--output", "out.json", "--sketch-backend", "countsketch"]
+    )
+    env = module._smoke_env(args)
+    assert env["KIVO_KV_SKETCH_BACKEND"] == "countsketch"
 
 
 def test_smoke_env_uses_explicit_counter_export_and_max_full_blocks() -> None:

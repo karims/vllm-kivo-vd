@@ -15,6 +15,7 @@ from vllm.v1.worker.kivo_kv_sketch_runtime import (  # noqa: E402
     KivoKVSketchRuntimeConfig,
     KivoKVSketchStore,
     RandomProjectionKVSketchBackend,
+    countsketch_tensor,
     make_kivo_kv_sketch_backend,
 )
 
@@ -271,7 +272,35 @@ def test_countsketch_output_shape_matches_sketch_dim() -> None:
 
     assert result.success is True
     assert result.record is not None
-    assert tuple(result.record.sketch.shape) == (6,)
+    assert tuple(result.record.sketch.shape) == (4, 6)
+
+
+def test_countsketch_supports_smaller_equal_and_larger_sketch_dims() -> None:
+    vector = torch.arange(64, dtype=torch.float32)
+
+    small = CountSketchKVSketchBackend(sketch_dim=16, seed=11)
+    equal = CountSketchKVSketchBackend(sketch_dim=64, seed=11)
+    large = CountSketchKVSketchBackend(sketch_dim=256, seed=11)
+
+    result_small = small.build_block_sketch(block_id=1, block_tensor=vector)
+    result_equal = equal.build_block_sketch(block_id=1, block_tensor=vector)
+    result_large = large.build_block_sketch(block_id=1, block_tensor=vector)
+
+    assert result_small.success is True
+    assert result_equal.success is True
+    assert result_large.success is True
+    assert tuple(result_small.record.sketch.shape) == (16,)
+    assert tuple(result_equal.record.sketch.shape) == (64,)
+    assert tuple(result_large.record.sketch.shape) == (256,)
+
+
+def test_countsketch_tensor_supports_2d_batch_shape() -> None:
+    tensor = torch.arange(24, dtype=torch.float32).reshape(3, 8)
+
+    sketch = countsketch_tensor(tensor, sketch_dim=16, seed=7)
+
+    assert tuple(sketch.shape) == (3, 16)
+    assert torch.isfinite(sketch).all()
 
 
 def test_countsketch_is_deterministic_for_same_seed() -> None:
@@ -298,6 +327,17 @@ def test_countsketch_changes_with_different_seed() -> None:
     assert result_a.success is True
     assert result_b.success is True
     assert not torch.allclose(result_a.record.sketch, result_b.record.sketch)
+
+
+def test_countsketch_output_is_finite_and_nonzero_for_nonzero_input() -> None:
+    backend = CountSketchKVSketchBackend(sketch_dim=256, seed=11)
+    tensor = torch.arange(1, 65, dtype=torch.float32)
+
+    result = backend.build_block_sketch(block_id=1, block_tensor=tensor)
+
+    assert result.success is True
+    assert torch.isfinite(result.record.sketch).all()
+    assert torch.count_nonzero(result.record.sketch).item() > 0
 
 
 def test_countsketch_inner_product_is_reasonable_estimator() -> None:

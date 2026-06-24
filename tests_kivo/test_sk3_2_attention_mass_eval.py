@@ -156,6 +156,23 @@ def test_countsketch_scoring_is_deterministic_with_seed() -> None:
     assert torch.allclose(a, b)
 
 
+def test_countsketch_backend_supports_sketch_dim_larger_than_input_dim() -> None:
+    query = torch.arange(64, dtype=torch.float32)
+    keys = torch.arange(64 * 8, dtype=torch.float32).reshape(8, 64)
+
+    scores = module.sketch_block_scores(
+        query,
+        keys,
+        block_size=2,
+        backend="countsketch",
+        sketch_dim=256,
+        seed=123,
+    )
+
+    assert tuple(scores.shape) == (4,)
+    assert torch.isfinite(scores).all()
+
+
 def test_aggregation_over_multiple_eval_points_preserves_mass_sum() -> None:
     eval_points = [
         _make_eval_point(
@@ -238,6 +255,29 @@ def test_max_token_score_exact_ranks_matching_block_highest() -> None:
     )
 
     scores = module.max_token_score_exact(query, keys, block_size=2)
+
+    assert module.topk_indices_desc(scores, 1) == [1]
+
+
+def test_countsketch_max_token_ranks_matching_block_highest() -> None:
+    query = torch.tensor([1.0, 0.0], dtype=torch.float32)
+    keys = torch.tensor(
+        [
+            [0.1, 1.0],
+            [0.2, 1.0],
+            [9.0, 0.0],
+            [8.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    scores = module.countsketch_max_token_scores(
+        query,
+        keys,
+        block_size=2,
+        sketch_dim=32,
+        seed=11,
+    )
 
     assert module.topk_indices_desc(scores, 1) == [1]
 

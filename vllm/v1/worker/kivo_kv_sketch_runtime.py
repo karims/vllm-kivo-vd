@@ -239,6 +239,63 @@ def _countsketch_sign_tensor(
     return signs
 
 
+def countsketch_tensor(
+    tensor: torch.Tensor,
+    *,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    """Apply true CountSketch to a 1D or 2D tensor.
+
+    For x in R^d, CountSketch y in R^m is:
+        y[h(i)] += s(i) * x[i]
+
+    This supports m < d, m == d, and m > d.
+    """
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError("tensor must be a torch.Tensor")
+    if tensor.ndim not in (1, 2):
+        raise ValueError("tensor must be 1D or 2D")
+    if tensor.numel() <= 0:
+        raise ValueError("tensor must not be empty")
+    if sketch_dim <= 0:
+        raise ValueError("sketch_dim must be positive")
+
+    input_dim = int(tensor.shape[-1])
+    buckets = _countsketch_bucket_tensor(
+        input_dim,
+        sketch_dim,
+        seed=seed,
+    ).to(device=tensor.device)
+    signs = _countsketch_sign_tensor(
+        input_dim,
+        seed=seed + 1,
+    ).to(device=tensor.device, dtype=tensor.dtype)
+
+    if tensor.ndim == 1:
+        weighted = tensor * signs
+        output = torch.zeros(
+            sketch_dim,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+        output.scatter_add_(0, buckets, weighted)
+        return output
+
+    weighted = tensor * signs.unsqueeze(0)
+    output = torch.zeros(
+        (int(tensor.shape[0]), sketch_dim),
+        dtype=tensor.dtype,
+        device=tensor.device,
+    )
+    output.scatter_add_(
+        1,
+        buckets.unsqueeze(0).expand(int(tensor.shape[0]), -1),
+        weighted,
+    )
+    return output
+
+
 class KivoKVSketchBackend(ABC):
     backend_name: str
 
@@ -429,38 +486,26 @@ class CountSketchKVSketchBackend(KivoKVSketchBackend):
             )
 
         try:
-            flat = block_tensor.detach().reshape(-1).to(torch.float32)
+            detached = block_tensor.detach().to(torch.float32)
         except Exception as exc:
             return self._failure(
                 block_id=block_id,
                 reason=f"unable to flatten block tensor: {type(exc).__name__}",
             )
 
-        input_dim = int(flat.numel())
-        if self.sketch_dim > input_dim:
-            return self._failure(
-                block_id=block_id,
-                reason=(
-                    f"sketch_dim={self.sketch_dim} exceeds input_dim={input_dim}"
-                ),
-            )
+        if detached.ndim <= 2:
+            sketch_input = detached
+            input_dim = int(detached.shape[-1])
+        else:
+            sketch_input = detached.reshape(-1)
+            input_dim = int(sketch_input.shape[-1])
 
         try:
-            buckets = _countsketch_bucket_tensor(
-                input_dim,
-                self.sketch_dim,
+            sketch = countsketch_tensor(
+                sketch_input,
+                sketch_dim=self.sketch_dim,
                 seed=self.seed,
-            ).to(device=flat.device)
-            signs = _countsketch_sign_tensor(
-                input_dim,
-                seed=self.seed + 1,
-            ).to(device=flat.device, dtype=flat.dtype)
-            sketch = torch.zeros(
-                self.sketch_dim,
-                dtype=flat.dtype,
-                device=flat.device,
             )
-            sketch.scatter_add_(0, buckets, flat * signs)
             sketch_cpu = sketch.to(device="cpu", dtype=torch.float32).clone()
         except Exception as exc:
             return self._failure(

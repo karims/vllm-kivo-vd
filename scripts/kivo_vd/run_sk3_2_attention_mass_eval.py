@@ -34,15 +34,18 @@ from vllm.v1.worker.kivo_kv_sketch_runtime import (  # noqa: E402
     CountSketchKVSketchBackend,
     KivoKVSketchBackend,
     RandomProjectionKVSketchBackend,
+    countsketch_tensor,
 )
 
 BACKEND_MEAN_KEY = "mean_key"
 BACKEND_RANDOM_PROJECTION = "random_projection"
 BACKEND_COUNTSKETCH = "countsketch"
 BACKEND_MAX_TOKEN_SCORE_EXACT = "max_token_score_exact"
+BACKEND_COUNTSKETCH_MAX_TOKEN = "countsketch_max_token"
 BACKEND_ALL = "all"
 BACKEND_CHOICES = [
     BACKEND_COUNTSKETCH,
+    BACKEND_COUNTSKETCH_MAX_TOKEN,
     BACKEND_RANDOM_PROJECTION,
     BACKEND_MEAN_KEY,
     BACKEND_MAX_TOKEN_SCORE_EXACT,
@@ -275,6 +278,32 @@ def sketch_block_scores(
     return torch.stack(block_scores)
 
 
+def countsketch_max_token_scores(
+    query: torch.Tensor,
+    keys: torch.Tensor,
+    *,
+    block_size: int,
+    sketch_dim: int,
+    seed: int,
+) -> torch.Tensor:
+    query_sketch = countsketch_tensor(
+        query.to(torch.float32),
+        sketch_dim=sketch_dim,
+        seed=seed,
+    ).to(torch.float32)
+    block_scores = []
+    for block in aggregate_block_vectors(keys.to(torch.float32), block_size):
+        block_token_sketches = countsketch_tensor(
+            block,
+            sketch_dim=sketch_dim,
+            seed=seed,
+        ).to(torch.float32)
+        block_scores.append(torch.max(torch.matmul(block_token_sketches, query_sketch)))
+    if not block_scores:
+        return torch.empty(0, dtype=query.dtype)
+    return torch.stack(block_scores)
+
+
 def topk_indices_desc(scores: torch.Tensor, topk: int) -> list[int]:
     if scores.numel() == 0:
         return []
@@ -368,6 +397,14 @@ def _backend_scores_for_eval_point(
         return mean_key_block_scores(query, keys, block_size)
     if backend == BACKEND_MAX_TOKEN_SCORE_EXACT:
         return max_token_score_exact(query, keys, block_size)
+    if backend == BACKEND_COUNTSKETCH_MAX_TOKEN:
+        return countsketch_max_token_scores(
+            query,
+            keys,
+            block_size=block_size,
+            sketch_dim=sketch_dim,
+            seed=seed,
+        )
     if backend in {BACKEND_RANDOM_PROJECTION, BACKEND_COUNTSKETCH}:
         return sketch_block_scores(
             query,
@@ -605,6 +642,7 @@ def _resolve_backends(backend: str) -> list[str]:
             BACKEND_RANDOM_PROJECTION,
             BACKEND_COUNTSKETCH,
             BACKEND_MAX_TOKEN_SCORE_EXACT,
+            BACKEND_COUNTSKETCH_MAX_TOKEN,
         ]
     return [backend]
 

@@ -57,6 +57,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sketch-dim", type=int, default=16)
     parser.add_argument("--sketch-seed", type=int, default=123)
     parser.add_argument(
+        "--sketch-backend",
+        default="random_projection",
+        choices=("random_projection", "countsketch"),
+    )
+    parser.add_argument(
         "--runtime-policy",
         default="recent_only",
         choices=(
@@ -144,7 +149,7 @@ def _smoke_env(args: argparse.Namespace) -> dict[str, str]:
     )
     env = {
         "KIVO_KV_SKETCH_ENABLE": "1",
-        "KIVO_KV_SKETCH_BACKEND": "random_projection",
+        "KIVO_KV_SKETCH_BACKEND": args.sketch_backend,
         "KIVO_KV_SKETCH_DIM": str(args.sketch_dim),
         "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
         "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
@@ -320,7 +325,10 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 "counter_export_pid": export_pid,
                 "counter_export_file": export_file,
                 "counters": counters,
-                "counter_summary": summarize_sketch_counters(counters),
+                "counter_summary": summarize_sketch_counters(
+                    counters,
+                    expected_backend=args.sketch_backend,
+                ),
                 "error": None,
             }
     except Exception as exc:
@@ -340,7 +348,10 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "counter_export_pid": export_pid,
             "counter_export_file": export_file,
             "counters": counters,
-            "counter_summary": summarize_sketch_counters(counters),
+            "counter_summary": summarize_sketch_counters(
+                counters,
+                expected_backend=args.sketch_backend,
+            ),
             "model_resolution_debug": {
                 "hf_cache_root": str(HF_CACHE_ROOT),
                 "requested_model": args.model,
