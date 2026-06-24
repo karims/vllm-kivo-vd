@@ -72,6 +72,7 @@ _SUPPORTED_POLICIES = {
     "countsketch_online",
     "sketch_topk",
     "sketch_span_topk",
+    "countsketch_score_store_span_topk",
 }
 _COUNTER_SAMPLE_LIMIT = 8
 _EXPORTED_DEMOTION_BLOCK_IDS_BY_REQUEST: dict[str, set[int]] = {}
@@ -260,12 +261,22 @@ def _estimated_visible_token_capacity(
     return int(block_count) * int(block_size)
 
 
+def _scoring_source_for_policy(policy: str) -> str | None:
+    if policy == "countsketch_score_store_span_topk":
+        return "countsketch_score_store"
+    if policy in {"sketch_topk", "sketch_span_topk"}:
+        return "sketch_score_store"
+    return None
+
+
 def _write_retention_trace(
     *,
     request_id: str | None,
     policy: str,
     plan: KivoRuntimeFilteredRowPlan,
     block_size: int | None = None,
+    scoring_source: str | None = None,
+    sketch_backend: str | None = None,
 ) -> None:
     if not _trace_retained_blocks_enabled():
         return
@@ -276,6 +287,8 @@ def _write_retention_trace(
     payload = {
         "request_id": request_id,
         "policy": policy,
+        "scoring_source": scoring_source,
+        "sketch_backend": sketch_backend,
         "block_size": block_size,
         "visible_before_count": len(plan.visible_before_block_ids),
         "visible_before_block_ids": list(
@@ -312,13 +325,40 @@ def _write_retention_trace(
                 plan.old_block_score_pairs, limit=limit
             )
         ],
+        "score_top_blocks_sample": [
+            {"block_id": block_id, "score": score}
+            for block_id, score in _truncate_score_pairs(
+                plan.old_block_score_pairs, limit=limit
+            )
+        ],
         "missing_score_count": len(plan.missing_score_block_ids),
+        "score_nan_count": sum(
+            1
+            for _, score in plan.old_block_score_pairs
+            if score != score
+        ),
         "missing_score_block_ids": list(
             _truncate_block_ids(plan.missing_score_block_ids, limit=limit)
         ),
         "final_block_order_count": len(plan.visible_after_block_ids),
         "final_block_order": list(
             _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
+        ),
+        "final_keep_block_ids_sample": list(
+            _truncate_block_ids(plan.visible_after_block_ids, limit=limit)
+        ),
+        "freed_block_ids_sample": list(
+            _truncate_block_ids(plan.candidate_demote_block_ids, limit=limit)
+        ),
+        "oldest_kept_block": (
+            int(plan.visible_after_block_ids[0])
+            if plan.visible_after_block_ids
+            else None
+        ),
+        "newest_kept_block": (
+            int(plan.visible_after_block_ids[-1])
+            if plan.visible_after_block_ids
+            else None
         ),
         "row_block_count_before": len(plan.visible_before_block_ids),
         "row_block_count_after": len(plan.visible_after_block_ids),
@@ -339,6 +379,9 @@ def _write_retention_trace(
         ),
         "contiguous_span_count": plan.contiguous_span_count,
         "max_gap_between_kept_blocks": plan.max_gap_between_kept_blocks,
+        "kept_blocks_contiguous": _kept_block_ids_are_contiguous(
+            plan.visible_before_block_ids, plan.visible_after_block_ids
+        ),
         "single_drop_position": plan.single_drop_position,
         "single_drop_index": plan.single_drop_index,
         "single_drop_block_id": plan.single_drop_block_id,
@@ -1239,7 +1282,7 @@ def _plan_runtime_filtered_row(
             ),
         )
 
-    if policy == "sketch_span_topk":
+    if policy in {"sketch_span_topk", "countsketch_score_store_span_topk"}:
         keep_recent = min(max(0, keep_recent_blocks), len(row))
         protected_recent = tuple(row[-keep_recent:]) if keep_recent > 0 else ()
         older = tuple(row[:-keep_recent]) if keep_recent > 0 else row
@@ -1340,6 +1383,11 @@ def _plan_runtime_filtered_row(
             last_retention_ratio_denominator=len(row),
             last_contiguous_span_count=contiguous_span_count,
             last_max_gap_between_kept_blocks=max_gap,
+            last_scoring_source=(
+                "countsketch_score_store"
+                if policy == "countsketch_score_store_span_topk"
+                else "sketch_score_store"
+            ),
         )
         noop_reason = None if changed else "filtered_row_noop_no_blocks_above_budget"
         return KivoRuntimeFilteredRowPlan(
@@ -1643,6 +1691,12 @@ def build_runtime_block_table_apply_summary(
             policy=config.policy,
             plan=filtered_row_plan,
             block_size=block_size,
+            scoring_source=_scoring_source_for_policy(config.policy),
+            sketch_backend=(
+                kv_sketch_runtime.backend.backend_name
+                if kv_sketch_runtime is not None
+                else None
+            ),
         )
         sync_decision = build_kivo_kv_sync_apply_decision(
             req_id,

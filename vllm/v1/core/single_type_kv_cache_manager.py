@@ -644,7 +644,9 @@ class SingleTypeKVCacheManager(ABC):
     def clear_kivo_demoted_blocks(self, request_id: str) -> None:
         """Clear Kivo demoted bookkeeping for one request."""
         self.kivo_req_to_demoted_block_ids.pop(request_id, None)
-        self.kivo_req_to_removed_demoted_blocks.pop(request_id, None)
+        removed = getattr(self, "kivo_req_to_removed_demoted_blocks", None)
+        if removed is not None:
+            removed.pop(request_id, None)
 
     def remove_kivo_marked_demoted_blocks_if_safe(
         self,

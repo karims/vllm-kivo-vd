@@ -69,6 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "countsketch_online",
             "sketch_topk",
             "sketch_span_topk",
+            "countsketch_score_store_span_topk",
         ),
     )
     parser.add_argument("--keep-recent-blocks", type=int, default=2)

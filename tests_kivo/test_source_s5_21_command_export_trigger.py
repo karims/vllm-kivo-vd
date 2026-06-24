@@ -6,7 +6,12 @@ from vllm.v1.core.kivo_demotion_counters import (
 )
 from vllm.v1.worker.kivo_runtime_block_table_apply import (
     maybe_build_kivo_demotion_command_after_runtime_apply,
+    reset_kivo_demotion_command_dedupe_state_for_tests,
 )
+
+
+def setup_function():
+    reset_kivo_demotion_command_dedupe_state_for_tests()
 
 
 def _call_helper(**overrides):

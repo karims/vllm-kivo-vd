@@ -97,7 +97,9 @@ def _make_kv_cache(num_blocks: int = 8) -> torch.Tensor:
 
 
 @pytest.fixture(autouse=True)
-def _reset_dedupe_state() -> None:
+def _reset_dedupe_state():
+    reset_kivo_demotion_command_dedupe_state_for_tests()
+    yield
     reset_kivo_demotion_command_dedupe_state_for_tests()
 
 
@@ -866,6 +868,36 @@ def test_sketch_span_topk_trace_includes_span_fields(monkeypatch, tmp_path):
     assert record["retention_ratio"] == 1.0
     assert record["contiguous_span_count"] == 1
     assert record["max_gap_between_kept_blocks"] == 0
+
+
+def test_countsketch_score_store_span_topk_trace_names_scoring_source(
+    monkeypatch, tmp_path
+):
+    trace_file = tmp_path / "countsketch_span_trace.jsonl"
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_RETAINED_BLOCKS", "1")
+    monkeypatch.setenv("KIVO_KV_RUNTIME_BLOCK_TABLE_TRACE_FILE", str(trace_file))
+    runtime = _make_sketch_runtime()
+    _store_fake_sketch_score(runtime, block_id=11, score=9.0)
+    build_runtime_block_table_apply_summary(
+        _make_input_batch(),
+        req_ids=["req0"],
+        slot_mapping_refresh_available=True,
+        kv_sketch_runtime=runtime,
+        config=KivoRuntimeBlockTableApplyConfig(
+            True,
+            "apply_block_table_only",
+            "countsketch_score_store_span_topk",
+            1,
+            4,
+            True,
+            1,
+            1,
+        ),
+    )
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["policy"] == "countsketch_score_store_span_topk"
+    assert record["scoring_source"] == "countsketch_score_store"
+    assert record["score_top_blocks_sample"][0]["block_id"] == 11
 
 
 def test_sketch_span_topk_derived_diagnostics_are_computed():

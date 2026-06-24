@@ -2218,8 +2218,12 @@ class GPUModelRunner(
         summary = maybe_apply_runtime_block_table_before_slot_mapping(
             self.input_batch,
             req_ids=req_ids,
-            kv_sketch_runtime=self._kivo_kv_sketch_runtime,
-            kv_cache_tensor=self._get_kivo_runtime_sketch_kv_cache(0),
+            kv_sketch_runtime=getattr(self, "_kivo_kv_sketch_runtime", None),
+            kv_cache_tensor=(
+                self._get_kivo_runtime_sketch_kv_cache(0)
+                if hasattr(self, "_get_kivo_runtime_sketch_kv_cache")
+                else None
+            ),
         )
         self._last_kivo_runtime_block_table_apply_summary = summary
         return summary

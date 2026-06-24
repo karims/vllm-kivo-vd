@@ -157,6 +157,7 @@ class KivoDemotionCounters:
     last_filtered_row_changed: bool | None = None
     last_keep_recent_blocks: int = 0
     last_policy: str | None = None
+    last_scoring_source: str | None = None
     sketch_backend: str | None = None
     blocker_reasons: dict[str, int] = field(default_factory=dict)
 

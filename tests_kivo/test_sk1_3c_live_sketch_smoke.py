@@ -92,6 +92,22 @@ def test_parse_args_accepts_sketch_span_topk_policy_and_span_radius() -> None:
     assert args.span_radius == 2
 
 
+def test_parse_args_accepts_countsketch_score_store_span_policy() -> None:
+    module = _load_module()
+    args = module.parse_args(
+        [
+            "--output",
+            "out.json",
+            "--runtime-policy",
+            "countsketch_score_store_span_topk",
+            "--sketch-backend",
+            "countsketch",
+        ]
+    )
+    assert args.runtime_policy == "countsketch_score_store_span_topk"
+    assert args.sketch_backend == "countsketch"
+
+
 def test_resolve_model_reference_prefers_existing_local_path(tmp_path: Path) -> None:
     module = _load_module()
     model_dir = tmp_path / "tiny-model"
