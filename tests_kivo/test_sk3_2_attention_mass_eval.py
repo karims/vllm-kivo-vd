@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -126,6 +127,11 @@ def test_query_position_parser_handles_last_last4_and_lists() -> None:
     assert module.resolve_query_position_selection("3,5,-1", 10) == [3, 5, 9]
 
 
+def test_limit_heads_applies_only_requested_cap() -> None:
+    assert module.limit_heads([0, 1, 2, 3], 2) == [0, 1]
+    assert module.limit_heads([0, 1, 2, 3], 0) == [0, 1, 2, 3]
+
+
 def test_countsketch_scoring_is_deterministic_with_seed() -> None:
     query = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
     keys = torch.arange(24, dtype=torch.float32).reshape(6, 4)
@@ -178,6 +184,22 @@ def test_aggregation_over_multiple_eval_points_preserves_mass_sum() -> None:
     )
 
     assert pytest.approx(sum(result["true_mass_by_block"]), rel=1e-6) == 1.0
+
+
+def test_selected_query_attention_mass_matches_weight_then_aggregate() -> None:
+    query = torch.tensor([1.0, 0.0], dtype=torch.float32)
+    keys = torch.tensor(
+        [[4.0, 0.0], [3.0, 0.0], [0.0, 1.0], [0.0, 2.0]],
+        dtype=torch.float32,
+    )
+
+    direct = module.compute_selected_query_attention_mass(query, keys, block_size=2)
+    manual = module.aggregate_block_values(
+        module.compute_true_attention_weights(query, keys),
+        2,
+    )
+
+    assert torch.allclose(direct, manual)
 
 
 def test_topk_metrics_include_recovery_fraction_of_oracle() -> None:
@@ -245,6 +267,90 @@ def test_old_single_layer_head_mode_still_works() -> None:
     assert layer_spec == "last"
     assert head_spec == "0"
     assert query_spec == "last"
+
+
+def test_prepare_input_ids_applies_max_eval_tokens() -> None:
+    class FakeModel:
+        config = SimpleNamespace(n_positions=4096)
+
+    class FakeTokenizer:
+        model_max_length = 4096
+
+        def __call__(self, prompt, return_tensors="pt"):
+            del prompt, return_tensors
+            return {"input_ids": torch.arange(20, dtype=torch.int64).reshape(1, 20)}
+
+    input_ids = module._prepare_input_ids(
+        model=FakeModel(),
+        tokenizer=FakeTokenizer(),
+        prompt="unused",
+        device="cpu",
+        max_model_len=32,
+        max_eval_tokens=12,
+    )
+
+    assert tuple(input_ids.shape) == (1, 12)
+
+
+def test_timing_fields_exist_in_output_payload() -> None:
+    payload = module.build_output_payload(
+        model="synthetic",
+        prompt_kind="synthetic_long",
+        token_count=12,
+        block_size=4,
+        num_blocks=3,
+        selected_layers=[1],
+        selected_heads=[0],
+        selected_query_positions=[11],
+        backend_results={},
+    )
+    payload["load_seconds"] = 0.1
+    payload["forward_seconds"] = 0.2
+    payload["scoring_seconds"] = 0.3
+    payload["total_seconds"] = 0.6
+
+    for field in (
+        "load_seconds",
+        "forward_seconds",
+        "scoring_seconds",
+        "total_seconds",
+    ):
+        assert field in payload
+
+
+def test_qk_projection_helper_shape_logic_with_fake_separate_proj() -> None:
+    class FakeProj(torch.nn.Module):
+        def __init__(self, matrix):
+            super().__init__()
+            self.matrix = matrix
+
+        def forward(self, x):
+            return torch.matmul(x, self.matrix)
+
+    class FakeAttn:
+        def __init__(self):
+            self.q_proj = FakeProj(torch.eye(4, dtype=torch.float32))
+            self.k_proj = FakeProj(torch.eye(4, dtype=torch.float32))
+            self.num_heads = 2
+            self.num_key_value_heads = 2
+
+    fake_layer = SimpleNamespace(self_attn=FakeAttn())
+    fake_model = SimpleNamespace(
+        model=SimpleNamespace(layers=[fake_layer]),
+        config=SimpleNamespace(num_attention_heads=2, num_key_value_heads=2),
+    )
+    hidden_state = torch.arange(12, dtype=torch.float32).reshape(1, 3, 4)
+
+    projection = module._project_layer_qk_from_hidden_state(
+        model=fake_model,
+        hidden_state=hidden_state,
+        layer=0,
+        extraction_mode="separate_qk_proj",
+    )
+
+    assert projection.resolved_mode == "separate_qk_proj"
+    assert tuple(projection.q_by_head.shape) == (3, 2, 2)
+    assert tuple(projection.k_by_kv_head.shape) == (3, 2, 2)
 
 
 def test_output_schema_can_be_built_from_synthetic_tensors() -> None:
