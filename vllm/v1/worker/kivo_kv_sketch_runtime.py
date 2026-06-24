@@ -26,6 +26,9 @@ _PROJECTION_CACHE_LOCK = threading.Lock()
 _PROJECTION_CACHE: dict[
     tuple[int, int, str, str, int], torch.Tensor
 ] = {}
+_COUNTSKETCH_CACHE_LOCK = threading.Lock()
+_COUNTSKETCH_BUCKET_CACHE: dict[tuple[int, int, int], torch.Tensor] = {}
+_COUNTSKETCH_SIGN_CACHE: dict[tuple[int, int], torch.Tensor] = {}
 
 
 def _parse_bool_env(name: str, *, default: bool = False) -> bool:
@@ -182,6 +185,60 @@ def _projection_tensor(
     return projection
 
 
+def _countsketch_bucket_tensor(
+    input_dim: int,
+    sketch_dim: int,
+    *,
+    seed: int,
+) -> torch.Tensor:
+    key = (input_dim, sketch_dim, seed)
+    with _COUNTSKETCH_CACHE_LOCK:
+        cached = _COUNTSKETCH_BUCKET_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    buckets = torch.randint(
+        low=0,
+        high=sketch_dim,
+        size=(input_dim,),
+        generator=generator,
+        dtype=torch.int64,
+        device="cpu",
+    )
+    with _COUNTSKETCH_CACHE_LOCK:
+        _COUNTSKETCH_BUCKET_CACHE[key] = buckets
+    return buckets
+
+
+def _countsketch_sign_tensor(
+    input_dim: int,
+    *,
+    seed: int,
+) -> torch.Tensor:
+    key = (input_dim, seed)
+    with _COUNTSKETCH_CACHE_LOCK:
+        cached = _COUNTSKETCH_SIGN_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    signs = torch.randint(
+        low=0,
+        high=2,
+        size=(input_dim,),
+        generator=generator,
+        dtype=torch.int64,
+        device="cpu",
+    )
+    signs = signs.to(torch.float32).mul_(2.0).sub_(1.0)
+    with _COUNTSKETCH_CACHE_LOCK:
+        _COUNTSKETCH_SIGN_CACHE[key] = signs
+    return signs
+
+
 class KivoKVSketchBackend(ABC):
     backend_name: str
 
@@ -322,6 +379,93 @@ class RandomProjectionKVSketchBackend(KivoKVSketchBackend):
             return self._failure(
                 block_id=block_id,
                 reason=f"projection failed: {type(exc).__name__}",
+            )
+
+        record = KivoKVBlockSketchRecord(
+            block_id=int(block_id),
+            backend=self.backend_name,
+            sketch_dim=self.sketch_dim,
+            sketch=sketch_cpu,
+            source_shape=tuple(int(dim) for dim in block_tensor.shape),
+            source_numel=input_dim,
+            source_dtype=str(block_tensor.dtype),
+            source_device=str(block_tensor.device),
+            kv_kind=kv_kind,
+            num_layers=num_layers,
+            shape_summary=tuple(int(dim) for dim in block_tensor.shape),
+            created_counter=1,
+            updated_counter=1,
+        )
+        original_bytes = int(block_tensor.numel() * block_tensor.element_size())
+        sketch_bytes = int(sketch_cpu.numel() * sketch_cpu.element_size())
+        return self._success(
+            block_id=int(block_id),
+            record=record,
+            original_bytes=original_bytes,
+            sketch_bytes=sketch_bytes,
+        )
+
+
+class CountSketchKVSketchBackend(KivoKVSketchBackend):
+    backend_name = "countsketch"
+
+    def build_block_sketch(
+        self,
+        *,
+        block_id: int,
+        block_tensor: Any,
+        kv_kind: str | None = None,
+        num_layers: int | None = None,
+    ) -> KivoKVSketchBuildResult:
+        if not isinstance(block_tensor, torch.Tensor):
+            return self._failure(
+                block_id=block_id,
+                reason="block_tensor is not a torch.Tensor",
+            )
+        if block_tensor.numel() <= 0:
+            return self._failure(
+                block_id=block_id,
+                reason="block_tensor is empty",
+            )
+
+        try:
+            flat = block_tensor.detach().reshape(-1).to(torch.float32)
+        except Exception as exc:
+            return self._failure(
+                block_id=block_id,
+                reason=f"unable to flatten block tensor: {type(exc).__name__}",
+            )
+
+        input_dim = int(flat.numel())
+        if self.sketch_dim > input_dim:
+            return self._failure(
+                block_id=block_id,
+                reason=(
+                    f"sketch_dim={self.sketch_dim} exceeds input_dim={input_dim}"
+                ),
+            )
+
+        try:
+            buckets = _countsketch_bucket_tensor(
+                input_dim,
+                self.sketch_dim,
+                seed=self.seed,
+            ).to(device=flat.device)
+            signs = _countsketch_sign_tensor(
+                input_dim,
+                seed=self.seed + 1,
+            ).to(device=flat.device, dtype=flat.dtype)
+            sketch = torch.zeros(
+                self.sketch_dim,
+                dtype=flat.dtype,
+                device=flat.device,
+            )
+            sketch.scatter_add_(0, buckets, flat * signs)
+            sketch_cpu = sketch.to(device="cpu", dtype=torch.float32).clone()
+        except Exception as exc:
+            return self._failure(
+                block_id=block_id,
+                reason=f"countsketch failed: {type(exc).__name__}",
             )
 
         record = KivoKVBlockSketchRecord(
@@ -509,6 +653,11 @@ def make_kivo_kv_sketch_backend(
     backend = str(config.backend).strip().lower()
     if backend == "random_projection":
         return RandomProjectionKVSketchBackend(
+            sketch_dim=config.sketch_dim,
+            seed=config.seed,
+        )
+    if backend in {"countsketch", "count_sketch"}:
+        return CountSketchKVSketchBackend(
             sketch_dim=config.sketch_dim,
             seed=config.seed,
         )

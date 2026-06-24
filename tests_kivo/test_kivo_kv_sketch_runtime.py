@@ -10,6 +10,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from vllm.v1.worker.kivo_kv_sketch_runtime import (  # noqa: E402
+    CountSketchKVSketchBackend,
     KivoKVSketchRuntime,
     KivoKVSketchRuntimeConfig,
     KivoKVSketchStore,
@@ -246,3 +247,111 @@ def test_backend_factory_supports_random_projection() -> None:
 
     assert isinstance(backend, RandomProjectionKVSketchBackend)
     assert backend.stats()["sketch_backend"] == "random_projection"
+
+
+def test_runtime_config_from_env_supports_countsketch(monkeypatch) -> None:
+    monkeypatch.setenv("KIVO_KV_SKETCH_ENABLE", "1")
+    monkeypatch.setenv("KIVO_KV_SKETCH_BACKEND", "countsketch")
+    monkeypatch.setenv("KIVO_KV_SKETCH_DIM", "5")
+    monkeypatch.setenv("KIVO_KV_SKETCH_SEED", "17")
+    monkeypatch.setenv("KIVO_KV_SKETCH_MAX_BLOCKS", "3")
+
+    runtime = KivoKVSketchRuntime.from_env()
+
+    assert runtime is not None
+    assert runtime.config.backend == "countsketch"
+    assert isinstance(runtime.backend, CountSketchKVSketchBackend)
+
+
+def test_countsketch_output_shape_matches_sketch_dim() -> None:
+    backend = CountSketchKVSketchBackend(sketch_dim=6, seed=11)
+    tensor = torch.arange(32, dtype=torch.float32).reshape(4, 8)
+
+    result = backend.build_block_sketch(block_id=1, block_tensor=tensor)
+
+    assert result.success is True
+    assert result.record is not None
+    assert tuple(result.record.sketch.shape) == (6,)
+
+
+def test_countsketch_is_deterministic_for_same_seed() -> None:
+    tensor = torch.arange(32, dtype=torch.float32).reshape(4, 8)
+    a = CountSketchKVSketchBackend(sketch_dim=6, seed=11)
+    b = CountSketchKVSketchBackend(sketch_dim=6, seed=11)
+
+    result_a = a.build_block_sketch(block_id=1, block_tensor=tensor)
+    result_b = b.build_block_sketch(block_id=1, block_tensor=tensor)
+
+    assert result_a.success is True
+    assert result_b.success is True
+    assert torch.allclose(result_a.record.sketch, result_b.record.sketch)
+
+
+def test_countsketch_changes_with_different_seed() -> None:
+    tensor = torch.arange(32, dtype=torch.float32).reshape(4, 8)
+    a = CountSketchKVSketchBackend(sketch_dim=6, seed=11)
+    b = CountSketchKVSketchBackend(sketch_dim=6, seed=12)
+
+    result_a = a.build_block_sketch(block_id=1, block_tensor=tensor)
+    result_b = b.build_block_sketch(block_id=1, block_tensor=tensor)
+
+    assert result_a.success is True
+    assert result_b.success is True
+    assert not torch.allclose(result_a.record.sketch, result_b.record.sketch)
+
+
+def test_countsketch_inner_product_is_reasonable_estimator() -> None:
+    dims = 128
+    sketch_dim = 32
+    trials = 32
+    backend = CountSketchKVSketchBackend(sketch_dim=sketch_dim, seed=23)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(101)
+    exact_values = []
+    approx_values = []
+
+    for index in range(trials):
+        x = torch.randn(dims, generator=generator, dtype=torch.float32)
+        y = torch.randn(dims, generator=generator, dtype=torch.float32)
+        sx = backend.build_block_sketch(block_id=index * 2, block_tensor=x)
+        sy = backend.build_block_sketch(block_id=index * 2 + 1, block_tensor=y)
+        assert sx.success is True
+        assert sy.success is True
+        exact_values.append(float(torch.dot(x, y).item()))
+        approx_values.append(float(torch.dot(sx.record.sketch, sy.record.sketch).item()))
+
+    exact = torch.tensor(exact_values, dtype=torch.float32)
+    approx = torch.tensor(approx_values, dtype=torch.float32)
+    correlation = torch.corrcoef(torch.stack([exact, approx]))[0, 1].item()
+    mean_abs_error = torch.mean(torch.abs(exact - approx)).item()
+
+    assert correlation > 0.30
+    assert mean_abs_error < 25.0
+
+
+def test_backend_factory_supports_countsketch() -> None:
+    backend = make_kivo_kv_sketch_backend(
+        KivoKVSketchRuntimeConfig(
+            enabled=True,
+            backend="countsketch",
+            sketch_dim=4,
+            seed=1,
+            max_blocks=2,
+        )
+    )
+
+    assert isinstance(backend, CountSketchKVSketchBackend)
+    assert backend.stats()["sketch_backend"] == "countsketch"
+
+
+def test_backend_factory_rejects_invalid_backend() -> None:
+    with pytest.raises(ValueError, match="Unsupported live KV sketch backend"):
+        make_kivo_kv_sketch_backend(
+            KivoKVSketchRuntimeConfig(
+                enabled=True,
+                backend="not_real",
+                sketch_dim=4,
+                seed=1,
+                max_blocks=2,
+            )
+        )
