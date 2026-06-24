@@ -282,6 +282,28 @@ def test_countsketch_max_token_ranks_matching_block_highest() -> None:
     assert module.topk_indices_desc(scores, 1) == [1]
 
 
+def test_countsketch_max_token_supports_large_sketch_dim() -> None:
+    query = torch.arange(64, dtype=torch.float32)
+    keys = torch.arange(64 * 8, dtype=torch.float32).reshape(8, 64)
+
+    scores = module.countsketch_max_token_scores(
+        query,
+        keys,
+        block_size=2,
+        sketch_dim=256,
+        seed=123,
+    )
+
+    assert tuple(scores.shape) == (4,)
+    assert torch.isfinite(scores).all()
+
+
+def test_backend_all_includes_countsketch_max_token() -> None:
+    backends = module._resolve_backends(module.BACKEND_ALL)
+
+    assert module.BACKEND_COUNTSKETCH_MAX_TOKEN in backends
+
+
 def test_old_single_layer_head_mode_still_works() -> None:
     args = module.parse_args(
         [
