@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import re
 import sys
@@ -38,7 +39,6 @@ BASELINE_MODE = "baseline"
 SKETCH_BUILD_ONLY_MODE = "sketch_build_only_countsketch"
 SAFE_MODE = "countsketch_span_safe"
 DEFAULT_MODE = "countsketch_span_default"
-AGGRESSIVE_MODE = "countsketch_span_aggressive"
 COUNTSKETCH_POLICY = "countsketch_score_store_span_topk"
 SCORING_SOURCE = "countsketch_score_store"
 
@@ -68,14 +68,6 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
         "max_full_blocks": 32,
         "free_enabled": True,
     },
-    AGGRESSIVE_MODE: {
-        "action": "apply_block_table_only",
-        "keep_recent_blocks": 12,
-        "sketch_topk": 6,
-        "span_radius": 1,
-        "max_full_blocks": 24,
-        "free_enabled": True,
-    },
 }
 
 
@@ -86,14 +78,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--output", default="/tmp/sk3_5_countsketch_verdict.json")
     parser.add_argument("--trace-output", default=None)
+    parser.add_argument("--trace-dir", default=None)
     parser.add_argument("--counter-export-dir", default=None)
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--max-tokens", type=int, default=64)
-    parser.add_argument("--max-model-len", type=int, default=1024)
-    parser.add_argument("--max-num-batched-tokens", type=int, default=1024)
+    parser.add_argument("--max-model-len", type=int, default=1536)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=1536)
     parser.add_argument("--max-num-seqs", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.10)
-    parser.add_argument("--prompt-repeats", type=int, default=48)
+    parser.add_argument("--prompt-repeats", type=int, default=80)
+    parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--sketch-backend", default="countsketch")
     parser.add_argument("--sketch-dim", type=int, default=256)
     parser.add_argument("--sketch-seed", type=int, default=123)
@@ -105,7 +99,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                 SKETCH_BUILD_ONLY_MODE,
                 SAFE_MODE,
                 DEFAULT_MODE,
-                AGGRESSIVE_MODE,
             ]
         ),
     )
@@ -116,57 +109,46 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_verdict_prompts(*, repeats: int) -> list[dict[str, Any]]:
-    factual = " ".join(
-        [
-            (
-                "Project Orion was led by Maya Chen and moved to Toronto in "
-                "2020. This fact is important for the final question."
-            )
-        ]
-        + [
-            (
-                "Distractor notes discuss launch timelines, archive formats, "
-                "city permits, meeting agendas, and evaluation scaffolding."
-            )
-        ]
-        * repeats
+    factual_intro = (
+        "Project Orion was led by Maya Chen and moved to Toronto in 2020. "
+        "This is the key fact that the answer must preserve."
     )
-    code = " ".join(
-        [
-            (
-                "compute_total returns invoice total including tax in cents. "
-                "The integer cents value avoids floating point drift."
-            )
-        ]
-        + [
-            (
-                "Repository context mentions serializers, cache retries, HTTP "
-                "handlers, schema migrations, deployment flags, and tests."
-            )
-        ]
-        * repeats
+    factual_filler = (
+        "Archive summaries mention release trains, migration sheets, team "
+        "retrospectives, storage quotas, sprint boards, test fixtures, and "
+        "weekly notes that are unrelated to the final answer."
     )
-    summary = " ".join(
-        [
-            (
-                "The system ingests documents, extracts entities, builds "
-                "section summaries, and returns compact reports."
-            )
-        ]
-        * repeats
+    code_intro = (
+        "compute_total returns invoice total including tax in cents. The "
+        "function returns integer cents to avoid floating point drift."
     )
-    instructions = " ".join(
-        [
-            (
-                "Deployment checklist: verify secrets, restart workers, check "
-                "health endpoints, watch logs, and record the rollout time."
-            )
-        ]
-        * repeats
+    code_filler = (
+        "Code review notes mention serializers, retries, cache keys, API "
+        "handlers, deployment flags, schema updates, and test parametrization."
     )
+    summary_intro = (
+        "The document pipeline ingests files, extracts entities, creates "
+        "section summaries, and returns compact reports for operators."
+    )
+    summary_filler = (
+        "Additional notes describe ingestion queues, retry policies, batch "
+        "windows, validation reports, and storage retention settings."
+    )
+    instruction_intro = (
+        "Deployment checklist guidance says to verify secrets, restart "
+        "workers, confirm health checks, review logs, and record rollout time."
+    )
+    instruction_filler = (
+        "Operational notes mention paging rules, rollback contacts, alert "
+        "thresholds, maintenance windows, and post-deploy verification steps."
+    )
+    factual = " ".join([factual_intro] + [factual_filler] * repeats)
+    code = " ".join([code_intro] + [code_filler] * repeats)
+    summary = " ".join([summary_intro] + [summary_filler] * repeats)
+    instructions = " ".join([instruction_intro] + [instruction_filler] * repeats)
     return [
         {
-            "prompt_name": "factual_recall",
+            "prompt_name": "factual_recall_long",
             "prompt_text": (
                 factual
                 + "\nQuestion: Who led Project Orion, where did it move, "
@@ -175,23 +157,30 @@ def build_verdict_prompts(*, repeats: int) -> list[dict[str, Any]]:
             "expected_terms": ["maya chen", "toronto", "2020"],
         },
         {
-            "prompt_name": "code_context",
+            "prompt_name": "code_context_long",
             "prompt_text": (
                 code
-                + "\nQuestion: What does compute_total return and why are "
-                + "cents used?"
+                + "\nQuestion: What does compute_total return?"
             ),
             "expected_terms": ["compute_total", "invoice", "tax", "cents"],
         },
         {
-            "prompt_name": "summarization",
-            "prompt_text": summary + "\nTask: Summarize the pipeline briefly.",
-            "expected_terms": [],
+            "prompt_name": "summarization_long",
+            "prompt_text": (
+                summary
+                + "\nTask: Return exactly two bullet points. Each line must "
+                + "start with '- '."
+            ),
+            "expected_terms": ["- "],
         },
         {
-            "prompt_name": "instruction_following",
-            "prompt_text": instructions + "\nTask: Produce a numbered checklist.",
-            "expected_terms": [],
+            "prompt_name": "instruction_following_long",
+            "prompt_text": (
+                instructions
+                + "\nTask: Return exactly three short numbered lines. Each "
+                + "line must start with Step."
+            ),
+            "expected_terms": ["step"],
         },
     ]
 
@@ -288,7 +277,7 @@ def _mode_env(
     base.update(
         {
             "KIVO_KV_SKETCH_ENABLE": "1",
-            "KIVO_KV_SKETCH_BACKEND": args.sketch_backend,
+            "KIVO_KV_SKETCH_BACKEND": "countsketch",
             "KIVO_KV_SKETCH_DIM": str(args.sketch_dim),
             "KIVO_KV_SKETCH_SEED": str(args.sketch_seed),
             "KIVO_KV_RUNTIME_BLOCK_TABLE_APPLY_ENABLE": "1",
@@ -325,6 +314,20 @@ def _mode_env(
     return base
 
 
+def _aggregate_trace_output_path(args: argparse.Namespace) -> Path:
+    output = Path(args.output)
+    if args.trace_output:
+        return Path(args.trace_output)
+    return output.with_name(f"{output.stem}.trace.jsonl")
+
+
+def _per_prompt_trace_dir(args: argparse.Namespace) -> Path:
+    output = Path(args.output)
+    if args.trace_dir:
+        return Path(args.trace_dir)
+    return output.with_suffix("").with_name(f"{output.stem}.trace_parts")
+
+
 def _paths_for_mode_prompt(
     *,
     args: argparse.Namespace,
@@ -337,11 +340,7 @@ def _paths_for_mode_prompt(
         if args.counter_export_dir
         else output.with_suffix("").with_name(f"{output.stem}.counters")
     )
-    trace_dir = (
-        Path(args.trace_output)
-        if args.trace_output
-        else output.with_suffix("").with_name(f"{output.stem}.traces")
-    )
+    trace_dir = _per_prompt_trace_dir(args)
     counter_dir.mkdir(parents=True, exist_ok=True)
     trace_dir.mkdir(parents=True, exist_ok=True)
     return (
@@ -363,6 +362,46 @@ def _load_trace_rows(path: str, *, mode: str, prompt_name: str) -> list[dict[str
         row["prompt_name"] = prompt_name
         rows.append(row)
     return rows
+
+
+def _append_trace_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def _estimate_prompt_token_count(
+    prompt_text: str,
+    *,
+    tokenizer: Any | None,
+) -> int:
+    if tokenizer is not None:
+        try:
+            token_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+            return len(token_ids)
+        except Exception:
+            pass
+    # Fallback for tests or tokenizers with incompatible encode signatures.
+    return max(1, len(re.findall(r"\S+", prompt_text)))
+
+
+def _estimate_block_count(prompt_token_count: int, block_size: int) -> int:
+    if block_size <= 0:
+        return 0
+    return int(math.ceil(prompt_token_count / block_size))
+
+
+def _required_blocks_for_mode(mode: str, args: argparse.Namespace) -> int:
+    if mode == BASELINE_MODE:
+        return 0
+    preset = MODE_PRESETS[mode]
+    keep_recent = int(preset["keep_recent_blocks"])
+    topk = int(preset["sketch_topk"])
+    span_radius = int(preset["span_radius"])
+    return keep_recent + topk + (2 * span_radius) + 1
 
 
 def _summarize_trace(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -414,6 +453,12 @@ def _mode_counter_summary(counters: dict[str, Any] | None) -> dict[str, Any]:
         "freed_after_sketch_blocks_total": int(
             counters.get("freed_after_sketch_blocks_total", 0) or 0
         ),
+        "sketch_missing_prevented_demotion": int(
+            counters.get("sketch_missing_prevented_demotion", 0) or 0
+        ),
+        "sketch_missing_prevented_free": int(
+            counters.get("sketch_missing_prevented_free", 0) or 0
+        ),
         "blocks_freed_total": int(counters.get("free_to_pool_blocks", 0) or 0),
         "last_sketch_span_anchor_ids_sample": list(
             counters.get("last_sketch_span_anchor_ids_sample", ()) or ()
@@ -441,6 +486,9 @@ def _run_prompt(
     env_values: dict[str, str],
     counter_file: str,
     trace_file: str,
+    prompt_token_count: int,
+    estimated_block_count: int,
+    insufficient_block_pressure: bool,
 ) -> dict[str, Any]:
     for path in (Path(counter_file), Path(trace_file)):
         if path.exists():
@@ -485,8 +533,12 @@ def _run_prompt(
                 else None
             ),
             "prompt_token_count": (
-                extract_prompt_token_count(first) if first is not None else None
+                extract_prompt_token_count(first)
+                if first is not None and extract_prompt_token_count(first) is not None
+                else prompt_token_count
             ),
+            "estimated_block_count": estimated_block_count,
+            "insufficient_block_pressure": insufficient_block_pressure,
             "latency_seconds": elapsed,
             **terms,
             **degeneration,
@@ -510,7 +562,9 @@ def _run_prompt(
             "output_text": None,
             "output_length": 0,
             "output_token_count": None,
-            "prompt_token_count": None,
+            "prompt_token_count": prompt_token_count,
+            "estimated_block_count": estimated_block_count,
+            "insufficient_block_pressure": insufficient_block_pressure,
             "latency_seconds": elapsed,
             **expected_term_report(None, prompt["expected_terms"]),
             **degeneration_report(None),
@@ -534,6 +588,12 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
     ]
     counter_summaries = [item["counter_summary"] for item in prompt_results]
     trace_summaries = [item["trace_summary"] for item in prompt_results]
+    prompt_token_lengths = [
+        int(item.get("prompt_token_count", 0) or 0) for item in prompt_results
+    ]
+    estimated_block_counts = [
+        int(item.get("estimated_block_count", 0) or 0) for item in prompt_results
+    ]
     freed = sum(int(item.get("freed_after_sketch_blocks_total", 0) or 0) for item in counter_summaries)
     blocks_freed = sum(int(item.get("blocks_freed_total", 0) or 0) for item in counter_summaries)
     sketch_bytes = sum(int(item.get("sketch_bytes_total", 0) or 0) for item in counter_summaries)
@@ -551,21 +611,48 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
     expected_pass = sum(1 for item in expected_term_prompts if item["contains_expected_terms"])
     degeneration_count = sum(1 for item in prompt_results if item["degeneration_detected"])
     invariants_clean = all(item["counter_summary"]["invariants_clean"] for item in prompt_results)
+    insufficient_block_pressure = any(
+        bool(item.get("insufficient_block_pressure")) for item in prompt_results
+    )
+    sketch_attempted = sum(
+        int(item.get("sketch_build_attempted", 0) or 0) for item in counter_summaries
+    )
+    sketch_succeeded = sum(
+        int(item.get("sketch_build_succeeded", 0) or 0) for item in counter_summaries
+    )
+    sketch_failed = sum(
+        int(item.get("sketch_build_failed", 0) or 0) for item in counter_summaries
+    )
     backend_pass = (
         mode == BASELINE_MODE
         or (
-            backend == args.sketch_backend
-            and args.sketch_backend == "countsketch"
+            backend == "countsketch"
+            and sketch_attempted > 0
+            and sketch_succeeded > 0
+            and sketch_failed == 0
         )
     )
     block_savings_pass = freed > 0 and bool(ratios) and min(ratios) < 1.0
     warnings = []
     if mode != BASELINE_MODE and not backend_pass:
         warnings.append("countsketch_backend_not_observed")
+    if insufficient_block_pressure:
+        warnings.append("insufficient_block_pressure")
     if degeneration_count > 0:
         warnings.append("degeneration_detected")
     if not invariants_clean:
         warnings.append("invariants_not_clean")
+    reason = None
+    if mode != BASELINE_MODE and not backend_pass:
+        reason = "countsketch_not_exercised"
+    elif insufficient_block_pressure:
+        reason = "insufficient_block_pressure"
+    elif not invariants_clean:
+        reason = "invariants_failed"
+    elif mode != SKETCH_BUILD_ONLY_MODE and mode != BASELINE_MODE and freed <= 0:
+        reason = "no_blocks_freed"
+    elif degeneration_count > 0 or expected_pass < 2:
+        reason = "quality_failed"
     block_bytes_estimate = 0
     block_equivalent_sketch_overhead = None
     if blocks_freed > 0:
@@ -585,9 +672,9 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
         "scoring_source": scoring_source,
         "sketch_dim": args.sketch_dim,
         "sketch_seed": args.sketch_seed,
-        "sketch_build_attempted": sum(int(item.get("sketch_build_attempted", 0) or 0) for item in counter_summaries),
-        "sketch_build_succeeded": sum(int(item.get("sketch_build_succeeded", 0) or 0) for item in counter_summaries),
-        "sketch_build_failed": sum(int(item.get("sketch_build_failed", 0) or 0) for item in counter_summaries),
+        "sketch_build_attempted": sketch_attempted,
+        "sketch_build_succeeded": sketch_succeeded,
+        "sketch_build_failed": sketch_failed,
         "sketched_blocks_total": sum(int(item.get("sketched_blocks_total", 0) or 0) for item in counter_summaries),
         "sketch_bytes_total": sketch_bytes,
         "freed_after_sketch_blocks_total": freed,
@@ -605,6 +692,13 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
         "estimated_sketch_overhead_bytes": sketch_bytes,
         "approximate_net_block_savings": None,
         "block_equivalent_sketch_overhead": block_equivalent_sketch_overhead,
+        "prompt_token_lengths": prompt_token_lengths,
+        "prompt_token_count_min": min(prompt_token_lengths) if prompt_token_lengths else 0,
+        "prompt_token_count_max": max(prompt_token_lengths) if prompt_token_lengths else 0,
+        "estimated_block_counts": estimated_block_counts,
+        "estimated_block_count_min": min(estimated_block_counts) if estimated_block_counts else 0,
+        "estimated_block_count_max": max(estimated_block_counts) if estimated_block_counts else 0,
+        "insufficient_block_pressure": insufficient_block_pressure,
         "quality_pass_count": sum(
             1
             for item in prompt_results
@@ -617,19 +711,71 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
         "block_savings_pass": block_savings_pass,
         "backend_pass": backend_pass,
         "invariants_pass": invariants_clean,
+        "viable": reason is None,
+        "reason": reason,
         "gpu_memory_not_directly_measured": True,
         "block_bytes_estimate": block_bytes_estimate,
     }
 
 
-def _verdict(mode_summaries: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _baseline_gate(prompt_results: list[dict[str, Any]]) -> dict[str, Any]:
+    by_name = {item["prompt_name"]: item for item in prompt_results}
+    factual = by_name.get("factual_recall_long")
+    code = by_name.get("code_context_long")
+    success_count = sum(1 for item in prompt_results if item["success"])
+    degeneration_count = sum(
+        1 for item in prompt_results if item["degeneration_detected"]
+    )
+    passed = (
+        success_count == 4
+        and factual is not None
+        and code is not None
+        and factual["contains_expected_terms"]
+        and code["contains_expected_terms"]
+        and degeneration_count == 0
+    )
+    return {
+        "passed": passed,
+        "reason": None if passed else "baseline_failed",
+        "generation_success_count": success_count,
+        "degeneration_count": degeneration_count,
+        "factual_recall_passed": bool(
+            factual is not None and factual["contains_expected_terms"]
+        ),
+        "code_context_passed": bool(
+            code is not None and code["contains_expected_terms"]
+        ),
+    }
+
+
+def _verdict(
+    mode_summaries: dict[str, dict[str, Any]],
+    *,
+    baseline_gate: dict[str, Any],
+) -> dict[str, Any]:
+    if not baseline_gate["passed"]:
+        return {
+            "verdict_valid": False,
+            "reason": "baseline_failed",
+            "best_quality_mode": None,
+            "best_savings_mode": None,
+            "recommended_next_mode": None,
+            "whether_countsketch_live_baseline_is_viable": False,
+            "reason_if_not_viable": "baseline_failed",
+        }
     viable_modes = [
         item
         for item in mode_summaries.values()
-        if item["backend_pass"]
+        if item["mode"] != BASELINE_MODE
+        and item["backend_pass"]
         and item["invariants_pass"]
         and item["degeneration_count"] == 0
         and item["expected_terms_pass_count"] >= 2
+        and not item["insufficient_block_pressure"]
+        and (
+            item["mode"] == SKETCH_BUILD_ONLY_MODE
+            or item["freed_after_sketch_blocks_total"] > 0
+        )
     ]
     savings_modes = [
         item
@@ -656,6 +802,8 @@ def _verdict(mode_summaries: dict[str, dict[str, Any]]) -> dict[str, Any]:
     recommended = best_quality if best_quality in {SAFE_MODE, DEFAULT_MODE} else best_savings
     viable = recommended is not None
     return {
+        "verdict_valid": True,
+        "reason": None,
         "best_quality_mode": best_quality,
         "best_savings_mode": best_savings,
         "recommended_next_mode": recommended,
@@ -678,10 +826,14 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
         local_files_only=args.local_files_only,
     )
     prompts = build_verdict_prompts(repeats=args.prompt_repeats)
+    aggregate_trace_path = _aggregate_trace_output_path(args)
+    aggregate_trace_path.parent.mkdir(parents=True, exist_ok=True)
+    aggregate_trace_path.write_text("", encoding="utf-8")
     mode_reports = []
     for mode in modes:
         mode_results = []
         llm = None
+        tokenizer = None
         counter_file, trace_file = _paths_for_mode_prompt(
             args=args,
             mode=mode,
@@ -700,23 +852,48 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
                 llm_kwargs = _build_llm_kwargs(args)
                 llm_kwargs["model"] = resolved_model
                 llm = LLM(**llm_kwargs)
+                get_tokenizer = getattr(llm, "get_tokenizer", None)
+                if callable(get_tokenizer):
+                    try:
+                        tokenizer = get_tokenizer()
+                    except Exception:
+                        tokenizer = None
                 for prompt in prompts:
                     prompt_counter, prompt_trace = _paths_for_mode_prompt(
                         args=args,
                         mode=mode,
                         prompt_name=prompt["prompt_name"],
                     )
-                    mode_results.append(
-                        _run_prompt(
-                            llm,
-                            mode=mode,
-                            prompt=prompt,
-                            args=args,
-                            env_values=env_values,
-                            counter_file=prompt_counter,
-                            trace_file=prompt_trace,
-                        )
+                    prompt_token_count = _estimate_prompt_token_count(
+                        prompt["prompt_text"],
+                        tokenizer=tokenizer,
                     )
+                    estimated_block_count = _estimate_block_count(
+                        prompt_token_count,
+                        args.block_size,
+                    )
+                    insufficient_block_pressure = (
+                        mode != BASELINE_MODE
+                        and estimated_block_count
+                        <= _required_blocks_for_mode(mode, args)
+                    )
+                    result = _run_prompt(
+                        llm,
+                        mode=mode,
+                        prompt=prompt,
+                        args=args,
+                        env_values=env_values,
+                        counter_file=prompt_counter,
+                        trace_file=prompt_trace,
+                        prompt_token_count=prompt_token_count,
+                        estimated_block_count=estimated_block_count,
+                        insufficient_block_pressure=insufficient_block_pressure,
+                    )
+                    _append_trace_rows(
+                        aggregate_trace_path,
+                        result.get("trace_rows", []),
+                    )
+                    mode_results.append(result)
         finally:
             if llm is not None:
                 del llm
@@ -731,6 +908,15 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     mode_summaries = {report["mode"]: report["summary"] for report in mode_reports}
+    baseline_results = next(
+        (
+            report["results"]
+            for report in mode_reports
+            if report["mode"] == BASELINE_MODE
+        ),
+        [],
+    )
+    baseline_gate = _baseline_gate(baseline_results)
     return {
         "phase": "Sk-3.5",
         "model": args.model,
@@ -744,14 +930,17 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
             "max_num_seqs": args.max_num_seqs,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "prompt_repeats": args.prompt_repeats,
-            "sketch_backend": args.sketch_backend,
+            "block_size": args.block_size,
+            "sketch_backend": "countsketch",
             "sketch_dim": args.sketch_dim,
             "sketch_seed": args.sketch_seed,
             "gpu_memory_not_directly_measured": True,
+            "trace_output": str(aggregate_trace_path),
         },
         "mode_reports": mode_reports,
         "mode_summaries": mode_summaries,
-        "verdict": _verdict(mode_summaries),
+        "baseline_gate": baseline_gate,
+        "verdict": _verdict(mode_summaries, baseline_gate=baseline_gate),
     }
 
 

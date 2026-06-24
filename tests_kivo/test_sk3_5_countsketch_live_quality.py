@@ -21,20 +21,71 @@ def _load_module():
     return module
 
 
-def test_countsketch_backend_selected_from_cli_env() -> None:
+def _prompt_result(
+    module,
+    *,
+    prompt_name: str,
+    success: bool = True,
+    contains_expected_terms: bool = True,
+    degeneration_detected: bool = False,
+    sketch_backend: str | None = "countsketch",
+    sketch_build_attempted: int = 4,
+    sketch_build_succeeded: int = 4,
+    sketch_build_failed: int = 0,
+    freed_after_sketch_blocks_total: int = 2,
+    blocks_freed_total: int = 2,
+    invariants_clean: bool = True,
+    prompt_token_count: int = 1024,
+    estimated_block_count: int = 64,
+    insufficient_block_pressure: bool = False,
+) -> dict:
+    return {
+        "prompt_name": prompt_name,
+        "success": success,
+        "output_text": "Step one\nStep two",
+        "output_length": 16,
+        "prompt_token_count": prompt_token_count,
+        "estimated_block_count": estimated_block_count,
+        "expected_terms": ["term"],
+        "expected_terms_found": ["term"] if contains_expected_terms else [],
+        "expected_terms_missing": [] if contains_expected_terms else ["term"],
+        "contains_expected_terms": contains_expected_terms,
+        "degeneration_detected": degeneration_detected,
+        "latency_seconds": 1.0,
+        "insufficient_block_pressure": insufficient_block_pressure,
+        "counter_summary": {
+            "sketch_backend": sketch_backend,
+            "last_policy": module.COUNTSKETCH_POLICY,
+            "scoring_source": module.SCORING_SOURCE,
+            "sketch_build_attempted": sketch_build_attempted,
+            "sketch_build_succeeded": sketch_build_succeeded,
+            "sketch_build_failed": sketch_build_failed,
+            "sketched_blocks_total": sketch_build_succeeded,
+            "sketch_bytes_total": 1024,
+            "freed_after_sketch_blocks_total": freed_after_sketch_blocks_total,
+            "blocks_freed_total": blocks_freed_total,
+            "invariants_clean": invariants_clean,
+        },
+        "trace_summary": {
+            "visible_before_count_max": 44,
+            "visible_after_count_min": 24,
+            "visible_before_count_last": 44,
+            "visible_after_count_last": 24,
+            "candidate_demote_count_total": 20,
+            "retention_ratio_avg": 24 / 44,
+            "retention_ratio_min": 24 / 44,
+            "retention_ratio_last": 24 / 44,
+        },
+    }
+
+
+def test_countsketch_modes_force_countsketch_backend_env() -> None:
     module = _load_module()
-    args = module.parse_args(
-        [
-            "--output",
-            "/tmp/out.json",
-            "--sketch-backend",
-            "countsketch",
-        ]
-    )
+    args = module.parse_args(["--output", "/tmp/out.json"])
     counter_file, trace_file = module._paths_for_mode_prompt(
         args=args,
         mode=module.DEFAULT_MODE,
-        prompt_name="factual_recall",
+        prompt_name="factual_recall_long",
     )
 
     env = module._mode_env(
@@ -53,7 +104,7 @@ def test_sketch_build_only_countsketch_does_not_enable_freeing() -> None:
     counter_file, trace_file = module._paths_for_mode_prompt(
         args=args,
         mode=module.SKETCH_BUILD_ONLY_MODE,
-        prompt_name="factual_recall",
+        prompt_name="factual_recall_long",
     )
 
     env = module._mode_env(
@@ -67,112 +118,193 @@ def test_sketch_build_only_countsketch_does_not_enable_freeing() -> None:
     assert "KIVO_KV_FREE_TO_POOL_ENABLE" not in env
 
 
-def test_countsketch_span_default_uses_conservative_defaults() -> None:
+def test_trace_output_is_a_file_path_not_directory(tmp_path: Path) -> None:
     module = _load_module()
-    args = module.parse_args(["--output", "/tmp/out.json"])
+    args = module.parse_args(
+        [
+            "--output",
+            str(tmp_path / "report.json"),
+            "--trace-output",
+            str(tmp_path / "trace.jsonl"),
+        ]
+    )
+
+    aggregate = module._aggregate_trace_output_path(args)
     counter_file, trace_file = module._paths_for_mode_prompt(
         args=args,
         mode=module.DEFAULT_MODE,
-        prompt_name="factual_recall",
+        prompt_name="factual_recall_long",
     )
 
-    env = module._mode_env(
+    assert aggregate.name == "trace.jsonl"
+    assert not aggregate.exists()
+    assert trace_file.endswith(".trace.jsonl")
+    assert aggregate != Path(trace_file)
+
+
+def test_baseline_gate_fails_when_baseline_is_empty() -> None:
+    module = _load_module()
+    gate = module._baseline_gate(
+        [
+            _prompt_result(
+                module,
+                prompt_name="factual_recall_long",
+                success=False,
+                contains_expected_terms=False,
+                degeneration_detected=True,
+                sketch_backend=None,
+                sketch_build_attempted=0,
+                sketch_build_succeeded=0,
+                freed_after_sketch_blocks_total=0,
+                blocks_freed_total=0,
+            ),
+            _prompt_result(module, prompt_name="code_context_long"),
+            _prompt_result(module, prompt_name="summarization_long"),
+            _prompt_result(module, prompt_name="instruction_following_long"),
+        ]
+    )
+
+    assert gate["passed"] is False
+    assert gate["reason"] == "baseline_failed"
+
+
+def test_baseline_gate_passes_with_expected_terms() -> None:
+    module = _load_module()
+    gate = module._baseline_gate(
+        [
+            _prompt_result(module, prompt_name="factual_recall_long"),
+            _prompt_result(module, prompt_name="code_context_long"),
+            _prompt_result(module, prompt_name="summarization_long"),
+            _prompt_result(module, prompt_name="instruction_following_long"),
+        ]
+    )
+
+    assert gate["passed"] is True
+    assert gate["reason"] is None
+
+
+def test_countsketch_not_exercised_warning_when_backend_missing() -> None:
+    module = _load_module()
+    args = module.parse_args(["--output", "/tmp/out.json"])
+    summary = module._aggregate_mode(
         module.DEFAULT_MODE,
-        args=args,
-        counter_file=counter_file,
-        trace_file=trace_file,
+        [
+            _prompt_result(
+                module,
+                prompt_name="factual_recall_long",
+                sketch_backend=None,
+                sketch_build_attempted=0,
+                sketch_build_succeeded=0,
+                freed_after_sketch_blocks_total=0,
+                blocks_freed_total=0,
+            )
+        ],
+        args,
     )
 
-    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_KEEP_RECENT_BLOCKS"] == "16"
-    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_TOPK"] == "8"
-    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_SKETCH_SPAN_RADIUS"] == "1"
-    assert env["KIVO_KV_RUNTIME_BLOCK_TABLE_MAX_FULL_BLOCKS"] == "32"
+    assert summary["backend_pass"] is False
+    assert "countsketch_backend_not_observed" in summary["warnings"]
+    assert summary["reason"] == "countsketch_not_exercised"
 
 
-def test_retention_ratio_calculation() -> None:
+def test_insufficient_block_pressure_warning() -> None:
     module = _load_module()
-
-    assert module.retention_ratio_from_counts(16, 32) == 0.5
-    assert module.retention_ratio_from_counts(1, 0) is None
-
-
-def test_contiguous_span_and_gap_diagnostics() -> None:
-    module = _load_module()
-
-    contiguous = module.span_diagnostics([10, 11, 12])
-    sparse = module.span_diagnostics([10, 11, 20, 21])
-
-    assert contiguous["contiguous_span_count"] == 1
-    assert contiguous["max_gap_between_kept_blocks"] == 0
-    assert contiguous["kept_blocks_contiguous"] is True
-    assert sparse["contiguous_span_count"] == 2
-    assert sparse["max_gap_between_kept_blocks"] == 8
-    assert sparse["kept_blocks_contiguous"] is False
-
-
-def test_expected_term_checker() -> None:
-    module = _load_module()
-
-    report = module.expected_term_report(
-        "Maya Chen moved the project to Toronto in 2020.",
-        ["maya chen", "toronto", "2020"],
+    args = module.parse_args(["--output", "/tmp/out.json"])
+    summary = module._aggregate_mode(
+        module.DEFAULT_MODE,
+        [
+            _prompt_result(
+                module,
+                prompt_name="factual_recall_long",
+                prompt_token_count=128,
+                estimated_block_count=4,
+                insufficient_block_pressure=True,
+            )
+        ],
+        args,
     )
 
-    assert report["contains_expected_terms"] is True
-    assert report["expected_terms_missing"] == []
+    assert summary["insufficient_block_pressure"] is True
+    assert "insufficient_block_pressure" in summary["warnings"]
 
 
-def test_degeneration_detector_catches_repeated_numeric_junk() -> None:
+def test_verdict_invalid_when_baseline_fails() -> None:
     module = _load_module()
-
-    repeated = module.degeneration_report("word word word word word word word")
-    numeric = module.degeneration_report("1234567890 1234567890")
-
-    assert repeated["degeneration_detected"] is True
-    assert numeric["degeneration_detected"] is True
-
-
-def test_output_schema_includes_required_sections() -> None:
-    module = _load_module()
-    prompt_result = {
-        "success": True,
-        "expected_terms": ["maya chen"],
-        "contains_expected_terms": True,
-        "degeneration_detected": False,
-        "latency_seconds": 1.0,
-        "counter_summary": {
-            "sketch_backend": "countsketch",
-            "last_policy": module.COUNTSKETCH_POLICY,
-            "scoring_source": module.SCORING_SOURCE,
-            "sketch_build_attempted": 4,
-            "sketch_build_succeeded": 4,
-            "sketch_build_failed": 0,
-            "sketched_blocks_total": 4,
-            "sketch_bytes_total": 1024,
-            "freed_after_sketch_blocks_total": 2,
-            "blocks_freed_total": 2,
-            "invariants_clean": True,
+    verdict = module._verdict(
+        {
+            module.DEFAULT_MODE: {
+                "mode": module.DEFAULT_MODE,
+                "backend_pass": True,
+                "invariants_pass": True,
+                "degeneration_count": 0,
+                "expected_terms_pass_count": 2,
+                "insufficient_block_pressure": False,
+                "freed_after_sketch_blocks_total": 4,
+                "block_savings_pass": True,
+                "retention_ratio_avg": 0.5,
+            }
         },
-        "trace_summary": {
-            "visible_before_count_max": 10,
-            "visible_after_count_min": 6,
-            "visible_before_count_last": 10,
-            "visible_after_count_last": 6,
-            "candidate_demote_count_total": 4,
-            "retention_ratio_avg": 0.6,
-            "retention_ratio_min": 0.6,
-            "retention_ratio_last": 0.6,
+        baseline_gate={"passed": False, "reason": "baseline_failed"},
+    )
+
+    assert verdict["verdict_valid"] is False
+    assert verdict["reason"] == "baseline_failed"
+
+
+def test_mode_viable_only_when_backend_savings_quality_and_invariants_pass() -> None:
+    module = _load_module()
+    mode_summaries = {
+        module.SKETCH_BUILD_ONLY_MODE: {
+            "mode": module.SKETCH_BUILD_ONLY_MODE,
+            "backend_pass": True,
+            "invariants_pass": True,
+            "degeneration_count": 0,
+            "expected_terms_pass_count": 2,
+            "insufficient_block_pressure": False,
+            "freed_after_sketch_blocks_total": 0,
+            "block_savings_pass": False,
+            "retention_ratio_avg": 1.0,
+            "quality_pass_count": 4,
+        },
+        module.DEFAULT_MODE: {
+            "mode": module.DEFAULT_MODE,
+            "backend_pass": True,
+            "invariants_pass": True,
+            "degeneration_count": 0,
+            "expected_terms_pass_count": 2,
+            "insufficient_block_pressure": False,
+            "freed_after_sketch_blocks_total": 8,
+            "block_savings_pass": True,
+            "retention_ratio_avg": 0.5,
+            "quality_pass_count": 4,
         },
     }
 
-    summary = module._aggregate_mode(
-        module.DEFAULT_MODE,
-        [prompt_result],
-        module.parse_args(["--output", "/tmp/out.json"]),
+    verdict = module._verdict(
+        mode_summaries,
+        baseline_gate={"passed": True, "reason": None},
     )
 
-    assert summary["backend_pass"] is True
-    assert summary["block_savings_pass"] is True
-    assert summary["scoring_source"] == module.SCORING_SOURCE
-    assert summary["estimated_sketch_overhead_bytes"] == 1024
-    assert summary["quality_pass_count"] == 1
+    assert verdict["verdict_valid"] is True
+    assert verdict["whether_countsketch_live_baseline_is_viable"] is True
+    assert verdict["recommended_next_mode"] == module.DEFAULT_MODE
+
+
+def test_output_schema_includes_prompt_token_and_block_counts() -> None:
+    module = _load_module()
+    args = module.parse_args(["--output", "/tmp/out.json"])
+    summary = module._aggregate_mode(
+        module.DEFAULT_MODE,
+        [
+            _prompt_result(
+                module,
+                prompt_name="factual_recall_long",
+                prompt_token_count=1200,
+                estimated_block_count=75,
+            )
+        ],
+        args,
+    )
+
+    assert summary["prompt_token_count_max"] == 1200
+    assert summary["estimated_block_count_max"] == 75
