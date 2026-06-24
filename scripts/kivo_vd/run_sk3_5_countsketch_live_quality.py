@@ -87,6 +87,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-num-seqs", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.10)
     parser.add_argument("--prompt-repeats", type=int, default=80)
+    parser.add_argument("--prompt-token-budget", type=int, default=None)
+    parser.add_argument("--prompt-safety-margin", type=int, default=32)
     parser.add_argument("--block-size", type=int, default=16)
     parser.add_argument("--sketch-backend", default="countsketch")
     parser.add_argument("--sketch-dim", type=int, default=256)
@@ -105,10 +107,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--device", default="auto")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.max_tokens <= 0:
+        raise ValueError("--max-tokens must be > 0")
+    return args
 
 
-def build_verdict_prompts(*, repeats: int) -> list[dict[str, Any]]:
+def build_verdict_prompt_specs() -> list[dict[str, Any]]:
     factual_intro = (
         "Project Orion was led by Maya Chen and moved to Toronto in 2020. "
         "This is the key fact that the answer must preserve."
@@ -142,43 +147,41 @@ def build_verdict_prompts(*, repeats: int) -> list[dict[str, Any]]:
         "Operational notes mention paging rules, rollback contacts, alert "
         "thresholds, maintenance windows, and post-deploy verification steps."
     )
-    factual = " ".join([factual_intro] + [factual_filler] * repeats)
-    code = " ".join([code_intro] + [code_filler] * repeats)
-    summary = " ".join([summary_intro] + [summary_filler] * repeats)
-    instructions = " ".join([instruction_intro] + [instruction_filler] * repeats)
     return [
         {
             "prompt_name": "factual_recall_long",
-            "prompt_text": (
-                factual
-                + "\nQuestion: Who led Project Orion, where did it move, "
-                + "and in what year?"
+            "prefix": factual_intro,
+            "filler": factual_filler,
+            "suffix": (
+                "Question: Who led Project Orion, where did it move, and "
+                "in what year?"
             ),
             "expected_terms": ["maya chen", "toronto", "2020"],
         },
         {
             "prompt_name": "code_context_long",
-            "prompt_text": (
-                code
-                + "\nQuestion: What does compute_total return?"
-            ),
+            "prefix": code_intro,
+            "filler": code_filler,
+            "suffix": "Question: What does compute_total return?",
             "expected_terms": ["compute_total", "invoice", "tax", "cents"],
         },
         {
             "prompt_name": "summarization_long",
-            "prompt_text": (
-                summary
-                + "\nTask: Return exactly two bullet points. Each line must "
-                + "start with '- '."
+            "prefix": summary_intro,
+            "filler": summary_filler,
+            "suffix": (
+                "Task: Return exactly two bullet points. Each line must "
+                "start with '- '."
             ),
             "expected_terms": ["- "],
         },
         {
             "prompt_name": "instruction_following_long",
-            "prompt_text": (
-                instructions
-                + "\nTask: Return exactly three short numbered lines. Each "
-                + "line must start with Step."
+            "prefix": instruction_intro,
+            "filler": instruction_filler,
+            "suffix": (
+                "Task: Return exactly three short numbered lines. Each "
+                "line must start with Step."
             ),
             "expected_terms": ["step"],
         },
@@ -388,6 +391,85 @@ def _estimate_prompt_token_count(
     return max(1, len(re.findall(r"\S+", prompt_text)))
 
 
+def _compute_prompt_token_budget(args: argparse.Namespace) -> int:
+    if args.prompt_token_budget is not None:
+        budget = int(args.prompt_token_budget)
+    else:
+        budget = int(args.max_model_len - args.max_tokens - args.prompt_safety_margin)
+    if budget < 256:
+        raise ValueError(
+            "Prompt token budget is too small; increase max_model_len or reduce "
+            "max_tokens/prompt safety margin."
+        )
+    return budget
+
+
+def fit_prompt_to_budget(
+    prefix: str,
+    filler: str,
+    suffix: str,
+    *,
+    tokenizer: Any | None,
+    budget: int,
+    max_repeats: int,
+) -> tuple[str, int]:
+    prefix = prefix.strip()
+    filler = filler.strip()
+    suffix = suffix.strip()
+    base_prompt = f"{prefix}\n{suffix}"
+    base_tokens = _estimate_prompt_token_count(base_prompt, tokenizer=tokenizer)
+    if base_tokens > budget:
+        raise ValueError(
+            "Prompt prefix/suffix exceed the available token budget before filler."
+        )
+    fitted = base_prompt
+    fitted_tokens = base_tokens
+    for repeats in range(max(0, max_repeats), -1, -1):
+        if repeats == 0:
+            candidate = base_prompt
+        else:
+            candidate = f"{prefix}\n{' '.join([filler] * repeats)}\n{suffix}"
+        candidate_tokens = _estimate_prompt_token_count(
+            candidate,
+            tokenizer=tokenizer,
+        )
+        if candidate_tokens <= budget:
+            fitted = candidate
+            fitted_tokens = candidate_tokens
+            break
+    return fitted, fitted_tokens
+
+
+def build_fitted_verdict_prompts(
+    *,
+    tokenizer: Any | None,
+    budget: int,
+    repeats: int,
+) -> list[dict[str, Any]]:
+    prompts = []
+    for spec in build_verdict_prompt_specs():
+        prompt_text, prompt_token_count = fit_prompt_to_budget(
+            spec["prefix"],
+            spec["filler"],
+            spec["suffix"],
+            tokenizer=tokenizer,
+            budget=budget,
+            max_repeats=repeats,
+        )
+        prompt_fits_context = prompt_token_count <= budget
+        prompts.append(
+            {
+                "prompt_name": spec["prompt_name"],
+                "prompt_text": prompt_text,
+                "expected_terms": list(spec["expected_terms"]),
+                "prompt_token_count": prompt_token_count,
+                "prompt_token_budget": budget,
+                "prompt_fits_context": prompt_fits_context,
+            }
+        )
+    return prompts
+
+
 def _estimate_block_count(prompt_token_count: int, block_size: int) -> int:
     if block_size <= 0:
         return 0
@@ -487,7 +569,9 @@ def _run_prompt(
     counter_file: str,
     trace_file: str,
     prompt_token_count: int,
+    prompt_token_budget: int,
     estimated_block_count: int,
+    prompt_fits_context: bool,
     insufficient_block_pressure: bool,
 ) -> dict[str, Any]:
     for path in (Path(counter_file), Path(trace_file)):
@@ -537,7 +621,15 @@ def _run_prompt(
                 if first is not None and extract_prompt_token_count(first) is not None
                 else prompt_token_count
             ),
+            "prompt_token_budget": prompt_token_budget,
+            "max_model_len": args.max_model_len,
+            "max_tokens": args.max_tokens,
+            "requested_output_tokens": args.max_tokens,
             "estimated_block_count": estimated_block_count,
+            "budget_margin_tokens": (
+                args.max_model_len - args.max_tokens - prompt_token_count
+            ),
+            "prompt_fits_context": prompt_fits_context,
             "insufficient_block_pressure": insufficient_block_pressure,
             "latency_seconds": elapsed,
             **terms,
@@ -563,7 +655,15 @@ def _run_prompt(
             "output_length": 0,
             "output_token_count": None,
             "prompt_token_count": prompt_token_count,
+            "prompt_token_budget": prompt_token_budget,
+            "max_model_len": args.max_model_len,
+            "max_tokens": args.max_tokens,
+            "requested_output_tokens": args.max_tokens,
             "estimated_block_count": estimated_block_count,
+            "budget_margin_tokens": (
+                args.max_model_len - args.max_tokens - prompt_token_count
+            ),
+            "prompt_fits_context": prompt_fits_context,
             "insufficient_block_pressure": insufficient_block_pressure,
             "latency_seconds": elapsed,
             **expected_term_report(None, prompt["expected_terms"]),
@@ -610,6 +710,9 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
     ]
     expected_pass = sum(1 for item in expected_term_prompts if item["contains_expected_terms"])
     degeneration_count = sum(1 for item in prompt_results if item["degeneration_detected"])
+    all_prompts_fit_context = all(
+        bool(item.get("prompt_fits_context")) for item in prompt_results
+    )
     invariants_clean = all(item["counter_summary"]["invariants_clean"] for item in prompt_results)
     insufficient_block_pressure = any(
         bool(item.get("insufficient_block_pressure")) for item in prompt_results
@@ -636,6 +739,8 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
     warnings = []
     if mode != BASELINE_MODE and not backend_pass:
         warnings.append("countsketch_backend_not_observed")
+    if not all_prompts_fit_context:
+        warnings.append("prompt_exceeds_context_budget")
     if insufficient_block_pressure:
         warnings.append("insufficient_block_pressure")
     if degeneration_count > 0:
@@ -645,6 +750,8 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
     reason = None
     if mode != BASELINE_MODE and not backend_pass:
         reason = "countsketch_not_exercised"
+    elif not all_prompts_fit_context:
+        reason = "prompt_exceeds_context_budget"
     elif insufficient_block_pressure:
         reason = "insufficient_block_pressure"
     elif not invariants_clean:
@@ -698,6 +805,7 @@ def _aggregate_mode(mode: str, prompt_results: list[dict[str, Any]], args: argpa
         "estimated_block_counts": estimated_block_counts,
         "estimated_block_count_min": min(estimated_block_counts) if estimated_block_counts else 0,
         "estimated_block_count_max": max(estimated_block_counts) if estimated_block_counts else 0,
+        "all_prompts_fit_context": all_prompts_fit_context,
         "insufficient_block_pressure": insufficient_block_pressure,
         "quality_pass_count": sum(
             1
@@ -726,8 +834,12 @@ def _baseline_gate(prompt_results: list[dict[str, Any]]) -> dict[str, Any]:
     degeneration_count = sum(
         1 for item in prompt_results if item["degeneration_detected"]
     )
+    all_fit_context = all(
+        bool(item.get("prompt_fits_context")) for item in prompt_results
+    )
     passed = (
         success_count == 4
+        and all_fit_context
         and factual is not None
         and code is not None
         and factual["contains_expected_terms"]
@@ -739,6 +851,7 @@ def _baseline_gate(prompt_results: list[dict[str, Any]]) -> dict[str, Any]:
         "reason": None if passed else "baseline_failed",
         "generation_success_count": success_count,
         "degeneration_count": degeneration_count,
+        "all_prompts_fit_context": all_fit_context,
         "factual_recall_passed": bool(
             factual is not None and factual["contains_expected_terms"]
         ),
@@ -825,7 +938,7 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
         args.model,
         local_files_only=args.local_files_only,
     )
-    prompts = build_verdict_prompts(repeats=args.prompt_repeats)
+    prompt_token_budget = _compute_prompt_token_budget(args)
     aggregate_trace_path = _aggregate_trace_output_path(args)
     aggregate_trace_path.parent.mkdir(parents=True, exist_ok=True)
     aggregate_trace_path.write_text("", encoding="utf-8")
@@ -834,6 +947,7 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
         mode_results = []
         llm = None
         tokenizer = None
+        prompts: list[dict[str, Any]] = []
         counter_file, trace_file = _paths_for_mode_prompt(
             args=args,
             mode=mode,
@@ -858,24 +972,24 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
                         tokenizer = get_tokenizer()
                     except Exception:
                         tokenizer = None
+                prompts = build_fitted_verdict_prompts(
+                    tokenizer=tokenizer,
+                    budget=prompt_token_budget,
+                    repeats=args.prompt_repeats,
+                )
                 for prompt in prompts:
                     prompt_counter, prompt_trace = _paths_for_mode_prompt(
                         args=args,
                         mode=mode,
                         prompt_name=prompt["prompt_name"],
                     )
-                    prompt_token_count = _estimate_prompt_token_count(
-                        prompt["prompt_text"],
-                        tokenizer=tokenizer,
-                    )
+                    prompt_token_count = int(prompt["prompt_token_count"])
                     estimated_block_count = _estimate_block_count(
                         prompt_token_count,
                         args.block_size,
                     )
                     insufficient_block_pressure = (
-                        mode != BASELINE_MODE
-                        and estimated_block_count
-                        <= _required_blocks_for_mode(mode, args)
+                        estimated_block_count < 32
                     )
                     result = _run_prompt(
                         llm,
@@ -886,7 +1000,9 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
                         counter_file=prompt_counter,
                         trace_file=prompt_trace,
                         prompt_token_count=prompt_token_count,
+                        prompt_token_budget=prompt_token_budget,
                         estimated_block_count=estimated_block_count,
+                        prompt_fits_context=bool(prompt["prompt_fits_context"]),
                         insufficient_block_pressure=insufficient_block_pressure,
                     )
                     _append_trace_rows(
@@ -930,6 +1046,8 @@ def run_verdict(args: argparse.Namespace) -> dict[str, Any]:
             "max_num_seqs": args.max_num_seqs,
             "gpu_memory_utilization": args.gpu_memory_utilization,
             "prompt_repeats": args.prompt_repeats,
+            "prompt_token_budget": prompt_token_budget,
+            "prompt_safety_margin": args.prompt_safety_margin,
             "block_size": args.block_size,
             "sketch_backend": "countsketch",
             "sketch_dim": args.sketch_dim,
